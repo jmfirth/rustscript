@@ -10,5 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 rsc-driver = { path = "../rsc-driver" }
+rsc-syntax = { path = "../rsc-syntax" }
 clap = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

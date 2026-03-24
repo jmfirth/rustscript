@@ -301,6 +301,8 @@ dependencies = [
  "anyhow",
  "clap",
  "rsc-driver",
+ "rsc-syntax",
+ "tempfile",
 ]
 
 [[package]]
