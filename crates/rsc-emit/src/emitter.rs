@@ -5,7 +5,7 @@
 use rsc_syntax::rust_ir::{
     RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
     RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustMatchResultStmt, RustMatchStmt,
-    RustPattern, RustStmt, RustStructDef, RustTypeParam,
+    RustPattern, RustStmt, RustStructDef, RustTraitDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -97,6 +97,7 @@ impl Emitter {
             RustItem::Function(f) => self.emit_fn(f),
             RustItem::Struct(s) => self.emit_struct(s),
             RustItem::Enum(e) => self.emit_enum(e),
+            RustItem::Trait(t) => self.emit_trait(t),
         }
     }
 
@@ -155,6 +156,53 @@ impl Emitter {
                 self.write_indent();
                 self.writeln("},");
             }
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+    }
+
+    /// Emit a trait definition.
+    fn emit_trait(&mut self, t: &RustTraitDef) {
+        self.write_indent();
+        self.write("trait ");
+        self.write(&t.name);
+        self.emit_type_params(&t.type_params);
+        self.writeln(" {");
+        self.push_indent();
+
+        for method in &t.methods {
+            self.write_indent();
+            self.write("fn ");
+            self.write(&method.name);
+            self.write("(");
+
+            // Emit &self as the first parameter if applicable
+            if method.has_self {
+                self.write("&self");
+                if !method.params.is_empty() {
+                    self.write(", ");
+                }
+            }
+
+            for (i, param) in method.params.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&param.name);
+                self.write(": ");
+                self.write(&param.ty.to_string());
+            }
+
+            self.write(")");
+
+            if let Some(ref ret) = method.return_type {
+                self.write(" -> ");
+                self.write(&ret.to_string());
+            }
+
+            self.writeln(";");
         }
 
         self.pop_indent();
@@ -710,8 +758,8 @@ mod tests {
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
         RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt,
         RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustModDecl,
-        RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam,
-        RustUnaryOp, RustUseDecl, RustWhileStmt,
+        RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustTraitDef,
+        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -2479,6 +2527,93 @@ fn main() {
         assert!(
             output.contains("f: impl Fn(i32) -> i32"),
             "expected impl Fn in output:\n{output}"
+        );
+    }
+
+    // ---- Task 022: Trait emission tests ----
+
+    #[test]
+    fn test_emit_trait_definition_with_self_and_return() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Trait(RustTraitDef {
+                name: "Serializable".to_owned(),
+                type_params: vec![],
+                methods: vec![RustTraitMethod {
+                    name: "serialize".to_owned(),
+                    params: vec![],
+                    return_type: Some(RustType::String),
+                    has_self: true,
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("trait Serializable {"),
+            "expected trait definition in output:\n{output}"
+        );
+        assert!(
+            output.contains("fn serialize(&self) -> String;"),
+            "expected method with &self in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_fn_with_generic_trait_bounds() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "process".to_owned(),
+                type_params: vec![RustTypeParam {
+                    name: "T".to_owned(),
+                    bounds: vec!["Serializable".to_owned(), "Printable".to_owned()],
+                }],
+                params: vec![RustParam {
+                    name: "input".to_owned(),
+                    ty: RustType::TypeParam("T".to_owned()),
+                    span: None,
+                }],
+                return_type: Some(RustType::String),
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("fn process<T: Serializable + Printable>(input: T) -> String"),
+            "expected generic fn with trait bounds in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_trait_self_return_type() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Trait(RustTraitDef {
+                name: "Cloneable".to_owned(),
+                type_params: vec![],
+                methods: vec![RustTraitMethod {
+                    name: "clone".to_owned(),
+                    params: vec![],
+                    return_type: Some(RustType::SelfType),
+                    has_self: true,
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("fn clone(&self) -> Self;"),
+            "expected Self return type in output:\n{output}"
         );
     }
 }

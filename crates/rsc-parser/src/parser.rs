@@ -7,8 +7,8 @@
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, ClosureBody, ClosureExpr, DestructureStmt,
     ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl,
-    Ident, IfStmt, IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
+    Ident, IfStmt, IndexExpr, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr,
+    Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
     ReturnTypeAnnotation, Stmt, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
     TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
     UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
@@ -201,7 +201,9 @@ impl Parser {
             TokenKind::Try => "`try`",
             TokenKind::Catch => "`catch`",
             TokenKind::Move => "`move`",
+            TokenKind::Interface => "`interface`",
             TokenKind::FatArrow => "`=>`",
+            TokenKind::Ampersand => "`&`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -236,7 +238,8 @@ impl Parser {
                 | TokenKind::Type
                 | TokenKind::Switch
                 | TokenKind::Try
-                | TokenKind::Throw => return,
+                | TokenKind::Throw
+                | TokenKind::Interface => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -270,7 +273,7 @@ impl Parser {
         }
     }
 
-    /// Parse a top-level item: function declaration or type definition.
+    /// Parse a top-level item: function declaration, type definition, or interface.
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek() {
             TokenKind::Function => self.parse_function_decl().map(|f| {
@@ -282,6 +285,14 @@ impl Parser {
                 }
             }),
             TokenKind::Type => self.parse_type_or_enum_def(),
+            TokenKind::Interface => self.parse_interface_def().map(|iface| {
+                let span = iface.span;
+                Item {
+                    kind: ItemKind::Interface(iface),
+                    exported: false,
+                    span,
+                }
+            }),
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -629,6 +640,76 @@ impl Parser {
     }
 
     // ---------------------------------------------------------------
+    // Interface definitions
+    // ---------------------------------------------------------------
+
+    /// Parse an interface definition: `interface Name<T> { method(): Type; ... }`.
+    fn parse_interface_def(&mut self) -> Option<InterfaceDef> {
+        let interface_token = self.advance(); // consume `interface`
+        let start = interface_token.span;
+
+        let name = self.parse_ident()?;
+
+        // Optional generic type parameters: `<T, U extends Clone>`
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            if let Some(method) = self.parse_interface_method() {
+                methods.push(method);
+            } else {
+                // Error recovery: skip to next semicolon or closing brace
+                while !self.at_end()
+                    && !self.check(&TokenKind::Semicolon)
+                    && !self.check(&TokenKind::RBrace)
+                {
+                    self.advance();
+                }
+                self.eat(&TokenKind::Semicolon);
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+
+        Some(InterfaceDef {
+            name,
+            type_params,
+            methods,
+            span,
+        })
+    }
+
+    /// Parse a single interface method signature: `name(params): ReturnType;`.
+    fn parse_interface_method(&mut self) -> Option<InterfaceMethod> {
+        let start = self.current_token().span;
+        let name = self.parse_ident()?;
+
+        self.expect(&TokenKind::LParen)?;
+        let params = self.parse_param_list();
+        self.expect(&TokenKind::RParen)?;
+
+        // Optional return type
+        let return_type = self.parse_return_type_annotation();
+
+        self.expect(&TokenKind::Semicolon)?;
+
+        let span = start.merge(self.previous_span());
+        Some(InterfaceMethod {
+            name,
+            params,
+            return_type,
+            span,
+        })
+    }
+
+    // ---------------------------------------------------------------
     // Generic type parameters
     // ---------------------------------------------------------------
 
@@ -718,9 +799,11 @@ impl Parser {
         })
     }
 
-    /// Parse a type annotation: `void`, a named type, a generic type, or a union type.
+    /// Parse a type annotation: `void`, a named type, a generic type, a union type,
+    /// or an intersection type.
     ///
-    /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, `T | null`, etc.
+    /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, `T | null`,
+    /// `Serializable & Printable`, etc.
     fn parse_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let base = self.parse_base_type_annotation()?;
 
@@ -737,6 +820,23 @@ impl Parser {
             let end_span = members.last().map_or(start_span, |m| m.span);
             return Some(TypeAnnotation {
                 kind: TypeKind::Union(members),
+                span: start_span.merge(end_span),
+            });
+        }
+
+        // Check for intersection type: `Serializable & Printable`
+        if self.check(&TokenKind::Ampersand) {
+            let start_span = base.span;
+            let mut members = vec![base];
+
+            while self.eat(&TokenKind::Ampersand) {
+                let member = self.parse_base_type_annotation()?;
+                members.push(member);
+            }
+
+            let end_span = members.last().map_or(start_span, |m| m.span);
+            return Some(TypeAnnotation {
+                kind: TypeKind::Intersection(members),
                 span: start_span.merge(end_span),
             });
         }
@@ -2334,6 +2434,7 @@ mod tests {
             TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
             TypeKind::Union(_) => panic!("expected Named, got Union"),
             TypeKind::Function(_, _) => panic!("expected Named, got Function"),
+            TypeKind::Intersection(_) => panic!("expected Named, got Intersection"),
         }
         // Body has one return statement
         assert_eq!(f.body.stmts.len(), 1);
@@ -4080,5 +4181,105 @@ function fail() throws string {
         assert_eq!(closure.params.len(), 2);
         assert_eq!(closure.params[0].name.name, "a");
         assert_eq!(closure.params[1].name.name, "b");
+    }
+
+    // ---- Task 022: Interface parsing tests ----
+
+    #[test]
+    fn test_parser_interface_single_method_produces_interface_def() {
+        let source = r#"interface Serializable {
+  serialize(): string;
+}"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(module.items.len(), 1);
+        let iface = match &module.items[0].kind {
+            ItemKind::Interface(i) => i,
+            other => panic!("expected Interface, got {other:?}"),
+        };
+        assert_eq!(iface.name.name, "Serializable");
+        assert_eq!(iface.methods.len(), 1);
+        assert_eq!(iface.methods[0].name.name, "serialize");
+        assert!(iface.methods[0].params.is_empty());
+        let ret = iface.methods[0]
+            .return_type
+            .as_ref()
+            .expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::Named(ident) => assert_eq!(ident.name, "string"),
+            other => panic!("expected Named type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_interface_multiple_methods_correct_count() {
+        let source = r#"interface Handler {
+  handle(data: string): void;
+  status(): i32;
+  reset(): void;
+}"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let iface = match &module.items[0].kind {
+            ItemKind::Interface(i) => i,
+            other => panic!("expected Interface, got {other:?}"),
+        };
+        assert_eq!(iface.methods.len(), 3);
+        assert_eq!(iface.methods[0].name.name, "handle");
+        assert_eq!(iface.methods[0].params.len(), 1);
+        assert_eq!(iface.methods[0].params[0].name.name, "data");
+        assert_eq!(iface.methods[1].name.name, "status");
+        assert_eq!(iface.methods[2].name.name, "reset");
+    }
+
+    #[test]
+    fn test_parser_interface_self_return_type_parsed_as_named_self() {
+        let source = r#"interface Cloneable {
+  clone(): Self;
+}"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let iface = match &module.items[0].kind {
+            ItemKind::Interface(i) => i,
+            other => panic!("expected Interface, got {other:?}"),
+        };
+        let ret = iface.methods[0]
+            .return_type
+            .as_ref()
+            .expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::Named(ident) => assert_eq!(ident.name, "Self"),
+            other => panic!("expected Named(Self), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_intersection_type_in_parameter() {
+        let source = r#"function process(input: Serializable & Printable): string {
+  return input.serialize();
+}"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let func = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            other => panic!("expected Function, got {other:?}"),
+        };
+        assert_eq!(func.params.len(), 1);
+        match &func.params[0].type_ann.kind {
+            TypeKind::Intersection(members) => {
+                assert_eq!(members.len(), 2);
+                match &members[0].kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "Serializable"),
+                    other => panic!("expected Named, got {other:?}"),
+                }
+                match &members[1].kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "Printable"),
+                    other => panic!("expected Named, got {other:?}"),
+                }
+            }
+            other => panic!("expected Intersection, got {other:?}"),
+        }
     }
 }

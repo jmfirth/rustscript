@@ -26,6 +26,20 @@ pub enum TypeDefKind {
     SimpleEnum(Vec<String>),
     /// A data enum (discriminated union) with variant names and their fields.
     DataEnum(Vec<(String, Vec<(String, Type)>)>),
+    /// An interface (trait) with method signatures.
+    /// Each method has a name and a list of parameter types plus a return type.
+    Interface(Vec<InterfaceMethodSig>),
+}
+
+/// A method signature in a registered interface.
+#[derive(Debug, Clone)]
+pub struct InterfaceMethodSig {
+    /// The method name.
+    pub name: String,
+    /// The parameter types (excluding `self`).
+    pub param_types: Vec<(String, Type)>,
+    /// The return type (`None` means `void`/unit).
+    pub return_type: Option<Type>,
 }
 
 impl RegisteredTypeDef {
@@ -92,6 +106,17 @@ impl TypeRegistry {
             RegisteredTypeDef {
                 name,
                 kind: TypeDefKind::DataEnum(variants),
+            },
+        );
+    }
+
+    /// Register an interface (trait) type.
+    pub fn register_interface(&mut self, name: String, methods: Vec<InterfaceMethodSig>) {
+        self.types.insert(
+            name.clone(),
+            RegisteredTypeDef {
+                name,
+                kind: TypeDefKind::Interface(methods),
             },
         );
     }
@@ -211,5 +236,33 @@ mod tests {
     fn test_registry_default() {
         let reg = TypeRegistry::default();
         assert!(reg.lookup("anything").is_none());
+    }
+
+    // ---- Task 022: Interface registration test ----
+
+    #[test]
+    fn test_registry_register_interface_stores_and_retrieves() {
+        let mut reg = TypeRegistry::new();
+        reg.register_interface(
+            "Serializable".to_owned(),
+            vec![InterfaceMethodSig {
+                name: "serialize".to_owned(),
+                param_types: vec![],
+                return_type: Some(Type::String),
+            }],
+        );
+
+        let td = reg.lookup("Serializable");
+        assert!(td.is_some());
+        let td = td.unwrap();
+        assert_eq!(td.name, "Serializable");
+        match &td.kind {
+            TypeDefKind::Interface(methods) => {
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name, "serialize");
+                assert_eq!(methods[0].return_type, Some(Type::String));
+            }
+            _ => panic!("expected Interface"),
+        }
     }
 }
