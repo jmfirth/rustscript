@@ -497,8 +497,8 @@ function process(input: Serializable & Printable): string {
             result.diagnostics, result.rust_source
         );
         assert!(
-            result.rust_source.contains("for n in &numbers"),
-            "expected `for n in &numbers` in output, got:\n{}",
+            result.rust_source.contains("for &n in &numbers"),
+            "expected `for &n in &numbers` in output, got:\n{}",
             result.rust_source
         );
         assert!(
@@ -559,8 +559,8 @@ function process(input: Serializable & Printable): string {
             result.rust_source
         );
         assert!(
-            result.rust_source.contains("for n in &numbers"),
-            "expected `for n in &numbers` in output, got:\n{}",
+            result.rust_source.contains("for &n in &numbers"),
+            "expected `for &n in &numbers` in output, got:\n{}",
             result.rust_source
         );
     }
