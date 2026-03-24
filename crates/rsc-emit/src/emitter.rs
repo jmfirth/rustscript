@@ -4,8 +4,9 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
-    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustItem, RustMatchResultStmt,
-    RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTraitDef, RustTypeParam,
+    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem,
+    RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
+    RustStructDef, RustTraitDef, RustTraitImplBlock, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -102,6 +103,8 @@ impl Emitter {
             RustItem::Struct(s) => self.emit_struct(s),
             RustItem::Enum(e) => self.emit_enum(e),
             RustItem::Trait(t) => self.emit_trait(t),
+            RustItem::Impl(imp) => self.emit_impl_block(imp),
+            RustItem::TraitImpl(ti) => self.emit_trait_impl_block(ti),
         }
     }
 
@@ -224,6 +227,89 @@ impl Emitter {
         self.pop_indent();
         self.write_indent();
         self.writeln("}");
+    }
+
+    /// Emit an inherent impl block: `impl TypeName { methods }`.
+    fn emit_impl_block(&mut self, imp: &RustImplBlock) {
+        self.write_indent();
+        self.write("impl ");
+        self.write(&imp.type_name);
+        self.emit_type_params(&imp.type_params);
+        self.writeln(" {");
+        self.push_indent();
+
+        for (i, method) in imp.methods.iter().enumerate() {
+            if i > 0 {
+                self.newline();
+            }
+            self.emit_method(method);
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+    }
+
+    /// Emit a trait impl block: `impl TraitName for TypeName { methods }`.
+    fn emit_trait_impl_block(&mut self, ti: &RustTraitImplBlock) {
+        self.write_indent();
+        self.write("impl ");
+        self.write(&ti.trait_name);
+        self.write(" for ");
+        self.write(&ti.type_name);
+        self.emit_type_params(&ti.type_params);
+        self.writeln(" {");
+        self.push_indent();
+
+        for (i, method) in ti.methods.iter().enumerate() {
+            if i > 0 {
+                self.newline();
+            }
+            self.emit_method(method);
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+    }
+
+    /// Emit a single method within an impl block.
+    fn emit_method(&mut self, method: &RustMethod) {
+        self.write_indent();
+        self.write("fn ");
+        self.write(&method.name);
+        self.write("(");
+
+        // Emit self parameter if present
+        if let Some(self_param) = &method.self_param {
+            match self_param {
+                RustSelfParam::Ref => self.write("&self"),
+                RustSelfParam::RefMut => self.write("&mut self"),
+            }
+            if !method.params.is_empty() {
+                self.write(", ");
+            }
+        }
+
+        for (i, param) in method.params.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&param.name);
+            self.write(": ");
+            self.write(&param.ty.to_string());
+        }
+
+        self.write(")");
+
+        if let Some(ref ret) = method.return_type {
+            self.write(" -> ");
+            self.write(&ret.to_string());
+        }
+
+        self.write(" ");
+        self.emit_block(&method.body);
+        self.newline();
     }
 
     /// Emit a match statement.
@@ -784,6 +870,31 @@ impl Emitter {
                     }
                 }
             }
+            RustExprKind::SelfRef => {
+                self.write("self");
+            }
+            RustExprKind::SelfStructLit { fields } => {
+                self.write("Self { ");
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(name);
+                    self.write(": ");
+                    self.emit_expr(value);
+                }
+                self.write(" }");
+            }
+            RustExprKind::SelfFieldAccess { field } => {
+                self.write("self.");
+                self.write(field);
+            }
+            RustExprKind::SelfFieldAssign { field, value } => {
+                self.write("self.");
+                self.write(field);
+                self.write(" = ");
+                self.emit_expr(value);
+            }
         }
     }
 }
@@ -800,9 +911,10 @@ mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
         RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
-        RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
-        RustModDecl, RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustTraitDef,
-        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+        RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt,
+        RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt,
+        RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod,
+        RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -2897,6 +3009,156 @@ fn main() {
         assert!(
             output.contains("pub struct User"),
             "expected `pub struct User` in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 023: Emitter tests for impl blocks and methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_emit_impl_block_with_methods() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Impl(RustImplBlock {
+                type_name: "Counter".to_owned(),
+                type_params: vec![],
+                methods: vec![RustMethod {
+                    name: "new".to_owned(),
+                    self_param: None,
+                    params: vec![RustParam {
+                        name: "initial".to_owned(),
+                        ty: RustType::I32,
+                        span: None,
+                    }],
+                    return_type: Some(RustType::SelfType),
+                    body: RustBlock {
+                        stmts: vec![RustStmt::Expr(syn(RustExprKind::SelfStructLit {
+                            fields: vec![(
+                                "count".to_owned(),
+                                syn(RustExprKind::Ident("initial".to_owned())),
+                            )],
+                        }))],
+                        expr: None,
+                    },
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("impl Counter {"),
+            "expected `impl Counter {{` in output:\n{output}"
+        );
+        assert!(
+            output.contains("fn new(initial: i32) -> Self"),
+            "expected `fn new(initial: i32) -> Self` in output:\n{output}"
+        );
+        assert!(
+            output.contains("Self { count: initial }"),
+            "expected `Self {{ count: initial }}` in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_trait_impl_block() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::TraitImpl(RustTraitImplBlock {
+                trait_name: "Describable".to_owned(),
+                type_name: "User".to_owned(),
+                type_params: vec![],
+                methods: vec![RustMethod {
+                    name: "describe".to_owned(),
+                    self_param: Some(RustSelfParam::Ref),
+                    params: vec![],
+                    return_type: Some(RustType::String),
+                    body: RustBlock {
+                        stmts: vec![RustStmt::Return(RustReturnStmt {
+                            value: Some(syn(RustExprKind::SelfFieldAccess {
+                                field: "name".to_owned(),
+                            })),
+                            span: None,
+                        })],
+                        expr: None,
+                    },
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("impl Describable for User {"),
+            "expected `impl Describable for User {{` in output:\n{output}"
+        );
+        assert!(
+            output.contains("fn describe(&self) -> String"),
+            "expected `fn describe(&self) -> String` in output:\n{output}"
+        );
+        assert!(
+            output.contains("self.name"),
+            "expected `self.name` in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_self_field_access() {
+        let expr = syn(RustExprKind::SelfFieldAccess {
+            field: "count".to_owned(),
+        });
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                public: false,
+                name: "test".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![RustStmt::Semi(expr)],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("self.count"),
+            "expected `self.count` in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_mut_self_method() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Impl(RustImplBlock {
+                type_name: "Foo".to_owned(),
+                type_params: vec![],
+                methods: vec![RustMethod {
+                    name: "mutate".to_owned(),
+                    self_param: Some(RustSelfParam::RefMut),
+                    params: vec![],
+                    return_type: None,
+                    body: RustBlock {
+                        stmts: vec![],
+                        expr: None,
+                    },
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("fn mutate(&mut self)"),
+            "expected `fn mutate(&mut self)` in output:\n{output}"
         );
     }
 }

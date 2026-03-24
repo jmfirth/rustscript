@@ -61,6 +61,10 @@ pub enum RustItem {
     Enum(RustEnumDef),
     /// A `trait` definition.
     Trait(RustTraitDef),
+    /// An inherent impl block: `impl TypeName { ... }`.
+    Impl(RustImplBlock),
+    /// A trait impl block: `impl TraitName for TypeName { ... }`.
+    TraitImpl(RustTraitImplBlock),
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
@@ -167,6 +171,66 @@ pub struct RustTraitMethod {
     pub has_self: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
+}
+
+/// An inherent impl block: `impl TypeName { ... }`.
+///
+/// Produced by lowering a `RustScript` [`ClassDef`](crate::ast::ClassDef).
+#[derive(Debug, Clone)]
+pub struct RustImplBlock {
+    /// The type name (e.g., `Counter`).
+    pub type_name: String,
+    /// Generic type parameters on the impl block.
+    pub type_params: Vec<RustTypeParam>,
+    /// The methods in this impl block.
+    pub methods: Vec<RustMethod>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A trait impl block: `impl TraitName for TypeName { ... }`.
+///
+/// Produced by lowering a class that `implements` an interface.
+#[derive(Debug, Clone)]
+pub struct RustTraitImplBlock {
+    /// The trait name (e.g., `Describable`).
+    pub trait_name: String,
+    /// The implementing type name (e.g., `User`).
+    pub type_name: String,
+    /// Generic type parameters on the impl block.
+    pub type_params: Vec<RustTypeParam>,
+    /// The methods implementing the trait.
+    pub methods: Vec<RustMethod>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A method in an impl block.
+///
+/// Unlike [`RustTraitMethod`] which is a signature only, this has a body.
+#[derive(Debug, Clone)]
+pub struct RustMethod {
+    /// The method name.
+    pub name: String,
+    /// The self parameter (`&self`, `&mut self`, or none for associated functions).
+    pub self_param: Option<RustSelfParam>,
+    /// The parameter list (excluding `self`).
+    pub params: Vec<RustParam>,
+    /// The return type, if not unit.
+    pub return_type: Option<RustType>,
+    /// The method body.
+    pub body: RustBlock,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// The self parameter on a method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustSelfParam {
+    /// `&self` — immutable borrow.
+    Ref,
+    /// `&mut self` — mutable borrow.
+    RefMut,
 }
 
 /// A Rust function declaration.
@@ -696,6 +760,29 @@ pub enum RustExprKind {
         return_type: Option<RustType>,
         /// The closure body — expression or block.
         body: RustClosureBody,
+    },
+    /// `self` — reference to the current instance in an impl method.
+    /// Produced by lowering `this` in class methods.
+    SelfRef,
+    /// `Self { field: value, ... }` — struct literal using `Self` type.
+    /// Produced by lowering constructor bodies.
+    SelfStructLit {
+        /// The field name-value pairs.
+        fields: Vec<(String, RustExpr)>,
+    },
+    /// Field access on `self`: `self.field`.
+    /// Produced by lowering `this.field` in class methods.
+    SelfFieldAccess {
+        /// The field name.
+        field: String,
+    },
+    /// Assignment to a `self` field: `self.field = value`.
+    /// Produced by lowering `this.field = value` in class methods.
+    SelfFieldAssign {
+        /// The field name.
+        field: String,
+        /// The value being assigned.
+        value: Box<RustExpr>,
     },
 }
 

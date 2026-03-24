@@ -1189,3 +1189,162 @@ function main() {
         "expected `use crate::utils::greet;` in output:\n{output}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 023: Class sugar — struct + impl + constructor
+// ---------------------------------------------------------------------------
+
+// Correctness Scenario 1: Basic class
+#[test]
+fn test_snapshot_class_counter_generates_struct_and_impl() {
+    let source = "\
+class Counter {
+  private count: i32;
+
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  get(): i32 {
+    return this.count;
+  }
+}
+
+function main() {
+  let c = new Counter(0);
+  c.increment();
+  c.increment();
+  console.log(c.get());
+}";
+
+    let expected = "\
+struct Counter {
+    count: i32,
+}
+
+impl Counter {
+    fn new(initial: i32) -> Self {
+        Self { count: initial }
+    }
+
+    fn increment(&mut self) {
+        self.count = self.count + 1;
+    }
+
+    fn get(&self) -> i32 {
+        return self.count;
+    }
+}
+
+fn main() {
+    let mut c = Counter::new(0);
+    c.increment();
+    c.increment();
+    println!(\"{}\", c.get());
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("class_counter", &actual, expected);
+}
+
+// Correctness Scenario 2: Class with implements
+#[test]
+fn test_snapshot_class_implements_generates_trait_impl() {
+    let source = "\
+interface Describable {
+  describe(): string;
+}
+
+class User implements Describable {
+  public name: string;
+  private age: u32;
+
+  constructor(name: string, age: u32) {
+    this.name = name;
+    this.age = age;
+  }
+
+  describe(): string {
+    return this.name;
+  }
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Should contain the trait definition
+    assert!(
+        actual.contains("trait Describable"),
+        "expected trait definition in output:\n{actual}"
+    );
+
+    // Should contain the struct definition
+    assert!(
+        actual.contains("struct User"),
+        "expected struct User in output:\n{actual}"
+    );
+
+    // Should contain pub name field and non-pub age field
+    assert!(
+        actual.contains("pub name: String"),
+        "expected pub name field in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("age: u32"),
+        "expected non-pub age field in output:\n{actual}"
+    );
+    assert!(
+        !actual.contains("pub age: u32"),
+        "age should not be pub in output:\n{actual}"
+    );
+
+    // Should contain inherent impl with new
+    assert!(
+        actual.contains("impl User {"),
+        "expected inherent impl User in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn new("),
+        "expected fn new in output:\n{actual}"
+    );
+
+    // Should contain trait impl
+    assert!(
+        actual.contains("impl Describable for User {"),
+        "expected trait impl in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn describe(&self)"),
+        "expected describe method in trait impl:\n{actual}"
+    );
+}
+
+// Correctness Scenario 3: `new` expression for classes
+#[test]
+fn test_snapshot_new_class_generates_static_call() {
+    let source = "\
+class Point {
+  public x: f64;
+  public y: f64;
+
+  constructor(x: f64, y: f64) {
+    this.x = x;
+    this.y = y;
+  }
+}
+
+function main() {
+  const p = new Point(1.0, 2.0);
+  console.log(p.x);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Point::new(1.0, 2.0)"),
+        "expected Point::new() call in output:\n{actual}"
+    );
+}

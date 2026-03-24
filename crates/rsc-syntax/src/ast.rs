@@ -57,6 +57,9 @@ pub enum ItemKind {
     /// A re-export declaration (`export { Name } from "./module"`).
     /// Lowers to a Rust `pub use` declaration.
     ReExport(ReExportDecl),
+    /// A class definition (`class Name { fields; constructor() { }; methods() { } }`).
+    /// Lowers to a Rust `struct` + `impl` block.
+    Class(ClassDef),
 }
 
 /// An import declaration: `import { User, Post } from "./models"`.
@@ -234,6 +237,93 @@ pub struct InterfaceMethod {
     /// The return type annotation, if present. Absent means `void`.
     pub return_type: Option<ReturnTypeAnnotation>,
     /// The span covering the method signature.
+    pub span: Span,
+}
+
+/// A class definition: `class Name implements Trait { fields; constructor; methods }`.
+///
+/// Lowers to a Rust `struct` + `impl` block. If `implements` is present,
+/// trait methods are separated into `impl TraitName for ClassName` blocks.
+#[derive(Debug, Clone)]
+pub struct ClassDef {
+    /// The class name.
+    pub name: Ident,
+    /// Optional generic type parameters: `<T>`.
+    pub type_params: Option<TypeParams>,
+    /// Interfaces this class implements.
+    pub implements: Vec<Ident>,
+    /// The class members (fields, constructor, methods).
+    pub members: Vec<ClassMember>,
+    /// The span covering the entire class definition.
+    pub span: Span,
+}
+
+/// A member of a class definition.
+#[derive(Debug, Clone)]
+pub enum ClassMember {
+    /// A class field declaration.
+    Field(ClassField),
+    /// The class constructor.
+    Constructor(ClassConstructor),
+    /// A class method.
+    Method(ClassMethod),
+}
+
+/// A class field declaration: `[private|public] name: Type;`.
+///
+/// Lowers to a struct field, with visibility controlling `pub`.
+#[derive(Debug, Clone)]
+pub struct ClassField {
+    /// The visibility modifier (`public` or `private`).
+    pub visibility: Visibility,
+    /// The field name.
+    pub name: Ident,
+    /// The field type annotation.
+    pub type_ann: TypeAnnotation,
+    /// The span covering the field declaration.
+    pub span: Span,
+}
+
+/// Visibility modifier for class members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Public (default). Lowers to `pub` in Rust.
+    Public,
+    /// Private. Lowers to no visibility modifier in Rust.
+    Private,
+}
+
+/// A class constructor: `constructor(params) { body }`.
+///
+/// Lowers to an associated `fn new(params) -> Self { Self { fields } }` in Rust.
+#[derive(Debug, Clone)]
+pub struct ClassConstructor {
+    /// The constructor parameters.
+    pub params: Vec<Param>,
+    /// The constructor body.
+    pub body: Block,
+    /// The span covering the constructor declaration.
+    pub span: Span,
+}
+
+/// A class method: `[private|public] name(params): ReturnType { body }`.
+///
+/// Lowers to a method in an `impl` block with `&self` or `&mut self`.
+#[derive(Debug, Clone)]
+pub struct ClassMethod {
+    /// The visibility modifier (`public` or `private`).
+    pub visibility: Visibility,
+    /// The method name.
+    pub name: Ident,
+    /// Optional generic type parameters.
+    pub type_params: Option<TypeParams>,
+    /// The parameter list (excluding the implicit `this`/`self`).
+    pub params: Vec<Param>,
+    /// The return type annotation, if present. Absent means `void`.
+    pub return_type: Option<ReturnTypeAnnotation>,
+    /// The method body.
+    pub body: Block,
+    /// The span covering the method declaration.
     pub span: Span,
 }
 
@@ -561,6 +651,9 @@ pub enum ExprKind {
     Paren(Box<Expr>),
     /// An assignment expression (e.g., `x = 5`).
     Assign(AssignExpr),
+    /// Field assignment: `obj.field = value` (e.g., `this.count = 0`).
+    /// Used for `this.field = value` in class methods/constructors.
+    FieldAssign(FieldAssignExpr),
     /// A struct literal: `{ name: "Alice", age: 30 }` or `User { ... }`.
     /// Lowers to a Rust struct construction expression.
     StructLit(StructLitExpr),
@@ -593,6 +686,9 @@ pub enum ExprKind {
     /// Arrow function / closure: `(x: i32): i32 => x * 2` or `() => { ... }`.
     /// Lowers to a Rust closure expression.
     Closure(ClosureExpr),
+    /// The `this` keyword — refers to the current class instance.
+    /// Lowers to `self` in Rust methods.
+    This,
 }
 
 /// A binary expression with an operator and two operands.
@@ -710,6 +806,20 @@ pub struct MethodCallExpr {
 pub struct AssignExpr {
     /// The assignment target (an identifier in Phase 0).
     pub target: Ident,
+    /// The value being assigned.
+    pub value: Box<Expr>,
+}
+
+/// A field assignment expression: `obj.field = value`.
+///
+/// Produced when the LHS of an assignment is a field access (e.g., `this.count = 0`).
+/// Lowers to `self.field = value` in Rust methods.
+#[derive(Debug, Clone)]
+pub struct FieldAssignExpr {
+    /// The object being assigned to (e.g., `this`).
+    pub object: Box<Expr>,
+    /// The field name being assigned to.
+    pub field: Ident,
     /// The value being assigned.
     pub value: Box<Expr>,
 }

@@ -678,6 +678,12 @@ impl<'a> Lexer<'a> {
             "import" => TokenKind::Import,
             "export" => TokenKind::Export,
             "from" => TokenKind::From,
+            "class" => TokenKind::Class,
+            "constructor" => TokenKind::Constructor,
+            "this" => TokenKind::This,
+            "private" => TokenKind::Private,
+            "public" => TokenKind::Public,
+            "implements" => TokenKind::Implements,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
