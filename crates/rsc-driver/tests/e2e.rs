@@ -214,3 +214,61 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "4");
 }
+
+// ---------------------------------------------------------------------------
+// 10. Type def + struct construction (Task 014 correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_type_def_struct_construction_prints_fields() {
+    let source = "\
+type Point = { x: f64, y: f64 }
+function main() {
+  const p: Point = { x: 1.0, y: 2.0 };
+  console.log(p.x);
+  console.log(p.y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "1\n2");
+}
+
+// ---------------------------------------------------------------------------
+// 11. Destructuring (Task 014 correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_destructuring_prints_name() {
+    let source = "\
+type User = { name: string, age: u32 }
+function main() {
+  const user: User = { name: \"Alice\", age: 30 };
+  const { name, age } = user;
+  console.log(name);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice");
+}
+
+// ---------------------------------------------------------------------------
+// 12. Nested field access (Task 014 correctness scenario 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_nested_field_access_prints_city() {
+    let source = "\
+type Address = { city: string }
+type Person = { name: string, address: Address }
+function main() {
+  const addr: Address = { city: \"Portland\" };
+  const person: Person = { name: \"Bob\", address: addr };
+  console.log(person.address.city);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Portland");
+}

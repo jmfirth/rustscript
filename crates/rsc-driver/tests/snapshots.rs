@@ -556,3 +556,101 @@ fn convert(x: i32) -> i64 {
     let actual = compile_to_rust(source);
     assert_snapshot("cross_type_mismatch", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// 21. Type definition + struct construction (Task 014 correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_type_def_and_struct_construction() {
+    let source = "\
+type Point = { x: f64, y: f64 }
+function main() {
+  const p: Point = { x: 1.0, y: 2.0 };
+  console.log(p.x);
+  console.log(p.y);
+}";
+
+    let expected = "\
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    println!(\"{}\", p.x);
+    println!(\"{}\", p.y);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("type_def_struct_construction", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 22. Destructuring (Task 014 correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_destructuring() {
+    let source = "\
+type User = { name: string, age: u32 }
+function main() {
+  const user: User = { name: \"Alice\", age: 30 };
+  const { name, age } = user;
+  console.log(name);
+}";
+
+    let expected = "\
+struct User {
+    pub name: String,
+    pub age: u32,
+}
+
+fn main() {
+    let user = User { name: \"Alice\".to_string(), age: 30 };
+    let User { name, age, .. } = user;
+    println!(\"{}\", name);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("destructuring", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 23. Nested field access (Task 014 correctness scenario 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_nested_field_access() {
+    let source = "\
+type Address = { city: string }
+type Person = { name: string, address: Address }
+function main() {
+  const addr: Address = { city: \"Portland\" };
+  const person: Person = { name: \"Bob\", address: addr };
+  console.log(person.address.city);
+}";
+
+    let expected = "\
+struct Address {
+    pub city: String,
+}
+
+struct Person {
+    pub name: String,
+    pub address: Address,
+}
+
+fn main() {
+    let addr = Address { city: \"Portland\".to_string() };
+    let person = Person { name: \"Bob\".to_string(), address: addr };
+    println!(\"{}\", person.address.city);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("nested_field_access", &actual, expected);
+}

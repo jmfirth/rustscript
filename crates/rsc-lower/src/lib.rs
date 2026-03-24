@@ -22,6 +22,6 @@ use transform::Transform;
 /// Returns the Rust IR and any diagnostics encountered during lowering.
 #[must_use]
 pub fn lower(module: &ast::Module) -> (RustFile, Vec<Diagnostic>) {
-    let transform = Transform::new();
+    let mut transform = Transform::new();
     transform.lower_module(module)
 }

@@ -15,6 +15,9 @@ use rsc_syntax::rust_ir::RustType;
 pub(crate) struct LoweringContext {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
+    /// The current expected struct type name for struct literal resolution.
+    /// Set by `lower_var_decl` when the variable has a named type annotation.
+    current_struct_type: Option<String>,
 }
 
 /// A single scope level containing variable declarations.
@@ -36,6 +39,7 @@ impl LoweringContext {
                 variables: HashMap::new(),
             }],
             diagnostics: Vec::new(),
+            current_struct_type: None,
         }
     }
 
@@ -66,6 +70,16 @@ impl LoweringContext {
             }
         }
         None
+    }
+
+    /// Set the current struct type name context for struct literal resolution.
+    pub fn set_struct_type_name(&mut self, name: Option<String>) {
+        self.current_struct_type = name;
+    }
+
+    /// Get the current struct type name context, if set.
+    pub fn current_struct_type_name(&self) -> Option<&str> {
+        self.current_struct_type.as_deref()
     }
 
     /// Add a diagnostic to the accumulated list.

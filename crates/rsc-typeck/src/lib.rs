@@ -7,8 +7,10 @@
 
 pub mod bridge;
 pub mod error;
+pub mod registry;
 pub mod resolve;
 pub mod types;
 
 // Re-export core types
+pub use registry::TypeRegistry;
 pub use types::{PrimitiveType, Type};

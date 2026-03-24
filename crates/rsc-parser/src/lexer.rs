@@ -364,6 +364,7 @@ impl<'a> Lexer<'a> {
             "return" => TokenKind::Return,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "type" => TokenKind::Type,
             _ => TokenKind::Ident(text.to_owned()),
         };
 

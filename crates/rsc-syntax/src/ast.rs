@@ -36,11 +36,14 @@ pub struct Item {
 
 /// The kinds of top-level items in a `RustScript` module.
 ///
-/// Phase 0 supports only function declarations.
+/// Phase 0 supports function declarations; Phase 1 adds type definitions.
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
     Function(FnDecl),
+    /// A type definition (`type Name = { field: Type, ... }`).
+    /// Lowers to a Rust `struct`.
+    TypeDef(TypeDef),
 }
 
 /// A function declaration.
@@ -58,6 +61,33 @@ pub struct FnDecl {
     /// The function body.
     pub body: Block,
     /// The span covering the entire function declaration.
+    pub span: Span,
+}
+
+/// A type definition: `type Name = { field: Type, ... }`.
+///
+/// Lowers to a Rust `struct` with `pub` fields.
+#[derive(Debug, Clone)]
+pub struct TypeDef {
+    /// The type name.
+    pub name: Ident,
+    /// The fields of the type definition.
+    pub fields: Vec<FieldDef>,
+    /// The span covering the entire type definition.
+    pub span: Span,
+}
+
+/// A field in a type definition.
+///
+/// Corresponds to `name: Type` within a type definition body.
+/// Lowers to a `pub` field in the Rust struct.
+#[derive(Debug, Clone)]
+pub struct FieldDef {
+    /// The field name.
+    pub name: Ident,
+    /// The field type annotation.
+    pub type_ann: TypeAnnotation,
+    /// The span covering the field definition.
     pub span: Span,
 }
 
@@ -130,6 +160,9 @@ pub enum Stmt {
     If(IfStmt),
     /// A `while` loop.
     While(WhileStmt),
+    /// A destructuring declaration: `const { name, age } = user;`.
+    /// Lowers to Rust `let TypeName { field1, field2, .. } = expr;`.
+    Destructure(DestructureStmt),
 }
 
 /// A variable declaration with an initializer.
@@ -207,6 +240,21 @@ pub struct WhileStmt {
     pub span: Span,
 }
 
+/// A destructuring declaration: `const { name, age } = user;`.
+///
+/// Lowers to Rust `let TypeName { field1, field2, .. } = expr;`.
+#[derive(Debug, Clone)]
+pub struct DestructureStmt {
+    /// Whether this is a `const` or `let` binding.
+    pub binding: VarBinding,
+    /// The field names being extracted.
+    pub fields: Vec<Ident>,
+    /// The initializer expression being destructured.
+    pub init: Expr,
+    /// The span covering the entire destructuring statement.
+    pub span: Span,
+}
+
 /// An expression with its source span.
 ///
 /// Wraps an [`ExprKind`] variant with the span of source text it was parsed from.
@@ -243,6 +291,12 @@ pub enum ExprKind {
     Paren(Box<Expr>),
     /// An assignment expression (e.g., `x = 5`).
     Assign(AssignExpr),
+    /// A struct literal: `{ name: "Alice", age: 30 }` or `User { ... }`.
+    /// Lowers to a Rust struct construction expression.
+    StructLit(StructLitExpr),
+    /// Field access: `user.name`.
+    /// Lowers to Rust field access `expr.field`.
+    FieldAccess(FieldAccessExpr),
 }
 
 /// A binary expression with an operator and two operands.
@@ -362,6 +416,46 @@ pub struct AssignExpr {
     pub target: Ident,
     /// The value being assigned.
     pub value: Box<Expr>,
+}
+
+/// A struct literal expression.
+///
+/// Corresponds to `{ name: "Alice", age: 30 }` in expression position.
+/// The `type_name` is resolved during lowering from context (e.g., the
+/// variable's type annotation).
+#[derive(Debug, Clone)]
+pub struct StructLitExpr {
+    /// The type name (for typed literals like `User { ... }`). None for
+    /// untyped object literals.
+    pub type_name: Option<Ident>,
+    /// The field initializers.
+    pub fields: Vec<FieldInit>,
+}
+
+/// A field initializer in a struct literal.
+///
+/// Corresponds to `name: expr` within a struct literal body.
+#[derive(Debug, Clone)]
+pub struct FieldInit {
+    /// The field name.
+    pub name: Ident,
+    /// The field value expression.
+    pub value: Expr,
+    /// The span covering the field initializer.
+    pub span: Span,
+}
+
+/// A field access expression: `expr.field`.
+///
+/// Supports chaining: `user.address.city` is
+/// `FieldAccess(FieldAccess(user, address), city)`.
+/// Lowers to Rust field access syntax.
+#[derive(Debug, Clone)]
+pub struct FieldAccessExpr {
+    /// The object expression being accessed.
+    pub object: Box<Expr>,
+    /// The field name.
+    pub field: Ident,
 }
 
 #[cfg(test)]
