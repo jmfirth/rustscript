@@ -386,6 +386,11 @@ impl<'a> Lexer<'a> {
             (b'>', b'=') => TokenKind::GtEq,
             (b'&', b'&') => TokenKind::AmpAmp,
             (b'|', b'|') => TokenKind::PipePipe,
+            (b'+', b'=') => TokenKind::PlusEq,
+            (b'-', b'=') => TokenKind::MinusEq,
+            (b'*', b'=') => TokenKind::StarEq,
+            (b'/', b'=') => TokenKind::SlashEq,
+            (b'%', b'=') => TokenKind::PercentEq,
             _ => return None,
         };
 
@@ -731,7 +736,35 @@ mod tests {
         assert_eq!(&source[10..11], ";");
     }
 
-    // 20. Empty source → single Eof token
+    // 20. Compound assignment operators tokenize correctly
+    #[test]
+    fn test_lexer_compound_assignment_operators() {
+        let cases = [
+            ("+=", TokenKind::PlusEq),
+            ("-=", TokenKind::MinusEq),
+            ("*=", TokenKind::StarEq),
+            ("/=", TokenKind::SlashEq),
+            ("%=", TokenKind::PercentEq),
+        ];
+
+        for (source, expected_kind) in cases {
+            let tokens = tokenize(source);
+            assert_eq!(
+                tokens[0].kind, expected_kind,
+                "operator `{source}` should produce {expected_kind:?}"
+            );
+        }
+    }
+
+    // 21. Compound assignment operators are two-char, not single + eq
+    #[test]
+    fn test_lexer_compound_assign_wins_over_single_char() {
+        let tokens = tokenize("+=");
+        assert_eq!(tokens.len(), 2); // PlusEq + Eof
+        assert_eq!(tokens[0].kind, TokenKind::PlusEq);
+    }
+
+    // 22. Empty source → single Eof token
     #[test]
     fn test_lexer_empty_source_produces_single_eof() {
         let tokens = tokenize("");

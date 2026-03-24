@@ -26,9 +26,10 @@ struct BuiltinEntry {
 /// Registry of builtin functions and methods.
 ///
 /// Maps `(object_name, method_name)` pairs to their lowering functions.
+/// Uses a nested `HashMap` to avoid allocating on every lookup.
 /// Phase 0 registers `console.log` -> `println!`.
 pub(crate) struct BuiltinRegistry {
-    methods: HashMap<(String, String), BuiltinEntry>,
+    methods: HashMap<String, HashMap<String, BuiltinEntry>>,
 }
 
 impl BuiltinRegistry {
@@ -49,16 +50,17 @@ impl BuiltinRegistry {
         lowering: BuiltinLowering,
         ref_args: bool,
     ) {
-        self.methods.insert(
-            (object.to_owned(), method.to_owned()),
-            BuiltinEntry { lowering, ref_args },
-        );
+        self.methods
+            .entry(object.to_owned())
+            .or_default()
+            .insert(method.to_owned(), BuiltinEntry { lowering, ref_args });
     }
 
     /// Check if a method call is a builtin and return its lowering function.
     pub fn lookup_method(&self, object: &str, method: &str) -> Option<&BuiltinLowering> {
         self.methods
-            .get(&(object.to_owned(), method.to_owned()))
+            .get(object)?
+            .get(method)
             .map(|entry| &entry.lowering)
     }
 
@@ -68,7 +70,8 @@ impl BuiltinRegistry {
     /// Returns `false` for unknown methods (they are assumed to move).
     pub fn is_ref_args(&self, object: &str, method: &str) -> bool {
         self.methods
-            .get(&(object.to_owned(), method.to_owned()))
+            .get(object)
+            .and_then(|m| m.get(method))
             .is_some_and(|entry| entry.ref_args)
     }
 }
@@ -81,10 +84,12 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
 ///
 /// Builds a format string with one `{}` per argument, space-separated.
+/// Strips `.to_string()` wrappers from arguments since `println!` takes
+/// all arguments by reference via `{}` formatting.
 fn lower_console_log(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
     let format_str = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
     let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
-    macro_args.extend(args);
+    macro_args.extend(args.into_iter().map(strip_to_string));
     RustExpr::new(
         RustExprKind::Macro {
             name: "println".into(),
@@ -92,6 +97,18 @@ fn lower_console_log(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
         },
         arg_span,
     )
+}
+
+/// Strip a `ToString` wrapper from an expression, returning the inner expression.
+///
+/// `println!` takes arguments by reference, so `.to_string()` on string
+/// literals is unnecessary noise.
+fn strip_to_string(expr: RustExpr) -> RustExpr {
+    if let RustExprKind::ToString(inner) = expr.kind {
+        *inner
+    } else {
+        expr
+    }
 }
 
 #[cfg(test)]

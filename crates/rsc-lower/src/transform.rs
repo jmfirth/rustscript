@@ -7,9 +7,9 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBinaryOp, RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt,
-    RustItem, RustLetStmt, RustParam, RustReturnStmt, RustStmt, RustType, RustUnaryOp,
-    RustWhileStmt,
+    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustElse, RustExpr, RustExprKind, RustFile,
+    RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustParam, RustReturnStmt, RustStmt, RustType,
+    RustUnaryOp, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -77,7 +77,7 @@ impl Transform {
             .map(|p| {
                 let ty =
                     resolve::resolve_type_annotation_to_rust_type(&p.type_ann, &mut Vec::new());
-                ctx.declare_variable(p.name.name.clone(), ty.clone(), false);
+                ctx.declare_variable(p.name.name.clone(), ty.clone());
                 RustParam {
                     name: p.name.name.clone(),
                     ty,
@@ -190,14 +190,26 @@ impl Transform {
         // - `let` declarations are mutable only if the variable is reassigned
         let mutable = decl.binding == ast::VarBinding::Let && reassigned.contains(&decl.name.name);
 
-        ctx.declare_variable(decl.name.name.clone(), ty.clone(), mutable);
+        ctx.declare_variable(decl.name.name.clone(), ty.clone());
 
         let init = self.lower_expr(&decl.init, ctx, use_map, stmt_index);
+
+        // Omit the type annotation when it's inferable from the literal initializer
+        // and the user didn't write an explicit annotation.
+        let emit_ty = if decl.type_ann.is_some() {
+            // User wrote an explicit type annotation — always include it
+            Some(ty)
+        } else if is_default_literal_type(&decl.init, &ty) {
+            // Type matches the literal's default — omit for cleaner output
+            None
+        } else {
+            Some(ty)
+        };
 
         RustStmt::Let(RustLetStmt {
             mutable,
             name: decl.name.name.clone(),
-            ty: Some(ty),
+            ty: emit_ty,
             init,
             span: Some(decl.span),
         })
@@ -321,6 +333,20 @@ impl Transform {
                 RustExpr::new(RustExprKind::Paren(Box::new(lowered)), expr.span)
             }
             ast::ExprKind::Assign(assign) => {
+                // Detect compound assignment pattern: x = x op rhs
+                if let Some((compound_op, rhs)) =
+                    detect_compound_assign(&assign.target.name, &assign.value)
+                {
+                    let lowered_rhs = self.lower_expr(rhs, ctx, use_map, stmt_index);
+                    return RustExpr::new(
+                        RustExprKind::CompoundAssign {
+                            target: assign.target.name.clone(),
+                            op: compound_op,
+                            value: Box::new(lowered_rhs),
+                        },
+                        expr.span,
+                    );
+                }
                 let value = self.lower_expr(&assign.value, ctx, use_map, stmt_index);
                 RustExpr::new(
                     RustExprKind::Assign {
@@ -428,6 +454,45 @@ fn lower_unary_op(op: ast::UnaryOp) -> RustUnaryOp {
         ast::UnaryOp::Neg => RustUnaryOp::Neg,
         ast::UnaryOp::Not => RustUnaryOp::Not,
     }
+}
+
+/// Check if the expression is a literal whose default inferred type matches `ty`.
+///
+/// When this returns `true`, the type annotation can be omitted on the `let`
+/// binding because Rust will infer the same type.
+fn is_default_literal_type(expr: &ast::Expr, ty: &RustType) -> bool {
+    match &expr.kind {
+        ast::ExprKind::IntLit(_) => *ty == RustType::I64,
+        ast::ExprKind::FloatLit(_) => *ty == RustType::F64,
+        ast::ExprKind::BoolLit(_) => *ty == RustType::Bool,
+        ast::ExprKind::StringLit(_) => *ty == RustType::String,
+        _ => false,
+    }
+}
+
+/// Detect the compound assignment pattern `x = x op rhs`.
+///
+/// If the value expression is `Binary(op, Ident(name), rhs)` where `name`
+/// matches the assignment target, returns the compound operator and the rhs.
+fn detect_compound_assign<'a>(
+    target: &str,
+    value: &'a ast::Expr,
+) -> Option<(RustCompoundAssignOp, &'a ast::Expr)> {
+    if let ast::ExprKind::Binary(bin) = &value.kind
+        && let ast::ExprKind::Ident(ident) = &bin.left.kind
+        && ident.name == target
+    {
+        let compound_op = match bin.op {
+            ast::BinaryOp::Add => RustCompoundAssignOp::AddAssign,
+            ast::BinaryOp::Sub => RustCompoundAssignOp::SubAssign,
+            ast::BinaryOp::Mul => RustCompoundAssignOp::MulAssign,
+            ast::BinaryOp::Div => RustCompoundAssignOp::DivAssign,
+            ast::BinaryOp::Mod => RustCompoundAssignOp::RemAssign,
+            _ => return None,
+        };
+        return Some((compound_op, &bin.right));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -640,9 +705,9 @@ mod tests {
         }
     }
 
-    // Test 19: Lower const x = 42; (no type ann) → infer i64
+    // Test 19: Lower const x = 42; (no type ann) → omit type (inferable)
     #[test]
-    fn test_lower_const_no_type_annotation_infers_i64() {
+    fn test_lower_const_no_type_annotation_omits_type() {
         let f = make_fn(
             "main",
             vec![],
@@ -662,7 +727,10 @@ mod tests {
         let RustItem::Function(func) = &file.items[0];
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
-                assert_eq!(let_stmt.ty, Some(RustType::I64));
+                assert_eq!(
+                    let_stmt.ty, None,
+                    "type should be omitted when inferable from literal"
+                );
             }
             other => panic!("expected Let, got {other:?}"),
         }
@@ -1202,6 +1270,235 @@ mod tests {
                 assert!(!let_stmt.mutable, "y should be let (const)");
             }
             other => panic!("expected Let for y, got {other:?}"),
+        }
+    }
+
+    // Test: Compound assignment lowering — x = x + 1 becomes CompoundAssign
+    #[test]
+    fn test_lower_compound_assign_add() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![
+                Stmt::VarDecl(VarDecl {
+                    binding: VarBinding::Let,
+                    name: ident("x", 4, 5),
+                    type_ann: None,
+                    init: int_expr(0, 8, 9),
+                    span: span(0, 10),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Assign(AssignExpr {
+                        target: ident("x", 11, 12),
+                        value: Box::new(Expr {
+                            kind: ExprKind::Binary(BinaryExpr {
+                                op: BinaryOp::Add,
+                                left: Box::new(ident_expr("x", 15, 16)),
+                                right: Box::new(int_expr(1, 19, 20)),
+                            }),
+                            span: span(15, 20),
+                        }),
+                    }),
+                    span: span(11, 21),
+                }),
+            ],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[1] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::CompoundAssign { target, op, .. } => {
+                    assert_eq!(target, "x");
+                    assert_eq!(*op, RustCompoundAssignOp::AddAssign);
+                }
+                other => panic!("expected CompoundAssign, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // Test: x = y + 1 does NOT become compound assign (target != lhs)
+    #[test]
+    fn test_lower_non_compound_assign_different_ident() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::Assign(AssignExpr {
+                    target: ident("x", 0, 1),
+                    value: Box::new(Expr {
+                        kind: ExprKind::Binary(BinaryExpr {
+                            op: BinaryOp::Add,
+                            left: Box::new(ident_expr("y", 4, 5)),
+                            right: Box::new(int_expr(1, 8, 9)),
+                        }),
+                        span: span(4, 9),
+                    }),
+                }),
+                span: span(0, 10),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::Assign { target, .. } => assert_eq!(target, "x"),
+                other => panic!("expected Assign (not CompoundAssign), got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // Test: console.log("hello") strips .to_string() from string arg
+    #[test]
+    fn test_lower_console_log_string_arg_no_to_string() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::MethodCall(MethodCallExpr {
+                    object: Box::new(ident_expr("console", 0, 7)),
+                    method: ident("log", 8, 11),
+                    args: vec![string_expr("hello", 12, 19)],
+                }),
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::Macro { args, .. } => {
+                    // args[1] should be StringLit, NOT ToString(StringLit)
+                    match &args[1].kind {
+                        RustExprKind::StringLit(s) => assert_eq!(s, "hello"),
+                        RustExprKind::ToString(_) => {
+                            panic!("string arg in println! should NOT be wrapped in .to_string()")
+                        }
+                        other => panic!("expected StringLit, got {other:?}"),
+                    }
+                }
+                other => panic!("expected Macro, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // Test: console.log(name) where name is a variable — still works
+    #[test]
+    fn test_lower_console_log_ident_arg_not_stripped() {
+        let f = make_fn(
+            "main",
+            vec![make_param("name", "string")],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::MethodCall(MethodCallExpr {
+                    object: Box::new(ident_expr("console", 0, 7)),
+                    method: ident("log", 8, 11),
+                    args: vec![ident_expr("name", 12, 16)],
+                }),
+                span: span(0, 17),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::Macro { args, .. } => {
+                    // args[1] should be Ident, not ToString-wrapped
+                    match &args[1].kind {
+                        RustExprKind::Ident(n) => assert_eq!(n, "name"),
+                        other => panic!("expected Ident(name), got {other:?}"),
+                    }
+                }
+                other => panic!("expected Macro, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // Test: Explicit type annotation is preserved even when it matches default
+    #[test]
+    fn test_lower_explicit_type_annotation_preserved() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 6, 7),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i64", 9, 12)),
+                    span: span(9, 12),
+                }),
+                init: int_expr(42, 15, 17),
+                span: span(0, 18),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert_eq!(
+                    let_stmt.ty,
+                    Some(RustType::I64),
+                    "explicit i64 annotation should be preserved"
+                );
+            }
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    // Test: Explicit non-default type annotation is preserved
+    #[test]
+    fn test_lower_explicit_i32_annotation_preserved() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 6, 7),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 9, 12)),
+                    span: span(9, 12),
+                }),
+                init: int_expr(42, 15, 17),
+                span: span(0, 18),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0];
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert_eq!(
+                    let_stmt.ty,
+                    Some(RustType::I32),
+                    "explicit i32 annotation should be preserved"
+                );
+            }
+            other => panic!("expected Let, got {other:?}"),
         }
     }
 }

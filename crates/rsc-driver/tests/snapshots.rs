@@ -32,7 +32,7 @@ function main() {
 
     let expected = "\
 fn main() {
-    println!(\"{}\", \"Hello, World!\".to_string());
+    println!(\"{}\", \"Hello, World!\");
 }
 ";
 
@@ -136,15 +136,15 @@ fn main() {
     let mut i: i64 = 1;
     while i <= 15 {
         if i % 15 == 0 {
-            println!(\"{}\", \"FizzBuzz\".to_string());
+            println!(\"{}\", \"FizzBuzz\");
         } else if i % 3 == 0 {
-            println!(\"{}\", \"Fizz\".to_string());
+            println!(\"{}\", \"Fizz\");
         } else if i % 5 == 0 {
-            println!(\"{}\", \"Buzz\".to_string());
+            println!(\"{}\", \"Buzz\");
         } else {
             println!(\"{}\", i);
         }
-        i = i + 1;
+        i += 1;
     }
 }
 ";
@@ -241,8 +241,8 @@ fn main() {
     let mut sum: i64 = 0;
     let mut i: i64 = 1;
     while i <= 10 {
-        sum = sum + i;
-        i = i + 1;
+        sum += i;
+        i += 1;
     }
     println!(\"{}\", sum);
 }
@@ -250,4 +250,98 @@ fn main() {
 
     let actual = compile_to_rust(source);
     assert_snapshot("while_mutation", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Compound assignment e2e (Task 012 correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_compound_assign_generates_idiomatic_ops() {
+    let source = "\
+function main() {
+  let x = 0;
+  x += 5;
+  x -= 2;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x = 0;
+    x += 5;
+    x -= 2;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("compound_assign", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 9. String in println clean output (Task 012 correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_println_string_no_to_string() {
+    let source = "\
+function main() {
+  console.log(\"Hello\");
+}";
+
+    let expected = "\
+fn main() {
+    println!(\"{}\", \"Hello\");
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("println_clean", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Omitted type annotation (Task 012 correctness scenario 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_omitted_type_annotation_on_literal() {
+    let source = "\
+function main() {
+  const x = 42;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x = 42;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("omitted_type", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 11. Explicit type annotation preserved (Task 012 correctness scenario 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_explicit_type_annotation_preserved() {
+    let source = "\
+function main() {
+  const x: i32 = 42;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: i32 = 42;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("explicit_type", &actual, expected);
 }

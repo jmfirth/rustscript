@@ -331,6 +331,13 @@ impl Emitter {
                 self.emit_expr(inner);
                 self.write(".to_string()");
             }
+            RustExprKind::CompoundAssign { target, op, value } => {
+                self.write(target);
+                self.write(" ");
+                self.write(&op.to_string());
+                self.write(" ");
+                self.emit_expr(value);
+            }
         }
     }
 }
@@ -1172,5 +1179,54 @@ fn main() {
         };
         let output = emit(&file);
         assert_eq!(output, "fn main() {\n}\n");
+    }
+
+    // ---- Test: Emit CompoundAssign ----
+    #[test]
+    fn test_emit_compound_assign_add() {
+        use rsc_syntax::rust_ir::RustCompoundAssignOp;
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::CompoundAssign {
+                target: "x".to_owned(),
+                op: RustCompoundAssignOp::AddAssign,
+                value: Box::new(int_lit(1)),
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("x += 1;"),
+            "expected `x += 1;` in output, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_compound_assign_all_operators() {
+        use rsc_syntax::rust_ir::RustCompoundAssignOp;
+        let cases = [
+            (RustCompoundAssignOp::AddAssign, "x += 1;"),
+            (RustCompoundAssignOp::SubAssign, "x -= 1;"),
+            (RustCompoundAssignOp::MulAssign, "x *= 1;"),
+            (RustCompoundAssignOp::DivAssign, "x /= 1;"),
+            (RustCompoundAssignOp::RemAssign, "x %= 1;"),
+        ];
+
+        for (op, expected) in cases {
+            let file = simple_fn(
+                "main",
+                vec![RustStmt::Semi(syn(RustExprKind::CompoundAssign {
+                    target: "x".to_owned(),
+                    op,
+                    value: Box::new(int_lit(1)),
+                }))],
+                None,
+            );
+            let output = emit(&file);
+            assert!(
+                output.contains(expected),
+                "expected `{expected}` in output for {op:?}, got: {output}"
+            );
+        }
     }
 }

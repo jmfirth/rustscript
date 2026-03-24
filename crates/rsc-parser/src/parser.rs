@@ -17,7 +17,11 @@ use crate::token::{Token, TokenKind};
 
 /// Maximum nesting depth for expressions to prevent stack overflow on
 /// adversarial input (e.g., deeply nested parentheses).
-const MAX_EXPR_DEPTH: usize = 256;
+///
+/// Set conservatively to account for the full precedence chain per depth
+/// level in debug builds. Each expression depth level uses ~10 stack
+/// frames through the precedence hierarchy.
+const MAX_EXPR_DEPTH: usize = 64;
 
 /// Recursive descent parser for the `RustScript` Phase 0 grammar.
 ///
@@ -152,6 +156,11 @@ impl Parser {
             TokenKind::PipePipe => "`||`",
             TokenKind::Bang => "`!`",
             TokenKind::Eq => "`=`",
+            TokenKind::PlusEq => "`+=`",
+            TokenKind::MinusEq => "`-=`",
+            TokenKind::StarEq => "`*=`",
+            TokenKind::SlashEq => "`/=`",
+            TokenKind::PercentEq => "`%=`",
             TokenKind::LParen => "`(`",
             TokenKind::RParen => "`)`",
             TokenKind::LBrace => "`{`",
@@ -518,11 +527,12 @@ impl Parser {
         self.expect(&TokenKind::RParen)?;
 
         let body = self.parse_block()?;
+        let body_span = body.span;
 
         Some(WhileStmt {
             condition,
-            body: body.clone(),
-            span: start.merge(body.span),
+            body,
+            span: start.merge(body_span),
         })
     }
 
@@ -589,13 +599,66 @@ impl Parser {
         result
     }
 
-    /// Parse assignment: `IDENT = assignment | logic_or`.
+    /// Parse assignment: `IDENT = assignment | IDENT op= assignment | logic_or`.
     ///
     /// Assignment is right-associative: `a = b = c` parses as `a = (b = c)`.
+    /// Compound assignments (`+=`, `-=`, etc.) are desugared to `x = x op rhs`.
     fn parse_assignment(&mut self) -> Option<Expr> {
         let expr = self.parse_logic_or()?;
 
-        // Check if this is an assignment
+        // Check for compound assignment operators
+        let compound_op = match self.peek() {
+            TokenKind::PlusEq => Some(BinaryOp::Add),
+            TokenKind::MinusEq => Some(BinaryOp::Sub),
+            TokenKind::StarEq => Some(BinaryOp::Mul),
+            TokenKind::SlashEq => Some(BinaryOp::Div),
+            TokenKind::PercentEq => Some(BinaryOp::Mod),
+            _ => None,
+        };
+
+        if let Some(op) = compound_op {
+            if let ExprKind::Ident(ref ident) = expr.kind {
+                let ident = ident.clone();
+                self.advance(); // consume compound operator
+                let rhs = self.parse_assignment()?;
+                let rhs_span = rhs.span;
+                // Desugar x += rhs to x = x + rhs
+                let binary = Expr {
+                    kind: ExprKind::Binary(BinaryExpr {
+                        op,
+                        left: Box::new(Expr {
+                            kind: ExprKind::Ident(ident.clone()),
+                            span: ident.span,
+                        }),
+                        right: Box::new(rhs),
+                    }),
+                    span: ident.span.merge(rhs_span),
+                };
+                let span = ident.span.merge(rhs_span);
+                return Some(Expr {
+                    kind: ExprKind::Assign(AssignExpr {
+                        target: ident,
+                        value: Box::new(binary),
+                    }),
+                    span,
+                });
+            }
+            // Compound assignment to non-identifier — emit diagnostic
+            let op_token = self.advance();
+            self.diagnostics
+                .push(Diagnostic::error("invalid assignment target").with_label(
+                    expr.span,
+                    self.file_id,
+                    "cannot assign to this expression",
+                ));
+            let _ = self.parse_assignment();
+            return Some(Expr {
+                kind: ExprKind::IntLit(0),
+                span: expr.span.merge(op_token.span),
+            });
+        }
+
+        // Check if this is a simple assignment
         if self.check(&TokenKind::Eq) {
             if let ExprKind::Ident(ident) = expr.kind {
                 self.advance(); // consume `=`
@@ -1621,5 +1684,108 @@ mod tests {
             }
             other => panic!("expected While, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Compound assignment operators
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_compound_assign_plus_eq_desugars_to_binary() {
+        let module = parse_ok("function f() { x += 1; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::Assign(a) => {
+                    assert_eq!(a.target.name, "x");
+                    match &a.value.kind {
+                        ExprKind::Binary(b) => {
+                            assert_eq!(b.op, BinaryOp::Add);
+                            match &b.left.kind {
+                                ExprKind::Ident(id) => assert_eq!(id.name, "x"),
+                                other => panic!("expected Ident(x), got {other:?}"),
+                            }
+                            match &b.right.kind {
+                                ExprKind::IntLit(1) => {}
+                                other => panic!("expected IntLit(1), got {other:?}"),
+                            }
+                        }
+                        other => panic!("expected Binary(Add), got {other:?}"),
+                    }
+                }
+                other => panic!("expected Assign, got {other:?}"),
+            },
+            other => panic!("expected Expr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_compound_assign_all_operators() {
+        let cases = [
+            ("x += 1;", BinaryOp::Add),
+            ("x -= 1;", BinaryOp::Sub),
+            ("x *= 1;", BinaryOp::Mul),
+            ("x /= 1;", BinaryOp::Div),
+            ("x %= 1;", BinaryOp::Mod),
+        ];
+
+        for (source, expected_op) in cases {
+            let full = format!("function f() {{ {source} }}");
+            let module = parse_ok(&full);
+            let f = first_fn(&module);
+            let stmt = first_stmt(f);
+            match stmt {
+                Stmt::Expr(e) => match &e.kind {
+                    ExprKind::Assign(a) => match &a.value.kind {
+                        ExprKind::Binary(b) => assert_eq!(
+                            b.op, expected_op,
+                            "compound assign `{source}` should desugar to {expected_op}"
+                        ),
+                        other => panic!("expected Binary for `{source}`, got {other:?}"),
+                    },
+                    other => panic!("expected Assign for `{source}`, got {other:?}"),
+                },
+                other => panic!("expected Expr for `{source}`, got {other:?}"),
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Recursion depth limit
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_deeply_nested_expr_produces_diagnostic() {
+        // Build a deeply nested expression: (((((...(1)...)))))
+        // with nesting > MAX_EXPR_DEPTH (64)
+        let depth = 66;
+        let open = "(".repeat(depth);
+        let close = ")".repeat(depth);
+        let source = format!("function f() {{ {open}1{close}; }}");
+        let (_, diagnostics) = parse_source(&source);
+        assert!(
+            !diagnostics.is_empty(),
+            "should produce a diagnostic for depth > {MAX_EXPR_DEPTH}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("nesting depth")),
+            "diagnostic should mention nesting depth"
+        );
+    }
+
+    #[test]
+    fn test_parser_expr_at_max_depth_minus_one_still_parses() {
+        // Build a nested expression just under the limit
+        let depth = 63;
+        let open = "(".repeat(depth);
+        let close = ")".repeat(depth);
+        let source = format!("function f() {{ {open}1{close}; }}");
+        let (module, diagnostics) = parse_source(&source);
+        assert!(
+            diagnostics.is_empty(),
+            "depth {depth} should not produce diagnostics, got: {diagnostics:?}"
+        );
+        assert_eq!(module.items.len(), 1);
     }
 }
