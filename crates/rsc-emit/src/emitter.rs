@@ -3,8 +3,8 @@
 //! Walks the Rust IR tree and produces formatted `.rs` source text.
 
 use rsc_syntax::rust_ir::{
-    RustBlock, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt,
-    RustItem, RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTypeParam,
+    RustBlock, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfLetStmt,
+    RustIfStmt, RustItem, RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -356,6 +356,11 @@ impl Emitter {
                 self.emit_match(match_stmt);
                 self.newline();
             }
+            RustStmt::IfLet(if_let) => {
+                self.write_indent();
+                self.emit_if_let(if_let);
+                self.newline();
+            }
         }
     }
 
@@ -377,6 +382,21 @@ impl Emitter {
                     self.emit_if(nested_if);
                 }
             }
+        }
+    }
+
+    /// Emit an `if let Some(name) = expr { ... } [else { ... }]`.
+    fn emit_if_let(&mut self, if_let: &RustIfLetStmt) {
+        self.write("if let Some(");
+        self.write(&if_let.binding);
+        self.write(") = ");
+        self.emit_expr(&if_let.expr);
+        self.write(" ");
+        self.emit_block(&if_let.then_block);
+
+        if let Some(ref else_block) = if_let.else_block {
+            self.write(" else ");
+            self.emit_block(else_block);
         }
     }
 
@@ -556,6 +576,32 @@ impl Emitter {
                 self.emit_expr(index);
                 self.write("]");
             }
+            RustExprKind::None => {
+                self.write("None");
+            }
+            RustExprKind::Some(inner) => {
+                self.write("Some(");
+                self.emit_expr(inner);
+                self.write(")");
+            }
+            RustExprKind::UnwrapOr { expr, default } => {
+                self.emit_expr(expr);
+                self.write(".unwrap_or(");
+                self.emit_expr(default);
+                self.write(")");
+            }
+            RustExprKind::OptionMap {
+                expr,
+                closure_param,
+                closure_body,
+            } => {
+                self.emit_expr(expr);
+                self.write(".map(|");
+                self.write(closure_param);
+                self.write("| ");
+                self.emit_expr(closure_body);
+                self.write(")");
+            }
         }
     }
 }
@@ -571,8 +617,8 @@ pub fn emit(file: &RustFile) -> String {
 mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
-        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem,
-        RustLetStmt, RustMatchArm, RustMatchStmt, RustModDecl, RustParam, RustPattern,
+        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt,
+        RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustModDecl, RustParam, RustPattern,
         RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
         RustWhileStmt,
     };
@@ -1983,6 +2029,98 @@ fn main() {
         assert!(
             output.contains("use std::collections::HashMap;"),
             "output: {output}"
+        );
+    }
+
+    // ---- Task 020: Option/null emitter tests ----
+
+    // Test 12: Emit `Option<String>` for `string | null`
+    #[test]
+    fn test_emit_option_string_type() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "find".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Some(RustType::Option(Box::new(RustType::String))),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Return(RustReturnStmt {
+                        value: Some(syn(RustExprKind::None)),
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("-> Option<String>"),
+            "expected -> Option<String>, got:\n{output}"
+        );
+    }
+
+    // Test 13: Emit `None` for null
+    #[test]
+    fn test_emit_none() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Return(RustReturnStmt {
+                value: Some(syn(RustExprKind::None)),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("return None;"),
+            "expected 'return None;' in output:\n{output}"
+        );
+    }
+
+    // Test 14: Emit `Some(value)` for wrapping
+    #[test]
+    fn test_emit_some() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Return(RustReturnStmt {
+                value: Some(syn(RustExprKind::Some(Box::new(syn(
+                    RustExprKind::StringLit("hello".to_owned()),
+                ))))),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("return Some(\"hello\");"),
+            "expected 'return Some(\"hello\");' in output:\n{output}"
+        );
+    }
+
+    // Test 15: Emit `if let Some(x) = expr { ... }`
+    #[test]
+    fn test_emit_if_let_some() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::IfLet(RustIfLetStmt {
+                binding: "name".to_owned(),
+                expr: ident("value"),
+                then_block: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                else_block: None,
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("if let Some(name) = value"),
+            "expected 'if let Some(name) = value' in output:\n{output}"
         );
     }
 }

@@ -194,6 +194,8 @@ pub enum RustType {
     Generic(Box<RustType>, Vec<RustType>),
     /// A type parameter reference: `T`.
     TypeParam(String),
+    /// `Option<T>` — from `T | null`.
+    Option(Box<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -223,6 +225,7 @@ impl std::fmt::Display for RustType {
                 }
                 return write!(f, ">");
             }
+            Self::Option(inner) => return write!(f, "Option<{inner}>"),
         };
         f.write_str(s)
     }
@@ -259,6 +262,9 @@ pub enum RustStmt {
     Destructure(RustDestructureStmt),
     /// A `match` statement.
     Match(RustMatchStmt),
+    /// An `if let Some(name) = expr { then } [else { else }]` statement.
+    /// Produced by lowering null check narrowing (`if (x !== null)`).
+    IfLet(RustIfLetStmt),
 }
 
 /// A Rust `let` binding.
@@ -357,6 +363,23 @@ pub struct RustMatchArm {
     pub pattern: RustPattern,
     /// The body block.
     pub body: RustBlock,
+}
+
+/// An `if let Some(name) = expr` statement for null narrowing.
+///
+/// Produced by lowering `if (x !== null) { ... }` to Rust's `if let Some(x) = x { ... }`.
+#[derive(Debug, Clone)]
+pub struct RustIfLetStmt {
+    /// The variable name to bind the unwrapped value to.
+    pub binding: String,
+    /// The expression being tested (must be `Option<T>`).
+    pub expr: RustExpr,
+    /// The then block (value is `Some`).
+    pub then_block: RustBlock,
+    /// The else block (value is `None`).
+    pub else_block: Option<RustBlock>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A pattern in a Rust `match` arm.
@@ -517,6 +540,27 @@ pub enum RustExprKind {
         object: Box<RustExpr>,
         /// The index expression.
         index: Box<RustExpr>,
+    },
+    /// `None` — from `null` literal. Lowers to Rust `None`.
+    None,
+    /// `Some(expr)` — wrapping a non-null value in `Option` context.
+    Some(Box<RustExpr>),
+    /// `expr.unwrap_or(default)` — from nullish coalescing `??`.
+    UnwrapOr {
+        /// The `Option<T>` expression.
+        expr: Box<RustExpr>,
+        /// The default value.
+        default: Box<RustExpr>,
+    },
+    /// Optional chaining: `expr.as_ref().map(|v| v.field)`.
+    /// Produced by lowering `expr?.field`.
+    OptionMap {
+        /// The `Option<T>` expression.
+        expr: Box<RustExpr>,
+        /// The closure parameter name.
+        closure_param: String,
+        /// The closure body expression.
+        closure_body: Box<RustExpr>,
     },
 }
 

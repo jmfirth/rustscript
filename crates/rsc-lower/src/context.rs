@@ -18,6 +18,9 @@ pub(crate) struct LoweringContext {
     /// The current expected struct type name for struct literal resolution.
     /// Set by `lower_var_decl` when the variable has a named type annotation.
     current_struct_type: Option<String>,
+    /// The current function's return type, if it's `Option<T>`.
+    /// Set during function lowering when the return type is `T | null`.
+    current_return_type: Option<RustType>,
 }
 
 /// A single scope level containing variable declarations.
@@ -40,6 +43,7 @@ impl LoweringContext {
             }],
             diagnostics: Vec::new(),
             current_struct_type: None,
+            current_return_type: None,
         }
     }
 
@@ -80,6 +84,16 @@ impl LoweringContext {
     /// Get the current struct type name context, if set.
     pub fn current_struct_type_name(&self) -> Option<&str> {
         self.current_struct_type.as_deref()
+    }
+
+    /// Set the current function's return type.
+    pub fn set_return_type(&mut self, ty: Option<RustType>) {
+        self.current_return_type = ty;
+    }
+
+    /// Get the current function's return type, if set.
+    pub fn current_return_type(&self) -> Option<&RustType> {
+        self.current_return_type.as_ref()
     }
 
     /// Add a diagnostic to the accumulated list.
