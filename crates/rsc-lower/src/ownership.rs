@@ -190,6 +190,20 @@ impl UseMap {
                     }
                 }
             }
+            ast::ExprKind::ArrayLit(elements) => {
+                for elem in elements {
+                    Self::collect_expr_uses(elem, stmt_index, false, is_ref_call, uses);
+                }
+            }
+            ast::ExprKind::New(new_expr) => {
+                for arg in &new_expr.args {
+                    Self::collect_expr_uses(arg, stmt_index, false, is_ref_call, uses);
+                }
+            }
+            ast::ExprKind::Index(index_expr) => {
+                Self::collect_expr_uses(&index_expr.object, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(&index_expr.index, stmt_index, false, is_ref_call, uses);
+            }
             ast::ExprKind::IntLit(_)
             | ast::ExprKind::FloatLit(_)
             | ast::ExprKind::StringLit(_)
@@ -544,6 +558,38 @@ mod tests {
         let use_map = UseMap::analyze(&block, console_log_ref);
         // Even though x is String and used later, println! is not a move position
         assert!(!needs_clone("x", 0, &use_map, &RustType::String));
+    }
+
+    // Test T17-15: Vec<T> is non-Copy (clone inserted when needed)
+    #[test]
+    fn test_needs_clone_vec_type_is_non_copy() {
+        let block = Block {
+            stmts: vec![
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("process", 0, 7),
+                        args: vec![ident_expr("v", 8, 9)],
+                    }),
+                    span: span(0, 10),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("process", 20, 27),
+                        args: vec![ident_expr("v", 28, 29)],
+                    }),
+                    span: span(20, 30),
+                }),
+            ],
+            span: span(0, 30),
+        };
+
+        let use_map = UseMap::analyze(&block, no_ref_call);
+        let vec_type = RustType::Generic(
+            Box::new(RustType::Named("Vec".to_owned())),
+            vec![RustType::I32],
+        );
+        // Vec is non-Copy, used in move position with later use → needs clone
+        assert!(needs_clone("v", 0, &use_map, &vec_type));
     }
 
     // Test 10: find_reassigned_variables with x = 10

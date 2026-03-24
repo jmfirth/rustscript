@@ -405,6 +405,15 @@ pub enum ExprKind {
     /// Template literal: `` `Hello, ${name}!` ``.
     /// Lowers to `format!("Hello, {}!", name)` or a simple string for no-interpolation cases.
     TemplateLit(TemplateLitExpr),
+    /// Array literal: `[1, 2, 3]`.
+    /// Lowers to `vec![1, 2, 3]` in Rust.
+    ArrayLit(Vec<Expr>),
+    /// Constructor call: `new Map()`, `new Set()`, `new Array()`.
+    /// Lowers to `HashMap::new()`, `HashSet::new()`, or `Vec::new()`.
+    New(NewExpr),
+    /// Index access: `arr[0]`, `map["key"]`.
+    /// Lowers to Rust index syntax `expr[index]`.
+    Index(IndexExpr),
 }
 
 /// A binary expression with an operator and two operands.
@@ -584,6 +593,31 @@ pub enum TemplatePart {
     String(String, Span),
     /// An interpolated expression: `${expr}`.
     Expr(Expr),
+}
+
+/// A `new` constructor call: `new Map()`, `new Set<string>()`.
+///
+/// Lowers to a static method call like `HashMap::new()` or `HashSet::new()`.
+#[derive(Debug, Clone)]
+pub struct NewExpr {
+    /// The type name being constructed (e.g., `Map`, `Set`, `Array`).
+    pub type_name: Ident,
+    /// Optional generic type arguments (e.g., `<string, u32>`).
+    pub type_args: Vec<TypeAnnotation>,
+    /// The constructor arguments.
+    pub args: Vec<Expr>,
+}
+
+/// Index access expression: `arr[0]`, `map["key"]`.
+///
+/// Supports chaining: `arr[0][1]` is `Index(Index(arr, 0), 1)`.
+/// Lowers to Rust index syntax `expr[index]`.
+#[derive(Debug, Clone)]
+pub struct IndexExpr {
+    /// The object being indexed.
+    pub object: Box<Expr>,
+    /// The index expression.
+    pub index: Box<Expr>,
 }
 
 #[cfg(test)]

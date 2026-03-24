@@ -664,6 +664,7 @@ impl<'a> Lexer<'a> {
             "extends" => TokenKind::Extends,
             "switch" => TokenKind::Switch,
             "case" => TokenKind::Case,
+            "new" => TokenKind::New,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -723,6 +724,8 @@ impl<'a> Lexer<'a> {
             b';' => Some(TokenKind::Semicolon),
             b'.' => Some(TokenKind::Dot),
             b'|' => Some(TokenKind::Pipe),
+            b'[' => Some(TokenKind::LBracket),
+            b']' => Some(TokenKind::RBracket),
             _ => None,
         }
     }
@@ -1130,5 +1133,25 @@ mod tests {
         assert_eq!(tokens[0].kind, TokenKind::TemplateHead("Hello, ".into()));
         assert_eq!(tokens[1].kind, TokenKind::Ident("name".into()));
         assert_eq!(tokens[2].kind, TokenKind::TemplateTail("!".into()));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 017: Collection tokens
+    // ---------------------------------------------------------------
+
+    // 28. `new` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_new_keyword_produces_new_token() {
+        let tokens = tokenize("new");
+        assert_eq!(tokens.len(), 2); // New + Eof
+        assert_eq!(tokens[0].kind, TokenKind::New);
+    }
+
+    // 29. `[` and `]` tokenize correctly
+    #[test]
+    fn test_lexer_brackets_produce_bracket_tokens() {
+        let tokens = tokenize("[1, 2, 3]");
+        assert_eq!(tokens[0].kind, TokenKind::LBracket);
+        assert_eq!(tokens[6].kind, TokenKind::RBracket);
     }
 }

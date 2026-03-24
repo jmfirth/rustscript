@@ -6,10 +6,10 @@
 
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, EnumDef,
-    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item,
-    ItemKind, MethodCallExpr, Module, Param, ReturnStmt, Stmt, StructLitExpr, SwitchCase,
-    SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt,
+    IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr, Param, ReturnStmt, Stmt,
+    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef,
+    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -191,7 +191,10 @@ impl Parser {
             TokenKind::Extends => "`extends`",
             TokenKind::Switch => "`switch`",
             TokenKind::Case => "`case`",
+            TokenKind::New => "`new`",
             TokenKind::Pipe => "`|`",
+            TokenKind::LBracket => "`[`",
+            TokenKind::RBracket => "`]`",
             TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
             TokenKind::TemplateMiddle(_) => "template literal middle",
             TokenKind::TemplateTail(_) => "template literal tail",
@@ -1369,6 +1372,19 @@ impl Parser {
                     // Non-identifier call target — not supported in Phase 0
                     break;
                 }
+            } else if self.check(&TokenKind::LBracket) {
+                // Index access: `expr[index]`
+                self.advance(); // consume `[`
+                let index = self.parse_expr()?;
+                let close = self.expect(&TokenKind::RBracket)?;
+                let span = expr.span.merge(close.span);
+                expr = Expr {
+                    kind: ExprKind::Index(IndexExpr {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                    }),
+                    span,
+                };
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // consume `.`
                 let member = self.parse_ident()?;
@@ -1573,6 +1589,8 @@ impl Parser {
                 );
                 None
             }
+            TokenKind::LBracket => self.parse_array_literal(),
+            TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
             TokenKind::LParen => {
@@ -1600,6 +1618,92 @@ impl Parser {
                 None
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // ---------------------------------------------------------------
+    // Array literals and constructor calls
+    // ---------------------------------------------------------------
+
+    /// Parse an array literal: `[ expr, expr, ... ]`.
+    fn parse_array_literal(&mut self) -> Option<Expr> {
+        let open = self.advance(); // consume `[`
+        let start = open.span;
+        let mut elements = Vec::new();
+
+        if !self.check(&TokenKind::RBracket) && !self.at_end() {
+            loop {
+                let elem = self.parse_expr()?;
+                elements.push(elem);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBracket)?;
+        let span = start.merge(close.span);
+
+        Some(Expr {
+            kind: ExprKind::ArrayLit(elements),
+            span,
+        })
+    }
+
+    /// Parse a `new` expression: `new TypeName<Args>(args)`.
+    fn parse_new_expr(&mut self) -> Option<Expr> {
+        let new_token = self.advance(); // consume `new`
+        let start = new_token.span;
+
+        let type_name = self.parse_ident()?;
+
+        // Optional type arguments: `<string, u32>`
+        let type_args = if self.check(&TokenKind::Lt) {
+            self.advance(); // consume `<`
+            let mut args = Vec::new();
+
+            if !self.check(&TokenKind::Gt) && !self.at_end() {
+                loop {
+                    let arg = self.parse_type_annotation()?;
+                    args.push(arg);
+
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+
+                    // Allow trailing comma
+                    if self.check(&TokenKind::Gt) {
+                        break;
+                    }
+                }
+            }
+
+            self.expect(&TokenKind::Gt)?;
+            args
+        } else {
+            Vec::new()
+        };
+
+        // Argument list
+        self.expect(&TokenKind::LParen)?;
+        let args = self.parse_arg_list();
+        let close = self.expect(&TokenKind::RParen)?;
+        let span = start.merge(close.span);
+
+        Some(Expr {
+            kind: ExprKind::New(NewExpr {
+                type_name,
+                type_args,
+                args,
+            }),
+            span,
+        })
     }
 
     // ---------------------------------------------------------------
@@ -2953,6 +3057,136 @@ function test(dir: Direction): Direction {
                 assert_eq!(switch.cases[1].body.len(), 1);
             }
             _ => panic!("expected Switch statement"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 017: Collection parsing
+    // ---------------------------------------------------------------
+
+    // Test T17-1: Parse `[1, 2, 3]` → ExprKind::ArrayLit with 3 elements
+    #[test]
+    fn test_parser_array_literal_three_elements() {
+        let module = parse_ok("function main() { const x = [1, 2, 3]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        match &decl.init.kind {
+            ExprKind::ArrayLit(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert!(matches!(elements[0].kind, ExprKind::IntLit(1)));
+                assert!(matches!(elements[1].kind, ExprKind::IntLit(2)));
+                assert!(matches!(elements[2].kind, ExprKind::IntLit(3)));
+            }
+            _ => panic!("expected ArrayLit, got {:?}", decl.init.kind),
+        }
+    }
+
+    // Test T17-2: Parse `[]` → empty ArrayLit
+    #[test]
+    fn test_parser_empty_array_literal() {
+        let module = parse_ok("function main() { const x = []; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        match &decl.init.kind {
+            ExprKind::ArrayLit(elements) => {
+                assert!(elements.is_empty());
+            }
+            _ => panic!("expected ArrayLit, got {:?}", decl.init.kind),
+        }
+    }
+
+    // Test T17-3: Parse `new Map()` → ExprKind::New with type_name "Map"
+    #[test]
+    fn test_parser_new_map_expression() {
+        let module = parse_ok("function main() { const x = new Map(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        match &decl.init.kind {
+            ExprKind::New(new_expr) => {
+                assert_eq!(new_expr.type_name.name, "Map");
+                assert!(new_expr.type_args.is_empty());
+                assert!(new_expr.args.is_empty());
+            }
+            _ => panic!("expected New, got {:?}", decl.init.kind),
+        }
+    }
+
+    // Test T17-4: Parse `new Set()` → ExprKind::New with type_name "Set"
+    #[test]
+    fn test_parser_new_set_expression() {
+        let module = parse_ok("function main() { const x = new Set(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        match &decl.init.kind {
+            ExprKind::New(new_expr) => {
+                assert_eq!(new_expr.type_name.name, "Set");
+                assert!(new_expr.type_args.is_empty());
+                assert!(new_expr.args.is_empty());
+            }
+            _ => panic!("expected New, got {:?}", decl.init.kind),
+        }
+    }
+
+    // Test T17-5: Parse `arr[0]` → ExprKind::Index
+    #[test]
+    fn test_parser_index_access() {
+        let module = parse_ok("function main() { const x = arr[0]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        match &decl.init.kind {
+            ExprKind::Index(index_expr) => {
+                assert!(matches!(index_expr.object.kind, ExprKind::Ident(_)));
+                assert!(matches!(index_expr.index.kind, ExprKind::IntLit(0)));
+            }
+            _ => panic!("expected Index, got {:?}", decl.init.kind),
+        }
+    }
+
+    // Test T17-6: Parse `const names: Array<string> = ["Alice", "Bob"]`
+    #[test]
+    fn test_parser_array_type_annotation_with_literal() {
+        let module =
+            parse_ok("function main() { const names: Array<string> = [\"Alice\", \"Bob\"]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        assert_eq!(decl.name.name, "names");
+        // Check type annotation
+        let type_ann = decl.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::Generic(base, args) => {
+                assert_eq!(base.name, "Array");
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    TypeKind::Named(n) => assert_eq!(n.name, "string"),
+                    _ => panic!("expected Named type arg"),
+                }
+            }
+            _ => panic!("expected Generic type annotation"),
+        }
+        // Check initializer is array literal
+        match &decl.init.kind {
+            ExprKind::ArrayLit(elements) => {
+                assert_eq!(elements.len(), 2);
+            }
+            _ => panic!("expected ArrayLit"),
         }
     }
 }

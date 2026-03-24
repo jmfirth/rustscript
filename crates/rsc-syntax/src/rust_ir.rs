@@ -497,6 +497,27 @@ pub enum RustExprKind {
         /// The variant name.
         variant_name: String,
     },
+    /// Vec literal: `vec![1, 2, 3]`.
+    /// Produced by lowering `RustScript` array literals.
+    VecLit(Vec<RustExpr>),
+    /// Static method call: `HashMap::new()`, `HashSet::new()`.
+    /// Produced by lowering `new Map()` / `new Set()` expressions.
+    StaticCall {
+        /// The type name (e.g., `HashMap`, `HashSet`).
+        type_name: String,
+        /// The method name (e.g., `new`).
+        method: String,
+        /// The arguments to the method.
+        args: Vec<RustExpr>,
+    },
+    /// Index access: `expr[index]`.
+    /// Produced by lowering `RustScript` index expressions.
+    Index {
+        /// The object being indexed.
+        object: Box<RustExpr>,
+        /// The index expression.
+        index: Box<RustExpr>,
+    },
 }
 
 /// A compound assignment operator.

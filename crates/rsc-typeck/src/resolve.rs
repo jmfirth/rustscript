@@ -68,7 +68,9 @@ pub fn resolve_type_annotation(
                 .iter()
                 .map(|a| resolve_type_annotation(a, diagnostics))
                 .collect();
-            Type::Generic(ident.name.clone(), resolved_args)
+            // Map collection type aliases to their Rust equivalents
+            let rust_name = map_collection_type_name(&ident.name);
+            Type::Generic(rust_name, resolved_args)
         }
     }
 }
@@ -130,8 +132,24 @@ pub fn resolve_type_annotation_with_generics(
                     )
                 })
                 .collect();
-            Type::Generic(ident.name.clone(), resolved_args)
+            // Map collection type aliases to their Rust equivalents
+            let rust_name = map_collection_type_name(&ident.name);
+            Type::Generic(rust_name, resolved_args)
         }
+    }
+}
+
+/// Map `RustScript` collection type names to their Rust equivalents.
+///
+/// `Array` → `Vec`, `Map` → `HashMap`, `Set` → `HashSet`.
+/// All other names pass through unchanged.
+#[must_use]
+pub fn map_collection_type_name(name: &str) -> String {
+    match name {
+        "Array" => "Vec".to_owned(),
+        "Map" => "HashMap".to_owned(),
+        "Set" => "HashSet".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -413,6 +431,7 @@ mod tests {
     }
 
     // Test T16-14: Generic type annotation resolves to Type::Generic
+    // Array<string> maps to Vec<String> via collection type alias mapping
     #[test]
     fn test_resolve_generic_type_annotation() {
         let registry = crate::registry::TypeRegistry::new();
@@ -430,11 +449,81 @@ mod tests {
         let ty = resolve_type_annotation_with_generics(&ann, &registry, &[], &mut diags);
         match &ty {
             Type::Generic(name, args) => {
-                assert_eq!(name, "Array");
+                assert_eq!(name, "Vec");
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0], Type::String);
             }
             _ => panic!("expected Generic type, got {ty:?}"),
         }
+    }
+
+    // ---- Task 017: Collection type mapping ----
+
+    // Test T17-10b: Map<string, u32> resolves to Generic("HashMap", [String, u32])
+    #[test]
+    fn test_resolve_map_type_to_hashmap() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Generic(
+                ident("Map", 0, 3),
+                vec![
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("string", 0, 6)),
+                        span: span(0, 6),
+                    },
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("u32", 0, 3)),
+                        span: span(0, 3),
+                    },
+                ],
+            ),
+            span: span(0, 20),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_generics(&ann, &registry, &[], &mut diags);
+        match &ty {
+            Type::Generic(name, args) => {
+                assert_eq!(name, "HashMap");
+                assert_eq!(args.len(), 2);
+                assert_eq!(args[0], Type::String);
+                assert_eq!(args[1], Type::Primitive(PrimitiveType::U32));
+            }
+            _ => panic!("expected Generic type, got {ty:?}"),
+        }
+    }
+
+    // Test T17-10c: Set<string> resolves to Generic("HashSet", [String])
+    #[test]
+    fn test_resolve_set_type_to_hashset() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Generic(
+                ident("Set", 0, 3),
+                vec![TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }],
+            ),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_generics(&ann, &registry, &[], &mut diags);
+        match &ty {
+            Type::Generic(name, args) => {
+                assert_eq!(name, "HashSet");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Type::String);
+            }
+            _ => panic!("expected Generic type, got {ty:?}"),
+        }
+    }
+
+    // Test T17-10d: map_collection_type_name passes through unknown names
+    #[test]
+    fn test_map_collection_type_name_passthrough() {
+        assert_eq!(map_collection_type_name("Array"), "Vec");
+        assert_eq!(map_collection_type_name("Map"), "HashMap");
+        assert_eq!(map_collection_type_name("Set"), "HashSet");
+        assert_eq!(map_collection_type_name("Container"), "Container");
     }
 }
