@@ -373,3 +373,263 @@ export function greet(name: string): void {
     ]);
     assert_eq!(stdout.trim(), "World");
 }
+
+// ===========================================================================
+// Phase 1 Integration E2E Tests (Task 026)
+//
+// These tests exercise multiple Phase 1 features composed together.
+// Each test compiles `.rts`, builds with cargo, runs, and verifies stdout.
+//
+// Tests are `#[ignore]` because they invoke cargo (slow).
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Integration 1: Enum + switch + simple string return
+//
+// Features: enum definition, switch/match, function, template literal
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_enum_switch() {
+    let source = r#"type Direction = "north" | "south"
+
+function label(d: Direction): string {
+  switch (d) {
+    case "north": return `Going North`;
+    case "south": return `Going South`;
+  }
+}
+
+function main() {
+  const d: Direction = "north";
+  console.log(label(d));
+}"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Going North");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 2: Struct + template literal + function
+//
+// Features: type definition, struct construction, field access, template literal
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_struct_template() {
+    let source = "\
+type Person = { name: string, age: u32 }
+
+function greet(p: Person): string {
+  return `Hello, ${p.name}!`;
+}
+
+function main() {
+  const p: Person = { name: \"Alice\", age: 30 };
+  console.log(greet(p));
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Hello, Alice!");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 3: Throws + try/catch + Result
+//
+// Features: throws function, Result, try/catch, match, template literal
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_throws_try_catch() {
+    let source = "\
+function risky(x: i32): i32 throws string {
+  if (x < 0) {
+    throw \"negative\";
+  }
+  return x * 2;
+}
+
+function main() {
+  try {
+    const val = risky(5);
+    console.log(val);
+  } catch (err: string) {
+    console.log(err);
+  }
+  try {
+    const val = risky(-1);
+    console.log(val);
+  } catch (err: string) {
+    console.log(err);
+  }
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "10\nnegative");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 4: Class + constructor + methods
+//
+// Features: class definition, constructor, this, method calls, mut inference
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_class_methods() {
+    let source = "\
+class Counter {
+  private count: i32;
+
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  get(): i32 {
+    return this.count;
+  }
+}
+
+function main() {
+  let c = new Counter(0);
+  c.increment();
+  c.increment();
+  c.increment();
+  console.log(c.get());
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "3");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 5: Multi-file module — math operations
+//
+// Features: modules, import/export, functions across files
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_multi_file_math() {
+    let stdout = compile_multi_file_and_run(&[
+        (
+            "index.rts",
+            "\
+import { add, multiply } from \"./math\";
+
+function main() {
+  console.log(add(3, 4));
+  console.log(multiply(5, 6));
+}",
+        ),
+        (
+            "math.rts",
+            "\
+export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+export function multiply(a: i32, b: i32): i32 {
+  return a * b;
+}",
+        ),
+    ]);
+    assert_eq!(stdout.trim(), "7\n30");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 6: Option + null check + narrowing
+//
+// Features: T | null → Option<T>, null check narrowing, if let Some
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_option_narrowing() {
+    let source = "\
+function findName(found: bool): string | null {
+  if (found) { return \"Alice\"; }
+  return null;
+}
+
+function main() {
+  const name = findName(true);
+  if (name !== null) {
+    console.log(name);
+  }
+  const name2 = findName(false);
+  if (name2 !== null) {
+    console.log(name2);
+  } else {
+    console.log(\"not found\");
+  }
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice\nnot found");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 7: Interface + class implements (direct method call)
+//
+// Features: interface → trait, class implements → trait impl, template literal
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_interface_class() {
+    let source = "\
+interface Greetable {
+  greet(): string;
+}
+
+class Person implements Greetable {
+  public name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  greet(): string {
+    return `Hello from ${this.name}`;
+  }
+}
+
+function main() {
+  const p = new Person(\"Alice\");
+  console.log(p.greet());
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Hello from Alice");
+}
+
+// ---------------------------------------------------------------------------
+// Integration 8: Destructuring + struct
+//
+// Features: type definition, struct construction, destructuring
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_p1_integration_destructuring() {
+    let source = "\
+type Point = { x: i32, y: i32 }
+
+function main() {
+  const pt: Point = { x: 10, y: 20 };
+  const { x, y } = pt;
+  console.log(x);
+  console.log(y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "10\n20");
+}
