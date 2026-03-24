@@ -69,6 +69,63 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
     }
 }
 
+/// Compile a single `RustScript` source with additional mod declarations injected.
+///
+/// Used for the entry-point file in a multi-file project: the mod declarations
+/// for sibling modules are prepended to the generated IR before emission.
+#[must_use]
+pub fn compile_source_with_mods(
+    source: &str,
+    file_name: &str,
+    mod_decls: Vec<rsc_syntax::rust_ir::RustModDecl>,
+) -> CompileResult {
+    let mut source_map = SourceMap::new();
+    let file_id = source_map.add_file(file_name.to_owned(), source.to_owned());
+
+    // Stage 1: Parse
+    let (module, parse_diagnostics) = rsc_parser::parse(source, file_id);
+
+    let mut all_diagnostics = parse_diagnostics;
+
+    if has_errors(&all_diagnostics) {
+        return CompileResult {
+            rust_source: String::new(),
+            diagnostics: all_diagnostics,
+            source_map,
+            has_errors: true,
+        };
+    }
+
+    // Stage 2: Lower
+    let (mut ir, lower_diagnostics) = rsc_lower::lower(&module);
+
+    all_diagnostics.extend(lower_diagnostics);
+
+    if has_errors(&all_diagnostics) {
+        return CompileResult {
+            rust_source: String::new(),
+            diagnostics: all_diagnostics,
+            source_map,
+            has_errors: true,
+        };
+    }
+
+    // Inject mod declarations
+    ir.mod_decls = mod_decls;
+
+    // Stage 3: Emit
+    let rust_source = rsc_emit::emit(&ir);
+
+    let has_errors = has_errors(&all_diagnostics);
+
+    CompileResult {
+        rust_source,
+        diagnostics: all_diagnostics,
+        source_map,
+        has_errors,
+    }
+}
+
 /// Check whether any diagnostic in the slice is an error.
 fn has_errors(diagnostics: &[Diagnostic]) -> bool {
     diagnostics

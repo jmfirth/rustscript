@@ -62,7 +62,11 @@ impl Emitter {
     fn emit_file(&mut self, file: &RustFile) {
         // Emit use declarations first
         for use_decl in &file.uses {
-            self.write("use ");
+            if use_decl.public {
+                self.write("pub use ");
+            } else {
+                self.write("use ");
+            }
             self.write(&use_decl.path);
             self.writeln(";");
         }
@@ -104,7 +108,11 @@ impl Emitter {
     /// Emit a struct definition.
     fn emit_struct(&mut self, s: &RustStructDef) {
         self.write_indent();
-        self.write("struct ");
+        if s.public {
+            self.write("pub struct ");
+        } else {
+            self.write("struct ");
+        }
         self.write(&s.name);
         self.emit_type_params(&s.type_params);
         self.writeln(" {");
@@ -129,7 +137,11 @@ impl Emitter {
     /// Emit an enum definition.
     fn emit_enum(&mut self, e: &RustEnumDef) {
         self.write_indent();
-        self.write("enum ");
+        if e.public {
+            self.write("pub enum ");
+        } else {
+            self.write("enum ");
+        }
         self.write(&e.name);
         self.writeln(" {");
         self.push_indent();
@@ -166,7 +178,11 @@ impl Emitter {
     /// Emit a trait definition.
     fn emit_trait(&mut self, t: &RustTraitDef) {
         self.write_indent();
-        self.write("trait ");
+        if t.public {
+            self.write("pub trait ");
+        } else {
+            self.write("trait ");
+        }
         self.write(&t.name);
         self.emit_type_params(&t.type_params);
         self.writeln(" {");
@@ -257,7 +273,11 @@ impl Emitter {
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
         self.write_indent();
-        self.write("fn ");
+        if f.public {
+            self.write("pub fn ");
+        } else {
+            self.write("fn ");
+        }
         self.write(&f.name);
         self.emit_type_params(&f.type_params);
         self.write("(");
@@ -808,6 +828,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: name.to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -836,6 +857,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "add".to_owned(),
                 type_params: vec![],
                 params: vec![
@@ -1278,6 +1300,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![
                 RustItem::Function(RustFnDecl {
+                    public: false,
                     name: "foo".to_owned(),
                     type_params: vec![],
                     params: vec![],
@@ -1289,6 +1312,7 @@ fn main() {
                     span: None,
                 }),
                 RustItem::Function(RustFnDecl {
+                    public: false,
                     name: "bar".to_owned(),
                     type_params: vec![],
                     params: vec![],
@@ -1313,6 +1337,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "answer".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -1346,6 +1371,7 @@ fn answer() -> i32 {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "fibonacci".to_owned(),
                 type_params: vec![],
                 params: vec![RustParam {
@@ -1530,11 +1556,13 @@ fn complex() {
     fn test_emit_use_decls_before_items() {
         let file = RustFile {
             uses: vec![RustUseDecl {
+                public: false,
                 path: "std::collections::HashMap".to_owned(),
                 span: None,
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -1574,6 +1602,7 @@ fn main() {
                 },
             ],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -1603,6 +1632,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -1678,6 +1708,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Struct(RustStructDef {
+                public: false,
                 name: "User".to_owned(),
                 type_params: vec![],
                 fields: vec![
@@ -1782,6 +1813,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "id".to_owned(),
                 type_params: vec![RustTypeParam {
                     name: "T".to_owned(),
@@ -1814,6 +1846,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "merge".to_owned(),
                 type_params: vec![RustTypeParam {
                     name: "T".to_owned(),
@@ -1856,6 +1889,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Struct(RustStructDef {
+                public: false,
                 name: "Container".to_owned(),
                 type_params: vec![RustTypeParam {
                     name: "T".to_owned(),
@@ -1899,6 +1933,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Enum(RustEnumDef {
+                public: false,
                 name: "Direction".to_owned(),
                 variants: vec![
                     RustEnumVariant {
@@ -1940,6 +1975,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Enum(RustEnumDef {
+                public: false,
                 name: "Shape".to_owned(),
                 variants: vec![
                     RustEnumVariant {
@@ -1990,6 +2026,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "test".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -2039,6 +2076,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "area".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -2171,11 +2209,13 @@ fn main() {
     fn test_emit_use_declaration() {
         let file = RustFile {
             uses: vec![RustUseDecl {
+                public: false,
                 path: "std::collections::HashMap".to_owned(),
                 span: None,
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -2203,6 +2243,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "find".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -2295,6 +2336,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "fetch".to_owned(),
                 type_params: vec![],
                 params: vec![],
@@ -2524,6 +2566,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "apply".to_owned(),
                 type_params: vec![],
                 params: vec![
@@ -2561,6 +2604,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Trait(RustTraitDef {
+                public: false,
                 name: "Serializable".to_owned(),
                 type_params: vec![],
                 methods: vec![RustTraitMethod {
@@ -2590,6 +2634,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                public: false,
                 name: "process".to_owned(),
                 type_params: vec![RustTypeParam {
                     name: "T".to_owned(),
@@ -2621,6 +2666,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Trait(RustTraitDef {
+                public: false,
                 name: "Cloneable".to_owned(),
                 type_params: vec![],
                 methods: vec![RustTraitMethod {
@@ -2689,6 +2735,168 @@ fn main() {
         assert!(
             output.contains("continue;"),
             "expected `continue;` in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 024: Module system emission
+    // ---------------------------------------------------------------
+
+    // Test 9: Emit `pub fn greet()` for exported function
+    #[test]
+    fn test_emit_pub_fn_for_exported_function() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                public: true,
+                name: "greet".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("pub fn greet()"),
+            "expected `pub fn greet()` in output:\n{output}"
+        );
+    }
+
+    // Test 9b: Non-exported function emits plain `fn`
+    #[test]
+    fn test_emit_fn_without_pub_for_non_exported() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                public: false,
+                name: "helper".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("fn helper()"),
+            "expected `fn helper()` in output:\n{output}"
+        );
+        assert!(
+            !output.contains("pub fn helper()"),
+            "non-exported fn should not have `pub`:\n{output}"
+        );
+    }
+
+    // Test 10: Emit `use crate::models::User;` for import
+    #[test]
+    fn test_emit_use_decl_for_import() {
+        let file = RustFile {
+            uses: vec![RustUseDecl {
+                public: false,
+                path: "crate::models::User".to_owned(),
+                span: None,
+            }],
+            mod_decls: vec![],
+            items: vec![],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("use crate::models::User;"),
+            "expected `use crate::models::User;` in output:\n{output}"
+        );
+    }
+
+    // Test 11: Emit `pub use crate::models::User;` for re-export
+    #[test]
+    fn test_emit_pub_use_decl_for_re_export() {
+        let file = RustFile {
+            uses: vec![RustUseDecl {
+                public: true,
+                path: "crate::models::User".to_owned(),
+                span: None,
+            }],
+            mod_decls: vec![],
+            items: vec![],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("pub use crate::models::User;"),
+            "expected `pub use crate::models::User;` in output:\n{output}"
+        );
+    }
+
+    // Test 12: Emit `mod models;` for module declaration
+    #[test]
+    fn test_emit_mod_decl() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![RustModDecl {
+                name: "models".to_owned(),
+                public: false,
+                span: None,
+            }],
+            items: vec![],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("mod models;"),
+            "expected `mod models;` in output:\n{output}"
+        );
+    }
+
+    // Test 12b: Emit `pub mod models;` for public module declaration
+    #[test]
+    fn test_emit_pub_mod_decl() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![RustModDecl {
+                name: "models".to_owned(),
+                public: true,
+                span: None,
+            }],
+            items: vec![],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("pub mod models;"),
+            "expected `pub mod models;` in output:\n{output}"
+        );
+    }
+
+    // Test: pub struct for exported type
+    #[test]
+    fn test_emit_pub_struct_for_exported_type() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Struct(RustStructDef {
+                public: true,
+                name: "User".to_owned(),
+                type_params: vec![],
+                fields: vec![RustFieldDef {
+                    public: true,
+                    name: "name".to_owned(),
+                    ty: RustType::String,
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("pub struct User"),
+            "expected `pub struct User` in output:\n{output}"
         );
     }
 }

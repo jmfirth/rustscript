@@ -5,7 +5,7 @@
 
 mod test_utils;
 
-use test_utils::compile_and_run;
+use test_utils::{compile_and_run, compile_multi_file_and_run};
 
 // ---------------------------------------------------------------------------
 // 1. Hello World
@@ -343,4 +343,33 @@ function main() {
 
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "1\n2\n3");
+}
+
+// ---------------------------------------------------------------------------
+// Task 024: Multi-file module system
+// ---------------------------------------------------------------------------
+
+// Correctness Scenario 1: Two-file project e2e
+#[test]
+#[ignore]
+fn test_e2e_two_file_module_import() {
+    let stdout = compile_multi_file_and_run(&[
+        (
+            "index.rts",
+            "\
+import { greet } from \"./utils\";
+
+function main() {
+  greet(\"World\");
+}",
+        ),
+        (
+            "utils.rts",
+            "\
+export function greet(name: string): void {
+  console.log(name);
+}",
+        ),
+    ]);
+    assert_eq!(stdout.trim(), "World");
 }

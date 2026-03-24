@@ -24,11 +24,13 @@ pub struct RustFile {
 
 /// A Rust `use` declaration.
 ///
-/// Represents `use path;` in the generated source.
+/// Represents `[pub] use path;` in the generated source.
 #[derive(Debug, Clone)]
 pub struct RustUseDecl {
     /// The use path (e.g., `"std::collections::HashMap"`).
     pub path: String,
+    /// Whether this is a `pub use` declaration (for re-exports).
+    pub public: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -77,6 +79,8 @@ pub struct RustTypeParam {
 /// Produced by lowering a `RustScript` [`TypeDef`](crate::ast::TypeDef).
 #[derive(Debug, Clone)]
 pub struct RustStructDef {
+    /// Whether this struct is `pub` (exported from the module).
+    pub public: bool,
     /// The struct name.
     pub name: String,
     /// Generic type parameters on the struct.
@@ -108,6 +112,8 @@ pub struct RustFieldDef {
 /// Supports both fieldless variants (simple enums) and struct variants (data enums).
 #[derive(Debug, Clone)]
 pub struct RustEnumDef {
+    /// Whether this enum is `pub` (exported from the module).
+    pub public: bool,
     /// The enum name.
     pub name: String,
     /// The variants of the enum.
@@ -134,6 +140,8 @@ pub struct RustEnumVariant {
 /// Produced by lowering a `RustScript` [`InterfaceDef`](crate::ast::InterfaceDef).
 #[derive(Debug, Clone)]
 pub struct RustTraitDef {
+    /// Whether this trait is `pub` (exported from the module).
+    pub public: bool,
     /// The trait name.
     pub name: String,
     /// Generic type parameters on the trait.
@@ -166,6 +174,8 @@ pub struct RustTraitMethod {
 /// Produced by lowering a `RustScript` [`FnDecl`](crate::ast::FnDecl).
 #[derive(Debug, Clone)]
 pub struct RustFnDecl {
+    /// Whether this function is `pub` (exported from the module).
+    pub public: bool,
     /// The function name.
     pub name: String,
     /// Generic type parameters on the function.
@@ -824,6 +834,7 @@ mod tests {
     #[test]
     fn test_rust_fn_decl_complete_construction() {
         let decl = RustFnDecl {
+            public: false,
             name: "add".to_owned(),
             type_params: vec![],
             params: vec![

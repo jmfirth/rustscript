@@ -78,6 +78,12 @@ pub(crate) enum TokenKind {
     Break,
     /// `continue`
     Continue,
+    /// `import`
+    Import,
+    /// `export`
+    Export,
+    /// `from`
+    From,
 
     // Operators
     /// `+`

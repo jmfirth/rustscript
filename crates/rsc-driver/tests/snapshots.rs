@@ -1085,3 +1085,107 @@ fn validate(x: i32) -> Result<(), String> {
     let actual = compile_to_rust(source);
     assert_snapshot("void_throws", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 024: Module system snapshots
+// ---------------------------------------------------------------------------
+
+// Correctness Scenario 3: Non-exported item visibility
+#[test]
+fn test_snapshot_exported_vs_non_exported_visibility() {
+    let source = "\
+function helper(): i32 { return 42; }
+export function publicFn(): i32 { return helper(); }";
+
+    let actual = compile_to_rust(source);
+
+    // Non-exported function should NOT have `pub`
+    assert!(
+        actual.contains("fn helper()"),
+        "expected `fn helper()` without pub in output:\n{actual}"
+    );
+    assert!(
+        !actual.contains("pub fn helper()"),
+        "helper() should not be pub:\n{actual}"
+    );
+
+    // Exported function should have `pub`
+    assert!(
+        actual.contains("pub fn publicFn()"),
+        "expected `pub fn publicFn()` in output:\n{actual}"
+    );
+}
+
+// Correctness Scenario 2: Export type + import (snapshot portion — single file)
+#[test]
+fn test_snapshot_exported_type_produces_pub_struct() {
+    let source = "\
+export type User = { name: string, age: u32 }";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("pub struct User"),
+        "expected `pub struct User` in output:\n{actual}"
+    );
+}
+
+// Import generates use declaration
+#[test]
+fn test_snapshot_import_generates_use_decl() {
+    let source = "\
+import { greet } from \"./utils\";
+
+function main() {
+  greet(\"World\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("use crate::utils::greet;"),
+        "expected `use crate::utils::greet;` in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn main()"),
+        "expected `fn main()` in output:\n{actual}"
+    );
+}
+
+// Import + mod declarations (via compile_source_with_mods)
+#[test]
+fn test_snapshot_import_with_mod_decls() {
+    use rsc_driver::compile_source_with_mods;
+    use rsc_syntax::rust_ir::RustModDecl;
+
+    let source = "\
+import { greet } from \"./utils\";
+
+function main() {
+  greet(\"World\");
+}";
+
+    let result = compile_source_with_mods(
+        source,
+        "index.rts",
+        vec![RustModDecl {
+            name: "utils".to_owned(),
+            public: false,
+            span: None,
+        }],
+    );
+
+    assert!(
+        !result.has_errors,
+        "expected no errors, got: {:?}",
+        result.diagnostics
+    );
+
+    let output = &result.rust_source;
+    assert!(
+        output.contains("mod utils;"),
+        "expected `mod utils;` in output:\n{output}"
+    );
+    assert!(
+        output.contains("use crate::utils::greet;"),
+        "expected `use crate::utils::greet;` in output:\n{output}"
+    );
+}

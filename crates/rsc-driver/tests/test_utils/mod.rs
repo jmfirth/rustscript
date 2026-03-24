@@ -79,3 +79,60 @@ pub fn compile_diagnostics(rts_source: &str) -> Vec<String> {
 
     result.diagnostics.into_iter().map(|d| d.message).collect()
 }
+
+/// Compile a multi-file RustScript project, build with cargo, run, and return stdout.
+///
+/// Takes a list of `(filename, source)` pairs. The first file is treated as the
+/// entry point (index.rts). All other files are modules.
+///
+/// This is necessarily slow (invokes cargo) — tests using it should be `#[ignore]`.
+///
+/// Panics if compilation, building, or running fails.
+pub fn compile_multi_file_and_run(files: &[(&str, &str)]) -> String {
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let project_dir = tmp_dir.path().join("project");
+    let src_dir = project_dir.join("src");
+    fs::create_dir_all(&src_dir).expect("failed to create src dir");
+
+    // Write cargo.toml for the RustScript project
+    let cargo_toml =
+        "[package]\nname = \"rsc-multi-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+    fs::write(project_dir.join("cargo.toml"), cargo_toml).expect("failed to write cargo.toml");
+
+    // Write all .rts source files
+    for (filename, source) in files {
+        fs::write(src_dir.join(filename), source).expect("failed to write .rts file");
+    }
+
+    // Open and compile the project using the driver
+    let project = rsc_driver::Project::open(&project_dir).expect("failed to open project");
+    let (result, build_dir) = project.compile().expect("failed to compile project");
+
+    assert!(
+        !result.has_errors,
+        "compilation failed with errors: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+
+    // Build and run with cargo
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(&build_dir)
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        output.status.success(),
+        "cargo run failed.\nstdout: {}\nstderr: {}\nbuild dir: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        build_dir.display(),
+    );
+
+    String::from_utf8(output.stdout).expect("stdout is not valid utf-8")
+}

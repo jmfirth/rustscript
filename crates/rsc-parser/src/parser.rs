@@ -7,12 +7,12 @@
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr, ClosureBody, ClosureExpr,
     ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, IndexExpr,
+    FieldAccessExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr,
     InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
-    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
-    UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
+    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -220,6 +220,9 @@ impl Parser {
             TokenKind::For => "`for`",
             TokenKind::Break => "`break`",
             TokenKind::Continue => "`continue`",
+            TokenKind::Import => "`import`",
+            TokenKind::Export => "`export`",
+            TokenKind::From => "`from`",
             TokenKind::FatArrow => "`=>`",
             TokenKind::Ampersand => "`&`",
             TokenKind::Pipe => "`|`",
@@ -291,7 +294,7 @@ impl Parser {
         }
     }
 
-    /// Parse a top-level item: function declaration, type definition, or interface.
+    /// Parse a top-level item: function, type definition, interface, import, or export.
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek() {
             TokenKind::Function => self.parse_function_decl().map(|f| {
@@ -311,6 +314,8 @@ impl Parser {
                     span,
                 }
             }),
+            TokenKind::Import => self.parse_import_decl(),
+            TokenKind::Export => self.parse_export_decl(),
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -327,6 +332,180 @@ impl Parser {
                 self.synchronize();
                 None
             }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Import/export declarations
+    // ---------------------------------------------------------------
+
+    /// Parse an import declaration: `import { Name1, Name2 } from "path";`.
+    fn parse_import_decl(&mut self) -> Option<Item> {
+        let import_token = self.advance(); // consume `import`
+        let start = import_token.span;
+
+        self.expect(&TokenKind::LBrace)?;
+        let names = self.parse_import_name_list();
+        self.expect(&TokenKind::RBrace)?;
+
+        self.expect_keyword(&TokenKind::From, "from")?;
+
+        let source = self.parse_string_literal()?;
+
+        // Optional semicolon
+        if self.check(&TokenKind::Semicolon) {
+            self.advance();
+        }
+
+        let span = start.merge(source.span);
+        Some(Item {
+            kind: ItemKind::Import(ImportDecl {
+                names,
+                source,
+                span,
+            }),
+            exported: false,
+            span,
+        })
+    }
+
+    /// Parse an export declaration.
+    ///
+    /// Supports:
+    /// - `export function ...` — exported function
+    /// - `export type ...` — exported type/enum
+    /// - `export interface ...` — exported interface
+    /// - `export { Name } from "path"` — re-export
+    fn parse_export_decl(&mut self) -> Option<Item> {
+        let export_token = self.advance(); // consume `export`
+        let start = export_token.span;
+
+        match self.peek() {
+            TokenKind::Function => {
+                let f = self.parse_function_decl()?;
+                let span = start.merge(f.span);
+                Some(Item {
+                    kind: ItemKind::Function(f),
+                    exported: true,
+                    span,
+                })
+            }
+            TokenKind::Type => {
+                let mut item = self.parse_type_or_enum_def()?;
+                item.exported = true;
+                item.span = start.merge(item.span);
+                Some(item)
+            }
+            TokenKind::Interface => {
+                let iface = self.parse_interface_def()?;
+                let span = start.merge(iface.span);
+                Some(Item {
+                    kind: ItemKind::Interface(iface),
+                    exported: true,
+                    span,
+                })
+            }
+            TokenKind::LBrace => {
+                // Re-export: `export { Name } from "path";`
+                self.advance(); // consume `{`
+                let names = self.parse_import_name_list();
+                self.expect(&TokenKind::RBrace)?;
+
+                self.expect_keyword(&TokenKind::From, "from")?;
+
+                let source = self.parse_string_literal()?;
+
+                // Optional semicolon
+                if self.check(&TokenKind::Semicolon) {
+                    self.advance();
+                }
+
+                let span = start.merge(source.span);
+                Some(Item {
+                    kind: ItemKind::ReExport(ReExportDecl {
+                        names,
+                        source,
+                        span,
+                    }),
+                    exported: true,
+                    span,
+                })
+            }
+            _ => {
+                let current = self.current_token().clone();
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "expected `function`, `type`, `interface`, or `{{` after `export`, found {}",
+                        Self::describe_kind(&current.kind)
+                    ))
+                    .with_label(current.span, self.file_id, "unexpected token"),
+                );
+                self.synchronize();
+                None
+            }
+        }
+    }
+
+    /// Parse a comma-separated list of identifiers inside `{ ... }` for imports/exports.
+    fn parse_import_name_list(&mut self) -> Vec<Ident> {
+        let mut names = Vec::new();
+        loop {
+            if self.check(&TokenKind::RBrace) || self.at_end() {
+                break;
+            }
+            if let Some(name) = self.parse_ident() {
+                names.push(name);
+            } else {
+                break;
+            }
+            if !self.check(&TokenKind::Comma) {
+                break;
+            }
+            self.advance(); // consume `,`
+        }
+        names
+    }
+
+    /// Parse a string literal token and return a [`StringLiteral`].
+    fn parse_string_literal(&mut self) -> Option<StringLiteral> {
+        let token = self.current_token().clone();
+        if let TokenKind::StringLit(value) = &token.kind {
+            let lit = StringLiteral {
+                value: value.clone(),
+                span: token.span,
+            };
+            self.advance();
+            Some(lit)
+        } else {
+            self.diagnostics.push(
+                Diagnostic::error(format!(
+                    "expected string literal, found {}",
+                    Self::describe_kind(&token.kind)
+                ))
+                .with_label(token.span, self.file_id, "expected string literal"),
+            );
+            None
+        }
+    }
+
+    /// Expect a specific keyword token.
+    fn expect_keyword(&mut self, kind: &TokenKind, name: &str) -> Option<Token> {
+        if self.check(kind) {
+            Some(self.advance())
+        } else {
+            let current = self.current_token().clone();
+            self.diagnostics.push(
+                Diagnostic::error(format!(
+                    "expected `{name}`, found {}",
+                    Self::describe_kind(&current.kind)
+                ))
+                .with_label(
+                    current.span,
+                    self.file_id,
+                    format!("expected `{name}`"),
+                ),
+            );
+            None
         }
     }
 
@@ -4491,6 +4670,134 @@ function fail() throws string {
                 }
             }
             other => panic!("expected While statement, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 024: import/export parsing
+    // ---------------------------------------------------------------
+
+    // Test 1: Parse `import { User } from "./models";` → ImportDecl
+    #[test]
+    fn test_parser_import_decl_single_name() {
+        let module = parse_ok("import { User } from \"./models\";");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(!item.exported);
+        match &item.kind {
+            ItemKind::Import(import) => {
+                assert_eq!(import.names.len(), 1);
+                assert_eq!(import.names[0].name, "User");
+                assert_eq!(import.source.value, "./models");
+            }
+            other => panic!("expected Import item, got {other:?}"),
+        }
+    }
+
+    // Test 1b: Parse import with multiple names
+    #[test]
+    fn test_parser_import_decl_multiple_names() {
+        let module = parse_ok("import { User, Post } from \"./models\";");
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Import(import) => {
+                assert_eq!(import.names.len(), 2);
+                assert_eq!(import.names[0].name, "User");
+                assert_eq!(import.names[1].name, "Post");
+                assert_eq!(import.source.value, "./models");
+            }
+            other => panic!("expected Import item, got {other:?}"),
+        }
+    }
+
+    // Test 2: Parse `export function greet(): void { ... }` → exported function
+    #[test]
+    fn test_parser_export_function_decl() {
+        let module = parse_ok("export function greet(): void { return; }");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "function should be exported");
+        match &item.kind {
+            ItemKind::Function(f) => {
+                assert_eq!(f.name.name, "greet");
+            }
+            other => panic!("expected Function item, got {other:?}"),
+        }
+    }
+
+    // Test 3: Parse `export type User = { ... }` → exported type
+    #[test]
+    fn test_parser_export_type_def() {
+        let module = parse_ok("export type User = { name: string, age: u32 }");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "type should be exported");
+        match &item.kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "User");
+                assert_eq!(td.fields.len(), 2);
+            }
+            other => panic!("expected TypeDef item, got {other:?}"),
+        }
+    }
+
+    // Test 4: Parse `export { User } from "./models";` → ReExportDecl
+    #[test]
+    fn test_parser_re_export_decl() {
+        let module = parse_ok("export { User } from \"./models\";");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "re-export should be exported");
+        match &item.kind {
+            ItemKind::ReExport(re) => {
+                assert_eq!(re.names.len(), 1);
+                assert_eq!(re.names[0].name, "User");
+                assert_eq!(re.source.value, "./models");
+            }
+            other => panic!("expected ReExport item, got {other:?}"),
+        }
+    }
+
+    // Test: export interface
+    #[test]
+    fn test_parser_export_interface_def() {
+        let module = parse_ok("export interface Printable { display(): string; }");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "interface should be exported");
+        match &item.kind {
+            ItemKind::Interface(iface) => {
+                assert_eq!(iface.name.name, "Printable");
+            }
+            other => panic!("expected Interface item, got {other:?}"),
+        }
+    }
+
+    // Test: import without semicolon (should still parse)
+    #[test]
+    fn test_parser_import_decl_no_semicolon() {
+        let module = parse_ok("import { User } from \"./models\"\nfunction main() {}");
+        assert_eq!(module.items.len(), 2);
+        match &module.items[0].kind {
+            ItemKind::Import(import) => {
+                assert_eq!(import.names[0].name, "User");
+            }
+            other => panic!("expected Import item, got {other:?}"),
+        }
+    }
+
+    // Test: export enum
+    #[test]
+    fn test_parser_export_enum_def() {
+        let module = parse_ok("export type Direction = \"north\" | \"south\"");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "enum should be exported");
+        match &item.kind {
+            ItemKind::EnumDef(ed) => {
+                assert_eq!(ed.name.name, "Direction");
+            }
+            other => panic!("expected EnumDef item, got {other:?}"),
         }
     }
 }
