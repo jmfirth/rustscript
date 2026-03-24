@@ -233,6 +233,9 @@ pub(crate) fn find_reassigned_variables(body: &ast::Block) -> HashSet<String> {
 }
 
 /// Check whether a Rust type implements `Copy`.
+///
+/// Type parameters (`TypeParam`) are conservatively assumed non-Copy.
+/// Generic types are also assumed non-Copy.
 fn is_copy_type(ty: &RustType) -> bool {
     matches!(
         ty,

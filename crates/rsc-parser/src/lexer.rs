@@ -365,6 +365,7 @@ impl<'a> Lexer<'a> {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "type" => TokenKind::Type,
+            "extends" => TokenKind::Extends,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -456,7 +457,7 @@ mod tests {
         assert_eq!(tokens[0].span, Span::new(0, 8));
     }
 
-    // 2. Tokenize all 9 keywords — each produces the correct TokenKind
+    // 2. Tokenize all keywords — each produces the correct TokenKind
     #[test]
     fn test_lexer_all_keywords_produce_correct_tokens() {
         let cases = [
@@ -469,6 +470,8 @@ mod tests {
             ("return", TokenKind::Return),
             ("true", TokenKind::True),
             ("false", TokenKind::False),
+            ("type", TokenKind::Type),
+            ("extends", TokenKind::Extends),
         ];
 
         for (source, expected_kind) in cases {

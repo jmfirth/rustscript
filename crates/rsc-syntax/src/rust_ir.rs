@@ -57,6 +57,17 @@ pub enum RustItem {
     Struct(RustStructDef),
 }
 
+/// A generic type parameter in Rust: `T` or `T: Bound`.
+///
+/// Produced by lowering a `RustScript` [`TypeParam`](crate::ast::TypeParam).
+#[derive(Debug, Clone)]
+pub struct RustTypeParam {
+    /// The type parameter name (e.g., `T`).
+    pub name: String,
+    /// Trait bound names (e.g., `["Clone", "PartialOrd"]`).
+    pub bounds: Vec<String>,
+}
+
 /// A Rust struct definition.
 ///
 /// Produced by lowering a `RustScript` [`TypeDef`](crate::ast::TypeDef).
@@ -64,6 +75,8 @@ pub enum RustItem {
 pub struct RustStructDef {
     /// The struct name.
     pub name: String,
+    /// Generic type parameters on the struct.
+    pub type_params: Vec<RustTypeParam>,
     /// The fields of the struct.
     pub fields: Vec<RustFieldDef>,
     /// The source span, if derived from source.
@@ -92,6 +105,8 @@ pub struct RustFieldDef {
 pub struct RustFnDecl {
     /// The function name.
     pub name: String,
+    /// Generic type parameters on the function.
+    pub type_params: Vec<RustTypeParam>,
     /// The parameter list.
     pub params: Vec<RustParam>,
     /// The return type, if not unit.
@@ -146,6 +161,10 @@ pub enum RustType {
     Unit,
     /// A user-defined named type (e.g., `User`, `Point`).
     Named(String),
+    /// A generic type instantiation: `Vec<String>`, `HashMap<String, u32>`.
+    Generic(Box<RustType>, Vec<RustType>),
+    /// A type parameter reference: `T`.
+    TypeParam(String),
 }
 
 impl std::fmt::Display for RustType {
@@ -164,7 +183,17 @@ impl std::fmt::Display for RustType {
             Self::Bool => "bool",
             Self::String => "String",
             Self::Unit => "()",
-            Self::Named(name) => return f.write_str(name),
+            Self::Named(name) | Self::TypeParam(name) => return f.write_str(name),
+            Self::Generic(base, args) => {
+                write!(f, "{base}<")?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                return write!(f, ">");
+            }
         };
         f.write_str(s)
     }
@@ -510,6 +539,7 @@ mod tests {
     fn test_rust_fn_decl_complete_construction() {
         let decl = RustFnDecl {
             name: "add".to_owned(),
+            type_params: vec![],
             params: vec![
                 RustParam {
                     name: "a".to_owned(),

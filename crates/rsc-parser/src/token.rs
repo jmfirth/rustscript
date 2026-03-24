@@ -50,6 +50,8 @@ pub(crate) enum TokenKind {
     False,
     /// `type`
     Type,
+    /// `extends`
+    Extends,
 
     // Operators
     /// `+`
