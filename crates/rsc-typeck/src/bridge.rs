@@ -21,14 +21,16 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
         Type::Primitive(prim) => primitive_to_rust_type(*prim),
         Type::String => RustType::String,
         Type::Named(name) => RustType::Named(name.clone()),
+        Type::TypeVar(name) => RustType::TypeParam(name.clone()),
+        Type::Generic(name, args) => {
+            let base = RustType::Named(name.clone());
+            let rust_args: Vec<RustType> = args.iter().map(type_to_rust_type).collect();
+            RustType::Generic(Box::new(base), rust_args)
+        }
         // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
-        Type::Unit
-        | Type::Generic(_, _)
-        | Type::Option(_)
-        | Type::Result(_, _)
-        | Type::Function(_, _)
-        | Type::TypeVar(_)
-        | Type::Error => RustType::Unit,
+        Type::Unit | Type::Option(_) | Type::Result(_, _) | Type::Function(_, _) | Type::Error => {
+            RustType::Unit
+        }
     }
 }
 
@@ -120,11 +122,26 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_unrepresented_types_produce_unit() {
+    fn test_bridge_type_param_produces_type_param() {
         assert_eq!(
-            type_to_rust_type(&Type::Generic("Vec".to_owned(), vec![Type::Unit])),
-            RustType::Unit
+            type_to_rust_type(&Type::TypeVar("T".to_owned())),
+            RustType::TypeParam("T".to_owned())
         );
+    }
+
+    #[test]
+    fn test_bridge_generic_produces_generic() {
+        assert_eq!(
+            type_to_rust_type(&Type::Generic("Vec".to_owned(), vec![Type::String])),
+            RustType::Generic(
+                Box::new(RustType::Named("Vec".to_owned())),
+                vec![RustType::String]
+            )
+        );
+    }
+
+    #[test]
+    fn test_bridge_unrepresented_types_produce_unit() {
         assert_eq!(
             type_to_rust_type(&Type::Option(Box::new(Type::String))),
             RustType::Unit
@@ -135,10 +152,6 @@ mod tests {
         );
         assert_eq!(
             type_to_rust_type(&Type::Function(vec![], Box::new(Type::Unit))),
-            RustType::Unit
-        );
-        assert_eq!(
-            type_to_rust_type(&Type::TypeVar("T".to_owned())),
             RustType::Unit
         );
         assert_eq!(type_to_rust_type(&Type::Error), RustType::Unit);

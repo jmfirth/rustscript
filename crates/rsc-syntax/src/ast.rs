@@ -46,14 +46,39 @@ pub enum ItemKind {
     TypeDef(TypeDef),
 }
 
+/// A generic type parameter: `T` or `T extends Constraint`.
+///
+/// Appears in generic function declarations and generic type definitions.
+/// The optional `constraint` maps to a Rust trait bound (`T: Constraint`).
+#[derive(Debug, Clone)]
+pub struct TypeParam {
+    /// The type parameter name (e.g., `T`, `U`).
+    pub name: Ident,
+    /// Optional constraint: `extends Comparable` maps to a trait bound.
+    pub constraint: Option<TypeAnnotation>,
+    /// The span covering the type parameter.
+    pub span: Span,
+}
+
+/// Type parameters on a function or type definition: `<T, U extends Clone>`.
+#[derive(Debug, Clone)]
+pub struct TypeParams {
+    /// The individual type parameters.
+    pub params: Vec<TypeParam>,
+    /// The span covering the entire `<...>` type parameter list.
+    pub span: Span,
+}
+
 /// A function declaration.
 ///
-/// Corresponds to `RustScript` `function name(params): ReturnType { body }`.
-/// Lowers to a Rust `fn` item.
+/// Corresponds to `RustScript` `function name<T>(params): ReturnType { body }`.
+/// Lowers to a Rust `fn` item. Generic type parameters are optional.
 #[derive(Debug, Clone)]
 pub struct FnDecl {
     /// The function name.
     pub name: Ident,
+    /// Optional generic type parameters: `<T, U extends Clone>`.
+    pub type_params: Option<TypeParams>,
     /// The parameter list.
     pub params: Vec<Param>,
     /// The return type annotation, if present. Absent means `void`.
@@ -64,13 +89,16 @@ pub struct FnDecl {
     pub span: Span,
 }
 
-/// A type definition: `type Name = { field: Type, ... }`.
+/// A type definition: `type Name<T> = { field: Type, ... }`.
 ///
-/// Lowers to a Rust `struct` with `pub` fields.
+/// Lowers to a Rust `struct` with `pub` fields. Generic type parameters
+/// are optional.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
     /// The type name.
     pub name: Ident,
+    /// Optional generic type parameters: `<T, U extends Clone>`.
+    pub type_params: Option<TypeParams>,
     /// The fields of the type definition.
     pub fields: Vec<FieldDef>,
     /// The span covering the entire type definition.
@@ -115,16 +143,20 @@ pub struct TypeAnnotation {
     pub span: Span,
 }
 
-/// The kinds of types expressible in Phase 0 `RustScript`.
+/// The kinds of types expressible in `RustScript`.
 ///
 /// `Named` covers primitive types (`i32`, `i64`, `f64`, `bool`, `string`) and
 /// user-defined types. `Void` represents the absence of a return value.
+/// `Generic` represents parameterized types like `Array<string>`.
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     /// A named type (e.g., `i32`, `bool`, `string`, or a user-defined name).
     Named(Ident),
     /// The void type, indicating no return value. Lowers to Rust `()`.
     Void,
+    /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
+    /// The `Ident` is the base type name; the `Vec` is the type arguments.
+    Generic(Ident, Vec<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
@@ -487,6 +519,7 @@ mod tests {
     fn test_fn_decl_with_two_params_field_access() {
         let decl = FnDecl {
             name: ident("add", 0, 3),
+            type_params: None,
             params: vec![
                 Param {
                     name: ident("a", 4, 5),

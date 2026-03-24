@@ -4,7 +4,7 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt, RustItem,
-    RustStmt, RustStructDef,
+    RustStmt, RustStructDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -103,6 +103,7 @@ impl Emitter {
         self.write_indent();
         self.write("struct ");
         self.write(&s.name);
+        self.emit_type_params(&s.type_params);
         self.writeln(" {");
         self.push_indent();
 
@@ -127,6 +128,7 @@ impl Emitter {
         self.write_indent();
         self.write("fn ");
         self.write(&f.name);
+        self.emit_type_params(&f.type_params);
         self.write("(");
 
         for (i, param) in f.params.iter().enumerate() {
@@ -148,6 +150,32 @@ impl Emitter {
         self.write(" ");
         self.emit_block(&f.body);
         self.newline();
+    }
+
+    /// Emit generic type parameters: `<T: Bound, U>`.
+    ///
+    /// Emits nothing if the type parameter list is empty.
+    fn emit_type_params(&mut self, type_params: &[RustTypeParam]) {
+        if type_params.is_empty() {
+            return;
+        }
+        self.write("<");
+        for (i, param) in type_params.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&param.name);
+            if !param.bounds.is_empty() {
+                self.write(": ");
+                for (j, bound) in param.bounds.iter().enumerate() {
+                    if j > 0 {
+                        self.write(" + ");
+                    }
+                    self.write(bound);
+                }
+            }
+        }
+        self.write(">");
     }
 
     /// Emit a block `{ stmts; [expr] }`.
@@ -416,8 +444,8 @@ mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustExpr, RustExprKind,
         RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustModDecl,
-        RustParam, RustReturnStmt, RustStmt, RustStructDef, RustType, RustUnaryOp, RustUseDecl,
-        RustWhileStmt,
+        RustParam, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp,
+        RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -444,6 +472,7 @@ mod tests {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: name.to_owned(),
+                type_params: vec![],
                 params: vec![],
                 return_type: None,
                 body: RustBlock {
@@ -471,6 +500,7 @@ mod tests {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "add".to_owned(),
+                type_params: vec![],
                 params: vec![
                     RustParam {
                         name: "a".to_owned(),
@@ -912,6 +942,7 @@ fn main() {
             items: vec![
                 RustItem::Function(RustFnDecl {
                     name: "foo".to_owned(),
+                    type_params: vec![],
                     params: vec![],
                     return_type: None,
                     body: RustBlock {
@@ -922,6 +953,7 @@ fn main() {
                 }),
                 RustItem::Function(RustFnDecl {
                     name: "bar".to_owned(),
+                    type_params: vec![],
                     params: vec![],
                     return_type: None,
                     body: RustBlock {
@@ -945,6 +977,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "answer".to_owned(),
+                type_params: vec![],
                 params: vec![],
                 return_type: Some(RustType::I32),
                 body: RustBlock {
@@ -977,6 +1010,7 @@ fn answer() -> i32 {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "fibonacci".to_owned(),
+                type_params: vec![],
                 params: vec![RustParam {
                     name: "n".to_owned(),
                     ty: RustType::I32,
@@ -1165,6 +1199,7 @@ fn complex() {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "main".to_owned(),
+                type_params: vec![],
                 params: vec![],
                 return_type: None,
                 body: RustBlock {
@@ -1203,6 +1238,7 @@ fn main() {
             ],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "main".to_owned(),
+                type_params: vec![],
                 params: vec![],
                 return_type: None,
                 body: RustBlock {
@@ -1231,6 +1267,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "main".to_owned(),
+                type_params: vec![],
                 params: vec![],
                 return_type: None,
                 body: RustBlock {
@@ -1305,6 +1342,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![RustItem::Struct(RustStructDef {
                 name: "User".to_owned(),
+                type_params: vec![],
                 fields: vec![
                     RustFieldDef {
                         public: true,
@@ -1396,5 +1434,122 @@ fn main() {
     fn test_emit_named_type_display() {
         assert_eq!(RustType::Named("User".to_owned()).to_string(), "User");
         assert_eq!(RustType::Named("Point".to_owned()).to_string(), "Point");
+    }
+
+    // ---- Task 016: Generics emission ----
+
+    // Test T16-9: Emit `fn id<T>(x: T) -> T { ... }`
+    #[test]
+    fn test_emit_generic_fn_single_type_param() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "id".to_owned(),
+                type_params: vec![RustTypeParam {
+                    name: "T".to_owned(),
+                    bounds: vec![],
+                }],
+                params: vec![RustParam {
+                    name: "x".to_owned(),
+                    ty: RustType::TypeParam("T".to_owned()),
+                    span: None,
+                }],
+                return_type: Some(RustType::TypeParam("T".to_owned())),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Return(RustReturnStmt {
+                        value: Some(ident("x")),
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert_eq!(output, "fn id<T>(x: T) -> T {\n    return x;\n}\n");
+    }
+
+    // Test T16-10: Emit `fn merge<T: Comparable>(a: T, b: T) -> T { ... }`
+    #[test]
+    fn test_emit_generic_fn_with_bound() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "merge".to_owned(),
+                type_params: vec![RustTypeParam {
+                    name: "T".to_owned(),
+                    bounds: vec!["Comparable".to_owned()],
+                }],
+                params: vec![
+                    RustParam {
+                        name: "a".to_owned(),
+                        ty: RustType::TypeParam("T".to_owned()),
+                        span: None,
+                    },
+                    RustParam {
+                        name: "b".to_owned(),
+                        ty: RustType::TypeParam("T".to_owned()),
+                        span: None,
+                    },
+                ],
+                return_type: Some(RustType::TypeParam("T".to_owned())),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Return(RustReturnStmt {
+                        value: Some(ident("a")),
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert_eq!(
+            output,
+            "fn merge<T: Comparable>(a: T, b: T) -> T {\n    return a;\n}\n"
+        );
+    }
+
+    // Test T16-11: Emit `struct Container<T> { pub value: T, }`
+    #[test]
+    fn test_emit_generic_struct() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Struct(RustStructDef {
+                name: "Container".to_owned(),
+                type_params: vec![RustTypeParam {
+                    name: "T".to_owned(),
+                    bounds: vec![],
+                }],
+                fields: vec![RustFieldDef {
+                    public: true,
+                    name: "value".to_owned(),
+                    ty: RustType::TypeParam("T".to_owned()),
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert_eq!(output, "struct Container<T> {\n    pub value: T,\n}\n");
+    }
+
+    // Test T16-12: Emit `Vec<String>` for generic type
+    #[test]
+    fn test_emit_generic_type_display() {
+        let ty = RustType::Generic(
+            Box::new(RustType::Named("Vec".to_owned())),
+            vec![RustType::String],
+        );
+        assert_eq!(ty.to_string(), "Vec<String>");
+    }
+
+    // Test T16-13: Emit `TypeParam("T")` as `T`
+    #[test]
+    fn test_emit_type_param_display() {
+        assert_eq!(RustType::TypeParam("T".to_owned()).to_string(), "T");
     }
 }

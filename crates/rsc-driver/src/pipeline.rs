@@ -163,4 +163,79 @@ mod tests {
             result.rust_source
         );
     }
+
+    // ---- Task 016: Correctness scenarios ----
+
+    // Correctness scenario 1: Generic identity function
+    #[test]
+    fn test_compile_source_generic_identity_function() {
+        let source = r#"function identity<T>(x: T): T {
+  return x;
+}
+function main() {
+  const a = identity(42);
+  const b = identity("hello");
+  console.log(a);
+  console.log(b);
+}"#;
+        let result = compile_source(source, "identity.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.rust_source.contains("fn identity<T>(x: T) -> T"),
+            "expected generic identity in output, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("fn main()"),
+            "expected fn main in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 2: Generic struct
+    #[test]
+    fn test_compile_source_generic_struct() {
+        let source = r#"type Pair<T> = { first: T, second: T }
+function main() {
+  const p: Pair<i32> = { first: 1, second: 2 };
+  console.log(p.first);
+}"#;
+        let result = compile_source(source, "pair.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.rust_source.contains("struct Pair<T>"),
+            "expected generic struct in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 3: Constrained generic
+    #[test]
+    fn test_compile_source_constrained_generic() {
+        let source = r#"function max<T extends PartialOrd>(a: T, b: T): T {
+  if (a > b) { return a; }
+  return b;
+}"#;
+        let result = compile_source(source, "max.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("fn max<T: PartialOrd>(a: T, b: T) -> T"),
+            "expected constrained generic in output, got:\n{}",
+            result.rust_source
+        );
+    }
 }

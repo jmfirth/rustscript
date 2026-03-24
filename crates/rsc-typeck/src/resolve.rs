@@ -63,6 +63,13 @@ pub fn resolve_type_annotation(
             diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
             Type::Primitive(PrimitiveType::I64)
         }),
+        ast::TypeKind::Generic(ident, args) => {
+            let resolved_args: Vec<Type> = args
+                .iter()
+                .map(|a| resolve_type_annotation(a, diagnostics))
+                .collect();
+            Type::Generic(ident.name.clone(), resolved_args)
+        }
     }
 }
 
@@ -71,14 +78,34 @@ pub fn resolve_type_annotation(
 ///
 /// Uses the [`crate::registry::TypeRegistry`] to confirm that the type is registered.
 /// Unknown names that are also not in the registry fall back to diagnostics.
+/// Type parameter names from the current generic scope resolve to `Type::TypeVar`.
 pub fn resolve_type_annotation_with_registry(
     ann: &ast::TypeAnnotation,
     registry: &crate::registry::TypeRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Type {
+    resolve_type_annotation_with_generics(ann, registry, &[], diagnostics)
+}
+
+/// Resolve a type annotation to a [`Type`], with generic type parameter scope.
+///
+/// `generic_param_names` is the list of type parameter names currently in scope
+/// (e.g., `["T", "U"]` inside `function foo<T, U>(...)`). Names matching a
+/// generic parameter resolve to `Type::TypeVar` rather than being looked up
+/// in the registry.
+pub fn resolve_type_annotation_with_generics(
+    ann: &ast::TypeAnnotation,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
         ast::TypeKind::Named(ident) => {
+            // Check if this is a generic type parameter in scope
+            if generic_param_names.contains(&ident.name) {
+                return Type::TypeVar(ident.name.clone());
+            }
             // Try primitive/built-in first
             if let Some(ty) = resolve_type_name(&ident.name) {
                 return ty;
@@ -90,6 +117,20 @@ pub fn resolve_type_annotation_with_registry(
             // Unknown type
             diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
             Type::Primitive(PrimitiveType::I64)
+        }
+        ast::TypeKind::Generic(ident, args) => {
+            let resolved_args: Vec<Type> = args
+                .iter()
+                .map(|a| {
+                    resolve_type_annotation_with_generics(
+                        a,
+                        registry,
+                        generic_param_names,
+                        diagnostics,
+                    )
+                })
+                .collect();
+            Type::Generic(ident.name.clone(), resolved_args)
         }
     }
 }
@@ -352,5 +393,48 @@ mod tests {
         assert_eq!(ty, Type::Primitive(PrimitiveType::I64));
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("unknown type"));
+    }
+
+    // ---- Task 016: Generic type resolution ----
+
+    // Test T16-13: Type parameter T in function body resolves to TypeVar
+    #[test]
+    fn test_resolve_type_param_in_generic_scope() {
+        let registry = crate::registry::TypeRegistry::new();
+        let generic_names = vec!["T".to_owned()];
+        let ann = TypeAnnotation {
+            kind: TypeKind::Named(ident("T", 0, 1)),
+            span: span(0, 1),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_generics(&ann, &registry, &generic_names, &mut diags);
+        assert_eq!(ty, Type::TypeVar("T".to_owned()));
+        assert!(diags.is_empty());
+    }
+
+    // Test T16-14: Generic type annotation resolves to Type::Generic
+    #[test]
+    fn test_resolve_generic_type_annotation() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Generic(
+                ident("Array", 0, 5),
+                vec![TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }],
+            ),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_generics(&ann, &registry, &[], &mut diags);
+        match &ty {
+            Type::Generic(name, args) => {
+                assert_eq!(name, "Array");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Type::String);
+            }
+            _ => panic!("expected Generic type, got {ty:?}"),
+        }
     }
 }

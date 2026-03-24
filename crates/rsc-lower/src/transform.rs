@@ -9,7 +9,7 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustExpr,
     RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustParam,
-    RustReturnStmt, RustStmt, RustStructDef, RustType, RustUnaryOp, RustWhileStmt,
+    RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -76,13 +76,15 @@ impl Transform {
     /// Register a type definition in the type registry during the pre-pass.
     fn register_type_def(&mut self, td: &ast::TypeDef, ctx: &mut LoweringContext) {
         let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
         let fields: Vec<(String, Type)> = td
             .fields
             .iter()
             .map(|f| {
-                let ty = resolve::resolve_type_annotation_with_registry(
+                let ty = resolve::resolve_type_annotation_with_generics(
                     &f.type_ann,
                     &self.type_registry,
+                    &generic_names,
                     &mut diags,
                 );
                 (f.name.name.clone(), ty)
@@ -97,13 +99,16 @@ impl Transform {
     /// Lower a type definition to a Rust struct.
     fn lower_type_def(&self, td: &ast::TypeDef, ctx: &mut LoweringContext) -> RustStructDef {
         let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+        let type_params = lower_type_params(td.type_params.as_ref());
         let fields = td
             .fields
             .iter()
             .map(|f| {
-                let ty = resolve::resolve_type_annotation_with_registry(
+                let ty = resolve::resolve_type_annotation_with_generics(
                     &f.type_ann,
                     &self.type_registry,
+                    &generic_names,
                     &mut diags,
                 );
                 let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
@@ -120,6 +125,7 @@ impl Transform {
         }
         RustStructDef {
             name: td.name.name.clone(),
+            type_params,
             fields,
             span: Some(td.span),
         }
@@ -131,6 +137,9 @@ impl Transform {
     /// a use map, then lowers the body with that context.
     pub fn lower_fn(&self, f: &ast::FnDecl, ctx: &mut LoweringContext) -> RustFnDecl {
         ctx.push_scope();
+
+        let generic_names = collect_generic_param_names(f.type_params.as_ref());
+        let type_params = lower_type_params(f.type_params.as_ref());
 
         // Phase 1: find reassigned variables for mutability analysis
         let reassigned = ownership::find_reassigned_variables(&f.body);
@@ -146,9 +155,10 @@ impl Transform {
             .iter()
             .map(|p| {
                 let mut diags = Vec::new();
-                let ty_inner = resolve::resolve_type_annotation_with_registry(
+                let ty_inner = resolve::resolve_type_annotation_with_generics(
                     &p.type_ann,
                     &self.type_registry,
+                    &generic_names,
                     &mut diags,
                 );
                 let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
@@ -166,9 +176,10 @@ impl Transform {
 
         let return_type = f.return_type.as_ref().and_then(|ann| {
             let mut diags = Vec::new();
-            let ty_inner = resolve::resolve_type_annotation_with_registry(
+            let ty_inner = resolve::resolve_type_annotation_with_generics(
                 ann,
                 &self.type_registry,
+                &generic_names,
                 &mut diags,
             );
             let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
@@ -188,6 +199,7 @@ impl Transform {
 
         RustFnDecl {
             name: f.name.name.clone(),
+            type_params,
             params,
             return_type,
             body,
@@ -664,6 +676,46 @@ fn lower_unary_op(op: ast::UnaryOp) -> RustUnaryOp {
     }
 }
 
+/// Collect generic parameter names from an optional `TypeParams`.
+///
+/// Returns a `Vec<String>` of type parameter names (e.g., `["T", "U"]`).
+/// Used to set up the generic scope during lowering.
+fn collect_generic_param_names(type_params: Option<&ast::TypeParams>) -> Vec<String> {
+    match type_params {
+        Some(tp) => tp.params.iter().map(|p| p.name.name.clone()).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Lower AST type parameters to Rust IR type parameters.
+///
+/// Maps `T extends Bound` to `RustTypeParam { name: "T", bounds: vec!["Bound"] }`.
+fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam> {
+    match type_params {
+        Some(tp) => tp
+            .params
+            .iter()
+            .map(|p| {
+                let bounds = p
+                    .constraint
+                    .as_ref()
+                    .map(|c| match &c.kind {
+                        ast::TypeKind::Named(ident) | ast::TypeKind::Generic(ident, _) => {
+                            vec![ident.name.clone()]
+                        }
+                        ast::TypeKind::Void => vec![],
+                    })
+                    .unwrap_or_default();
+                RustTypeParam {
+                    name: p.name.name.clone(),
+                    bounds,
+                }
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Check if the expression is a literal whose default inferred type matches `ty`.
 ///
 /// When this returns `true`, the type annotation can be omitted on the `let`
@@ -765,6 +817,7 @@ mod tests {
     ) -> FnDecl {
         FnDecl {
             name: ident(name, 0, name.len() as u32),
+            type_params: None,
             params,
             return_type,
             body: Block {
@@ -1174,6 +1227,7 @@ mod tests {
         // }
         let f = FnDecl {
             name: ident("fib", 0, 3),
+            type_params: None,
             params: vec![make_param("n", "i32")],
             return_type: Some(TypeAnnotation {
                 kind: TypeKind::Named(ident("i32", 0, 3)),
@@ -1286,6 +1340,7 @@ mod tests {
         // }
         let f = FnDecl {
             name: ident("example", 0, 7),
+            type_params: None,
             params: vec![make_param("name", "string")],
             return_type: Some(TypeAnnotation {
                 kind: TypeKind::Void,
@@ -1357,6 +1412,7 @@ mod tests {
         // }
         let f = FnDecl {
             name: ident("example", 0, 7),
+            type_params: None,
             params: vec![make_param("name", "string")],
             return_type: Some(TypeAnnotation {
                 kind: TypeKind::Void,
@@ -1440,6 +1496,7 @@ mod tests {
         // }
         let f = FnDecl {
             name: ident("counter", 0, 7),
+            type_params: None,
             params: vec![],
             return_type: Some(TypeAnnotation {
                 kind: TypeKind::Void,
@@ -1759,6 +1816,7 @@ mod tests {
     fn test_lower_type_def_produces_struct_with_pub_fields() {
         let td = ast::TypeDef {
             name: ident("User", 0, 4),
+            type_params: None,
             fields: vec![
                 ast::FieldDef {
                     name: ident("name", 0, 4),
@@ -1809,6 +1867,7 @@ mod tests {
     fn test_lower_struct_literal_produces_struct_lit_expr() {
         let td = ast::TypeDef {
             name: ident("Point", 0, 5),
+            type_params: None,
             fields: vec![
                 ast::FieldDef {
                     name: ident("x", 0, 1),
@@ -1932,5 +1991,157 @@ mod tests {
             },
             other => panic!("expected Semi, got {other:?}"),
         }
+    }
+
+    // ---- Task 016: Generics lowering ----
+
+    // Test T16-6: Lower generic function → RustFnDecl with type_params
+    #[test]
+    fn test_lower_generic_fn_produces_type_params() {
+        let f = FnDecl {
+            name: ident("id", 0, 2),
+            type_params: Some(ast::TypeParams {
+                params: vec![ast::TypeParam {
+                    name: ident("T", 0, 1),
+                    constraint: None,
+                    span: span(0, 1),
+                }],
+                span: span(0, 3),
+            }),
+            params: vec![Param {
+                name: ident("x", 0, 1),
+                type_ann: TypeAnnotation {
+                    kind: TypeKind::Named(ident("T", 0, 1)),
+                    span: span(0, 1),
+                },
+                span: span(0, 3),
+            }],
+            return_type: Some(TypeAnnotation {
+                kind: TypeKind::Named(ident("T", 0, 1)),
+                span: span(0, 1),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(ident_expr("x", 0, 1)),
+                    span: span(0, 10),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 30),
+        };
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected Function");
+        };
+        assert_eq!(func.type_params.len(), 1);
+        assert_eq!(func.type_params[0].name, "T");
+        assert!(func.type_params[0].bounds.is_empty());
+        assert_eq!(func.params[0].ty, RustType::TypeParam("T".to_owned()));
+        assert_eq!(func.return_type, Some(RustType::TypeParam("T".to_owned())));
+    }
+
+    // Test T16-7: Lower constrained generic → RustTypeParam with bounds
+    #[test]
+    fn test_lower_constrained_generic_produces_bounds() {
+        let f = FnDecl {
+            name: ident("merge", 0, 5),
+            type_params: Some(ast::TypeParams {
+                params: vec![ast::TypeParam {
+                    name: ident("T", 0, 1),
+                    constraint: Some(TypeAnnotation {
+                        kind: TypeKind::Named(ident("Comparable", 0, 10)),
+                        span: span(0, 10),
+                    }),
+                    span: span(0, 20),
+                }],
+                span: span(0, 22),
+            }),
+            params: vec![
+                Param {
+                    name: ident("a", 0, 1),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("T", 0, 1)),
+                        span: span(0, 1),
+                    },
+                    span: span(0, 3),
+                },
+                Param {
+                    name: ident("b", 0, 1),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("T", 0, 1)),
+                        span: span(0, 1),
+                    },
+                    span: span(0, 3),
+                },
+            ],
+            return_type: Some(TypeAnnotation {
+                kind: TypeKind::Named(ident("T", 0, 1)),
+                span: span(0, 1),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(ident_expr("a", 0, 1)),
+                    span: span(0, 10),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected Function");
+        };
+        assert_eq!(func.type_params.len(), 1);
+        assert_eq!(func.type_params[0].name, "T");
+        assert_eq!(func.type_params[0].bounds, vec!["Comparable".to_owned()]);
+    }
+
+    // Test T16-8: Lower generic struct → RustStructDef with type_params
+    #[test]
+    fn test_lower_generic_struct_produces_type_params() {
+        let td = ast::TypeDef {
+            name: ident("Container", 0, 9),
+            type_params: Some(ast::TypeParams {
+                params: vec![ast::TypeParam {
+                    name: ident("T", 0, 1),
+                    constraint: None,
+                    span: span(0, 1),
+                }],
+                span: span(0, 3),
+            }),
+            fields: vec![ast::FieldDef {
+                name: ident("value", 0, 5),
+                type_ann: TypeAnnotation {
+                    kind: TypeKind::Named(ident("T", 0, 1)),
+                    span: span(0, 1),
+                },
+                span: span(0, 8),
+            }],
+            span: span(0, 30),
+        };
+        let module = make_module(vec![Item {
+            kind: ItemKind::TypeDef(td),
+            exported: false,
+            span: span(0, 30),
+        }]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Struct(s) = &file.items[0] else {
+            panic!("expected Struct");
+        };
+        assert_eq!(s.name, "Container");
+        assert_eq!(s.type_params.len(), 1);
+        assert_eq!(s.type_params[0].name, "T");
+        assert_eq!(s.fields[0].ty, RustType::TypeParam("T".to_owned()));
     }
 }

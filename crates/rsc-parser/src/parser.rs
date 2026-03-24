@@ -7,8 +7,8 @@
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, Expr, ExprKind,
     FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item, ItemKind, MethodCallExpr,
-    Module, Param, ReturnStmt, Stmt, StructLitExpr, TypeAnnotation, TypeDef, TypeKind, UnaryExpr,
-    UnaryOp, VarBinding, VarDecl, WhileStmt,
+    Module, Param, ReturnStmt, Stmt, StructLitExpr, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -171,6 +171,7 @@ impl Parser {
             TokenKind::Semicolon => "`;`",
             TokenKind::Dot => "`.`",
             TokenKind::Type => "`type`",
+            TokenKind::Extends => "`extends`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -268,13 +269,20 @@ impl Parser {
     // Function declarations
     // ---------------------------------------------------------------
 
-    /// Parse a function declaration: `function IDENT ( params ) : type { body }`.
+    /// Parse a function declaration: `function IDENT<T>( params ) : type { body }`.
     fn parse_function_decl(&mut self) -> Option<FnDecl> {
         let fn_token = self.advance(); // consume `function`
         let start = fn_token.span;
 
         // Function name
         let name = self.parse_ident()?;
+
+        // Optional generic type parameters: `<T, U extends Clone>`
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
 
         // Parameter list
         self.expect(&TokenKind::LParen)?;
@@ -299,6 +307,7 @@ impl Parser {
         let span = start.merge(body.span);
         Some(FnDecl {
             name,
+            type_params,
             params,
             return_type,
             body,
@@ -310,12 +319,20 @@ impl Parser {
     // Type definitions
     // ---------------------------------------------------------------
 
-    /// Parse a type definition: `type NAME = { field: Type, ... }`.
+    /// Parse a type definition: `type NAME<T> = { field: Type, ... }`.
     fn parse_type_def(&mut self) -> Option<TypeDef> {
         let type_token = self.advance(); // consume `type`
         let start = type_token.span;
 
         let name = self.parse_ident()?;
+
+        // Optional generic type parameters: `<T, U extends Clone>`
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
         self.expect(&TokenKind::Eq)?;
         self.expect(&TokenKind::LBrace)?;
 
@@ -324,7 +341,12 @@ impl Parser {
         let close = self.expect(&TokenKind::RBrace)?;
         let span = start.merge(close.span);
 
-        Some(TypeDef { name, fields, span })
+        Some(TypeDef {
+            name,
+            type_params,
+            fields,
+            span,
+        })
     }
 
     /// Parse a comma-separated list of field definitions: `name: Type, ...`.
@@ -364,6 +386,56 @@ impl Parser {
         }
 
         fields
+    }
+
+    // ---------------------------------------------------------------
+    // Generic type parameters
+    // ---------------------------------------------------------------
+
+    /// Parse generic type parameters: `< T, U extends Clone >`.
+    ///
+    /// Called when `<` has been peeked after a function name or type name.
+    fn parse_type_params(&mut self) -> Option<TypeParams> {
+        let open = self.advance(); // consume `<`
+        let start = open.span;
+        let mut params = Vec::new();
+
+        if !self.check(&TokenKind::Gt) && !self.at_end() {
+            loop {
+                let param_start = self.current_token().span;
+                let name = self.parse_ident()?;
+
+                // Optional constraint: `extends Bound`
+                let constraint = if self.check(&TokenKind::Extends) {
+                    self.advance(); // consume `extends`
+                    let bound = self.parse_type_annotation()?;
+                    Some(bound)
+                } else {
+                    None
+                };
+
+                let param_end = constraint.as_ref().map_or(name.span, |c| c.span);
+                params.push(TypeParam {
+                    name,
+                    constraint,
+                    span: param_start.merge(param_end),
+                });
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::Gt) {
+                    break;
+                }
+            }
+        }
+
+        let close = self.expect(&TokenKind::Gt)?;
+        let span = start.merge(close.span);
+
+        Some(TypeParams { params, span })
     }
 
     /// Parse a comma-separated parameter list (without the surrounding parens).
@@ -406,7 +478,9 @@ impl Parser {
         })
     }
 
-    /// Parse a type annotation: `void` or an identifier.
+    /// Parse a type annotation: `void`, a named type, or a generic type.
+    ///
+    /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, etc.
     fn parse_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let token = self.current_token().clone();
         match &token.kind {
@@ -419,11 +493,41 @@ impl Parser {
             }
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
-                let span = ident.span;
-                Some(TypeAnnotation {
-                    kind: TypeKind::Named(ident),
-                    span,
-                })
+                let start_span = ident.span;
+
+                // Check for generic type arguments: `<T, U>`
+                if self.check(&TokenKind::Lt) {
+                    self.advance(); // consume `<`
+                    let mut args = Vec::new();
+
+                    if !self.check(&TokenKind::Gt) && !self.at_end() {
+                        loop {
+                            let arg = self.parse_type_annotation()?;
+                            args.push(arg);
+
+                            if !self.eat(&TokenKind::Comma) {
+                                break;
+                            }
+
+                            // Allow trailing comma
+                            if self.check(&TokenKind::Gt) {
+                                break;
+                            }
+                        }
+                    }
+
+                    let close = self.expect(&TokenKind::Gt)?;
+                    let span = start_span.merge(close.span);
+                    Some(TypeAnnotation {
+                        kind: TypeKind::Generic(ident, args),
+                        span,
+                    })
+                } else {
+                    Some(TypeAnnotation {
+                        kind: TypeKind::Named(ident),
+                        span: start_span,
+                    })
+                }
             }
             _ => {
                 self.diagnostics.push(
@@ -1343,6 +1447,7 @@ mod tests {
         match &ret.kind {
             TypeKind::Named(ident) => assert_eq!(ident.name, "i32"),
             TypeKind::Void => panic!("expected Named, got Void"),
+            TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
         }
         // Body has one return statement
         assert_eq!(f.body.stmts.len(), 1);
@@ -2181,6 +2286,161 @@ mod tests {
         match &module.items[0].kind {
             ItemKind::TypeDef(td) => assert_eq!(td.name.name, "Foo"),
             _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // ---- Task 016: Generics ----
+
+    // Test T16-1: Parse `function id<T>(x: T): T`
+    #[test]
+    fn test_parser_generic_fn_single_type_param() {
+        let source = "function id<T>(x: T): T { return x; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "id");
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 1);
+        assert_eq!(tp.params[0].name.name, "T");
+        assert!(tp.params[0].constraint.is_none());
+        assert_eq!(f.params.len(), 1);
+        assert_eq!(f.params[0].name.name, "x");
+    }
+
+    // Test T16-2: Parse `function merge<T extends Comparable>(a: T, b: T): T`
+    #[test]
+    fn test_parser_generic_fn_constrained_type_param() {
+        let source = "function merge<T extends Comparable>(a: T, b: T): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "merge");
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 1);
+        assert_eq!(tp.params[0].name.name, "T");
+        let constraint = tp.params[0]
+            .constraint
+            .as_ref()
+            .expect("expected constraint");
+        match &constraint.kind {
+            TypeKind::Named(ident) => assert_eq!(ident.name, "Comparable"),
+            _ => panic!("expected Named constraint"),
+        }
+    }
+
+    // Test T16-3: Parse `type Container<T> = { value: T }`
+    #[test]
+    fn test_parser_generic_type_def() {
+        let source = "type Container<T> = { value: T }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Container");
+                let tp = td.type_params.as_ref().expect("expected type params");
+                assert_eq!(tp.params.len(), 1);
+                assert_eq!(tp.params[0].name.name, "T");
+                assert_eq!(td.fields.len(), 1);
+                assert_eq!(td.fields[0].name.name, "value");
+                match &td.fields[0].type_ann.kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "T"),
+                    _ => panic!("expected Named type T for field"),
+                }
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test T16-4: Parse `const x: Array<string>` → TypeKind::Generic
+    #[test]
+    fn test_parser_generic_type_annotation_single_arg() {
+        let source = "function main() { const x: Array<string> = 0; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = &f.body.stmts[0];
+        match stmt {
+            Stmt::VarDecl(vd) => {
+                let ann = vd.type_ann.as_ref().expect("expected type ann");
+                match &ann.kind {
+                    TypeKind::Generic(ident, args) => {
+                        assert_eq!(ident.name, "Array");
+                        assert_eq!(args.len(), 1);
+                        match &args[0].kind {
+                            TypeKind::Named(n) => assert_eq!(n.name, "string"),
+                            _ => panic!("expected Named string arg"),
+                        }
+                    }
+                    _ => panic!("expected Generic type annotation"),
+                }
+            }
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test T16-5: Parse `const m: Map<string, u32>` → generic type with 2 args
+    #[test]
+    fn test_parser_generic_type_annotation_two_args() {
+        let source = "function main() { const m: Map<string, u32> = 0; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = &f.body.stmts[0];
+        match stmt {
+            Stmt::VarDecl(vd) => {
+                let ann = vd.type_ann.as_ref().expect("expected type ann");
+                match &ann.kind {
+                    TypeKind::Generic(ident, args) => {
+                        assert_eq!(ident.name, "Map");
+                        assert_eq!(args.len(), 2);
+                        match &args[0].kind {
+                            TypeKind::Named(n) => assert_eq!(n.name, "string"),
+                            _ => panic!("expected Named string"),
+                        }
+                        match &args[1].kind {
+                            TypeKind::Named(n) => assert_eq!(n.name, "u32"),
+                            _ => panic!("expected Named u32"),
+                        }
+                    }
+                    _ => panic!("expected Generic type annotation"),
+                }
+            }
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test T16-6: Multiple generic type params: `function swap<T, U>(a: T, b: U): T`
+    #[test]
+    fn test_parser_generic_fn_multiple_type_params() {
+        let source = "function swap<T, U>(a: T, b: U): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 2);
+        assert_eq!(tp.params[0].name.name, "T");
+        assert_eq!(tp.params[1].name.name, "U");
+    }
+
+    // Test T16-7: Non-generic function has type_params = None
+    #[test]
+    fn test_parser_non_generic_fn_has_no_type_params() {
+        let source = "function add(a: i32, b: i32): i32 { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert!(f.type_params.is_none());
+    }
+
+    // Test T16-8: extends keyword lexes correctly
+    #[test]
+    fn test_parser_extends_keyword_in_generics() {
+        let source = "function max<T extends PartialOrd>(a: T, b: T): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params[0].name.name, "T");
+        let constraint = tp.params[0]
+            .constraint
+            .as_ref()
+            .expect("expected constraint");
+        match &constraint.kind {
+            TypeKind::Named(ident) => assert_eq!(ident.name, "PartialOrd"),
+            _ => panic!("expected Named constraint"),
         }
     }
 }
