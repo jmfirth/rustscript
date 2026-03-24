@@ -116,9 +116,12 @@ impl Project {
         let src_dir = build_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
-        // Write Cargo.toml (always overwrite)
+        // Write Cargo.toml (always overwrite).
+        // The [workspace] section prevents Cargo from walking up and discovering
+        // the project root's cargo.toml as a workspace root (which would fail
+        // because that manifest has no targets).
         let cargo_toml = format!(
-            "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
             self.name
         );
         fs::write(build_dir.join("Cargo.toml"), cargo_toml)?;
