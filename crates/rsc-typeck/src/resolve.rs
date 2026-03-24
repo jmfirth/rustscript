@@ -44,7 +44,7 @@ pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
     match &expr.kind {
         ast::ExprKind::IntLit(_) => Some(Type::Primitive(PrimitiveType::I64)),
         ast::ExprKind::FloatLit(_) => Some(Type::Primitive(PrimitiveType::F64)),
-        ast::ExprKind::StringLit(_) => Some(Type::String),
+        ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => Some(Type::String),
         ast::ExprKind::BoolLit(_) => Some(Type::Primitive(PrimitiveType::Bool)),
         _ => None,
     }

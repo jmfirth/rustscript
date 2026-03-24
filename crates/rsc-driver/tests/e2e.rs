@@ -272,3 +272,56 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "Portland");
 }
+
+// ---------------------------------------------------------------------------
+// 13. Template Literal — Simple Interpolation (Task 025)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_template_simple_interpolation_prints_hello_alice() {
+    let source = "\
+function main() {
+  const name = \"Alice\";
+  const greeting = `Hello, ${name}!`;
+  console.log(greeting);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Hello, Alice!");
+}
+
+// ---------------------------------------------------------------------------
+// 14. Template Literal — Expression Interpolation (Task 025)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_template_expression_interpolation_prints_sum() {
+    let source = "\
+function main() {
+  const a: i32 = 5;
+  const b: i32 = 3;
+  console.log(`${a} + ${b} = ${a + b}`);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "5 + 3 = 8");
+}
+
+// ---------------------------------------------------------------------------
+// 15. Template Literal — No Interpolation (Task 025)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_template_no_interpolation_prints_hello_world() {
+    let source = "\
+function main() {
+  const msg = `hello world`;
+  console.log(msg);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "hello world");
+}

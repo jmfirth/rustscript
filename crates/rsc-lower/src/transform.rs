@@ -543,6 +543,9 @@ impl Transform {
                     expr.span,
                 )
             }
+            ast::ExprKind::TemplateLit(tpl) => {
+                self.lower_template_lit(tpl, expr.span, ctx, use_map, stmt_index)
+            }
         }
     }
 
@@ -647,6 +650,60 @@ impl Transform {
 
         RustExpr::new(RustExprKind::StructLit { type_name, fields }, span)
     }
+
+    /// Lower a template literal expression.
+    ///
+    /// - No interpolation: lowers to `"text".to_string()`
+    /// - With interpolation: lowers to `format!("text{}text", expr, ...)`
+    fn lower_template_lit(
+        &self,
+        tpl: &ast::TemplateLitExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        // Separate string parts and expression parts
+        let mut strings: Vec<&str> = Vec::new();
+        let mut exprs: Vec<&ast::Expr> = Vec::new();
+
+        for part in &tpl.parts {
+            match part {
+                ast::TemplatePart::String(s, _) => strings.push(s),
+                ast::TemplatePart::Expr(e) => exprs.push(e),
+            }
+        }
+
+        // No interpolation: just a plain string
+        if exprs.is_empty() {
+            let text = strings.join("");
+            let lit = RustExpr::new(RustExprKind::StringLit(text), span);
+            return RustExpr::synthetic(RustExprKind::ToString(Box::new(lit)));
+        }
+
+        // Build the format string by joining string segments with `{}`
+        let mut format_str = String::new();
+        for (i, s) in strings.iter().enumerate() {
+            format_str.push_str(s);
+            if i < exprs.len() {
+                format_str.push_str("{}");
+            }
+        }
+
+        // Build the format! arguments: format string + lowered expressions
+        let mut args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
+        for expr in &exprs {
+            args.push(self.lower_expr(expr, ctx, use_map, stmt_index));
+        }
+
+        RustExpr::new(
+            RustExprKind::Macro {
+                name: "format".to_owned(),
+                args,
+            },
+            span,
+        )
+    }
 }
 
 /// Map a `RustScript` binary operator to a Rust binary operator.
@@ -725,7 +782,7 @@ fn is_default_literal_type(expr: &ast::Expr, ty: &RustType) -> bool {
         ast::ExprKind::IntLit(_) => *ty == RustType::I64,
         ast::ExprKind::FloatLit(_) => *ty == RustType::F64,
         ast::ExprKind::BoolLit(_) => *ty == RustType::Bool,
-        ast::ExprKind::StringLit(_) => *ty == RustType::String,
+        ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => *ty == RustType::String,
         _ => false,
     }
 }
@@ -2143,5 +2200,200 @@ mod tests {
         assert_eq!(s.type_params.len(), 1);
         assert_eq!(s.type_params[0].name, "T");
         assert_eq!(s.fields[0].ty, RustType::TypeParam("T".to_owned()));
+    }
+
+    // ---------------------------------------------------------------
+    // Template literal lowering tests
+    // ---------------------------------------------------------------
+
+    // Test: Lower no-interpolation template → .to_string()
+    #[test]
+    fn test_lower_template_no_interpolation_produces_to_string() {
+        let template_expr = Expr {
+            kind: ExprKind::TemplateLit(ast::TemplateLitExpr {
+                parts: vec![ast::TemplatePart::String(
+                    "hello world".to_owned(),
+                    span(0, 11),
+                )],
+            }),
+            span: span(0, 14),
+        };
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("msg", 0, 3),
+                type_ann: None,
+                init: template_expr,
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let stmt");
+        };
+        // Should be .to_string() wrapping a string literal
+        assert!(
+            matches!(&let_stmt.init.kind, RustExprKind::ToString(inner) if
+                matches!(&inner.kind, RustExprKind::StringLit(s) if s == "hello world")
+            ),
+            "expected ToString(StringLit(\"hello world\")), got {:?}",
+            let_stmt.init.kind
+        );
+    }
+
+    // Test: Lower single interpolation → format!("Hello, {}!", name)
+    #[test]
+    fn test_lower_template_single_interpolation_produces_format_macro() {
+        let template_expr = Expr {
+            kind: ExprKind::TemplateLit(ast::TemplateLitExpr {
+                parts: vec![
+                    ast::TemplatePart::String("Hello, ".to_owned(), span(0, 7)),
+                    ast::TemplatePart::Expr(ident_expr("name", 10, 14)),
+                    ast::TemplatePart::String("!".to_owned(), span(15, 16)),
+                ],
+            }),
+            span: span(0, 18),
+        };
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("greeting", 0, 8),
+                type_ann: None,
+                init: template_expr,
+                span: span(0, 25),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let stmt");
+        };
+        let RustExprKind::Macro { name, args } = &let_stmt.init.kind else {
+            panic!("expected Macro, got {:?}", let_stmt.init.kind);
+        };
+        assert_eq!(name, "format");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "Hello, {}!"));
+        assert!(matches!(&args[1].kind, RustExprKind::Ident(n) if n == "name"));
+    }
+
+    // Test: Lower multiple interpolations → format! with multiple args
+    #[test]
+    fn test_lower_template_multiple_interpolations_produces_format_with_multiple_args() {
+        let template_expr = Expr {
+            kind: ExprKind::TemplateLit(ast::TemplateLitExpr {
+                parts: vec![
+                    ast::TemplatePart::String(String::new(), span(0, 0)),
+                    ast::TemplatePart::Expr(ident_expr("a", 2, 3)),
+                    ast::TemplatePart::String(" + ".to_owned(), span(4, 7)),
+                    ast::TemplatePart::Expr(ident_expr("b", 9, 10)),
+                    ast::TemplatePart::String(" = ".to_owned(), span(11, 14)),
+                    ast::TemplatePart::Expr(ident_expr("c", 16, 17)),
+                    ast::TemplatePart::String(String::new(), span(18, 18)),
+                ],
+            }),
+            span: span(0, 20),
+        };
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: None,
+                init: template_expr,
+                span: span(0, 30),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let stmt");
+        };
+        let RustExprKind::Macro { name, args } = &let_stmt.init.kind else {
+            panic!("expected Macro, got {:?}", let_stmt.init.kind);
+        };
+        assert_eq!(name, "format");
+        assert_eq!(args.len(), 4); // format string + 3 exprs
+        assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "{} + {} = {}"));
+    }
+
+    // Test: Lower expression interpolation → format!("Result: {}", x + y)
+    #[test]
+    fn test_lower_template_expression_interpolation_produces_format_with_binary() {
+        let binary_expr = Expr {
+            kind: ExprKind::Binary(BinaryExpr {
+                op: BinaryOp::Add,
+                left: Box::new(ident_expr("x", 10, 11)),
+                right: Box::new(ident_expr("y", 14, 15)),
+            }),
+            span: span(10, 15),
+        };
+        let template_expr = Expr {
+            kind: ExprKind::TemplateLit(ast::TemplateLitExpr {
+                parts: vec![
+                    ast::TemplatePart::String("Result: ".to_owned(), span(0, 8)),
+                    ast::TemplatePart::Expr(binary_expr),
+                    ast::TemplatePart::String(String::new(), span(16, 16)),
+                ],
+            }),
+            span: span(0, 18),
+        };
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: None,
+                init: template_expr,
+                span: span(0, 25),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let stmt");
+        };
+        let RustExprKind::Macro { name, args } = &let_stmt.init.kind else {
+            panic!("expected Macro, got {:?}", let_stmt.init.kind);
+        };
+        assert_eq!(name, "format");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "Result: {}"));
+        assert!(matches!(&args[1].kind, RustExprKind::Binary { .. }));
     }
 }

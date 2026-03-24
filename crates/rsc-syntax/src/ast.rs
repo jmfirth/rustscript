@@ -329,6 +329,9 @@ pub enum ExprKind {
     /// Field access: `user.name`.
     /// Lowers to Rust field access `expr.field`.
     FieldAccess(FieldAccessExpr),
+    /// Template literal: `` `Hello, ${name}!` ``.
+    /// Lowers to `format!("Hello, {}!", name)` or a simple string for no-interpolation cases.
+    TemplateLit(TemplateLitExpr),
 }
 
 /// A binary expression with an operator and two operands.
@@ -488,6 +491,26 @@ pub struct FieldAccessExpr {
     pub object: Box<Expr>,
     /// The field name.
     pub field: Ident,
+}
+
+/// A template literal expression: `` `Hello, ${name}!` ``.
+///
+/// Contains alternating string segments and interpolated expressions.
+/// Lowers to `format!("Hello, {}!", name)` when interpolations are present,
+/// or to a simple `"text".to_string()` when there are none.
+#[derive(Debug, Clone)]
+pub struct TemplateLitExpr {
+    /// The parts of the template, alternating between string segments and expressions.
+    pub parts: Vec<TemplatePart>,
+}
+
+/// A part of a template literal — either a string segment or an interpolated expression.
+#[derive(Debug, Clone)]
+pub enum TemplatePart {
+    /// A literal string segment.
+    String(String, Span),
+    /// An interpolated expression: `${expr}`.
+    Expr(Expr),
 }
 
 #[cfg(test)]
