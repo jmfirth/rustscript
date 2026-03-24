@@ -5,10 +5,11 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, Expr, ExprKind,
-    FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item, ItemKind, MethodCallExpr,
-    Module, Param, ReturnStmt, Stmt, StructLitExpr, TemplateLitExpr, TemplatePart, TypeAnnotation,
-    TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, EnumDef,
+    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item,
+    ItemKind, MethodCallExpr, Module, Param, ReturnStmt, Stmt, StructLitExpr, SwitchCase,
+    SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -23,6 +24,22 @@ use crate::token::{Token, TokenKind};
 /// level in debug builds. Each expression depth level uses ~10 stack
 /// frames through the precedence hierarchy.
 const MAX_EXPR_DEPTH: usize = 64;
+
+/// Capitalize the first letter of a string.
+///
+/// Used to derive Rust enum variant names from `RustScript` string literals
+/// (e.g., `"north"` → `"North"`).
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => {
+            let mut result = c.to_uppercase().to_string();
+            result.push_str(chars.as_str());
+            result
+        }
+        None => String::new(),
+    }
+}
 
 /// Recursive descent parser for the `RustScript` Phase 0 grammar.
 ///
@@ -172,6 +189,9 @@ impl Parser {
             TokenKind::Dot => "`.`",
             TokenKind::Type => "`type`",
             TokenKind::Extends => "`extends`",
+            TokenKind::Switch => "`switch`",
+            TokenKind::Case => "`case`",
+            TokenKind::Pipe => "`|`",
             TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
             TokenKind::TemplateMiddle(_) => "template literal middle",
             TokenKind::TemplateTail(_) => "template literal tail",
@@ -196,7 +216,8 @@ impl Parser {
                 | TokenKind::While
                 | TokenKind::Return
                 | TokenKind::Function
-                | TokenKind::Type => return,
+                | TokenKind::Type
+                | TokenKind::Switch => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -241,14 +262,7 @@ impl Parser {
                     span,
                 }
             }),
-            TokenKind::Type => self.parse_type_def().map(|td| {
-                let span = td.span;
-                Item {
-                    kind: ItemKind::TypeDef(td),
-                    exported: false,
-                    span,
-                }
-            }),
+            TokenKind::Type => self.parse_type_or_enum_def(),
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -322,8 +336,13 @@ impl Parser {
     // Type definitions
     // ---------------------------------------------------------------
 
-    /// Parse a type definition: `type NAME<T> = { field: Type, ... }`.
-    fn parse_type_def(&mut self) -> Option<TypeDef> {
+    /// Disambiguate and parse a type definition or enum definition.
+    ///
+    /// After `type Name =`, the next token determines what we're parsing:
+    /// - `{` followed by `ident :` → struct type def
+    /// - String literal → simple enum
+    /// - `|` → data enum (discriminated union)
+    fn parse_type_or_enum_def(&mut self) -> Option<Item> {
         let type_token = self.advance(); // consume `type`
         let start = type_token.span;
 
@@ -337,17 +356,166 @@ impl Parser {
         };
 
         self.expect(&TokenKind::Eq)?;
-        self.expect(&TokenKind::LBrace)?;
 
-        let fields = self.parse_field_def_list();
+        // Disambiguate: string literal → simple enum, `|` → data enum, `{` → struct
+        match self.peek() {
+            TokenKind::StringLit(_) => {
+                // Simple enum: type Name = "a" | "b" | "c"
+                let enum_def = self.parse_simple_enum(name, start)?;
+                let span = enum_def.span;
+                Some(Item {
+                    kind: ItemKind::EnumDef(enum_def),
+                    exported: false,
+                    span,
+                })
+            }
+            TokenKind::Pipe => {
+                // Data enum: type Name = | { kind: "a", ... } | { kind: "b", ... }
+                let enum_def = self.parse_data_enum(name, start)?;
+                let span = enum_def.span;
+                Some(Item {
+                    kind: ItemKind::EnumDef(enum_def),
+                    exported: false,
+                    span,
+                })
+            }
+            _ => {
+                // Struct type def: type Name = { field: Type, ... }
+                self.expect(&TokenKind::LBrace)?;
+                let fields = self.parse_field_def_list();
+                let close = self.expect(&TokenKind::RBrace)?;
+                let span = start.merge(close.span);
+                let td = TypeDef {
+                    name,
+                    type_params,
+                    fields,
+                    span,
+                };
+                Some(Item {
+                    kind: ItemKind::TypeDef(td),
+                    exported: false,
+                    span,
+                })
+            }
+        }
+    }
 
-        let close = self.expect(&TokenKind::RBrace)?;
-        let span = start.merge(close.span);
+    /// Parse a simple enum: `"a" | "b" | "c"`.
+    ///
+    /// Called after `type Name =` has been consumed.
+    fn parse_simple_enum(&mut self, name: Ident, start: Span) -> Option<EnumDef> {
+        let mut variants = Vec::new();
 
-        Some(TypeDef {
+        loop {
+            let token = self.current_token().clone();
+            if let TokenKind::StringLit(value) = &token.kind {
+                let variant_name = capitalize_first(&value.clone());
+                self.advance();
+                variants.push(EnumVariant::Simple(
+                    Ident {
+                        name: variant_name,
+                        span: token.span,
+                    },
+                    token.span,
+                ));
+            } else {
+                self.diagnostics.push(
+                    Diagnostic::error("expected string literal for enum variant").with_label(
+                        token.span,
+                        self.file_id,
+                        "expected string literal",
+                    ),
+                );
+                return None;
+            }
+
+            if !self.eat(&TokenKind::Pipe) {
+                break;
+            }
+        }
+
+        let span = start.merge(self.previous_span());
+        Some(EnumDef {
             name,
-            type_params,
-            fields,
+            variants,
+            span,
+        })
+    }
+
+    /// Parse a data enum (discriminated union): `| { kind: "a", ... } | { kind: "b", ... }`.
+    ///
+    /// Called after `type Name =` has been consumed, with `|` as current token.
+    fn parse_data_enum(&mut self, name: Ident, start: Span) -> Option<EnumDef> {
+        let mut variants = Vec::new();
+
+        while self.eat(&TokenKind::Pipe) {
+            self.expect(&TokenKind::LBrace)?;
+
+            // First field must be the discriminant: `kind: "value"`
+            let kind_ident = self.parse_ident()?;
+            if kind_ident.name != "kind" {
+                self.diagnostics.push(
+                    Diagnostic::error("data enum variants must start with a `kind` discriminant")
+                        .with_label(kind_ident.span, self.file_id, "expected `kind`"),
+                );
+                return None;
+            }
+            self.expect(&TokenKind::Colon)?;
+
+            let disc_token = self.current_token().clone();
+            let discriminant_value =
+                if let TokenKind::StringLit(value) = &disc_token.kind {
+                    let v = value.clone();
+                    self.advance();
+                    v
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error("expected string literal for discriminant value")
+                            .with_label(disc_token.span, self.file_id, "expected string literal"),
+                    );
+                    return None;
+                };
+
+            let variant_name = capitalize_first(&discriminant_value);
+            let variant_start = kind_ident.span;
+
+            // Parse remaining data fields after comma
+            let mut fields = Vec::new();
+            while self.eat(&TokenKind::Comma) {
+                // Allow trailing comma before `}`
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+                let field_start = self.current_token().span;
+                let field_name = self.parse_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let type_ann = self.parse_type_annotation()?;
+                let field_span = field_start.merge(type_ann.span);
+                fields.push(FieldDef {
+                    name: field_name,
+                    type_ann,
+                    span: field_span,
+                });
+            }
+
+            let close = self.expect(&TokenKind::RBrace)?;
+            let variant_span = variant_start.merge(close.span);
+
+            variants.push(EnumVariant::Data {
+                discriminant_value,
+                name: Ident {
+                    name: variant_name,
+                    span: variant_start,
+                },
+                fields,
+                span: variant_span,
+            });
+        }
+
+        let span = start.merge(self.previous_span());
+        Some(EnumDef {
+            name,
+            variants,
             span,
         })
     }
@@ -608,6 +776,7 @@ impl Parser {
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
             TokenKind::While => self.parse_while_stmt().map(Stmt::While),
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
+            TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
             _ => self.parse_expr_stmt(),
         }
     }
@@ -723,6 +892,65 @@ impl Parser {
             condition,
             body,
             span: start.merge(body_span),
+        })
+    }
+
+    /// Parse a switch statement: `switch (expr) { case "v": stmts; ... }`.
+    fn parse_switch_stmt(&mut self) -> Option<SwitchStmt> {
+        let switch_token = self.advance(); // consume `switch`
+        let start = switch_token.span;
+
+        self.expect(&TokenKind::LParen)?;
+        let scrutinee = self.parse_expr()?;
+        self.expect(&TokenKind::RParen)?;
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut cases = Vec::new();
+        while self.check(&TokenKind::Case) {
+            let case_token = self.advance(); // consume `case`
+            let case_start = case_token.span;
+
+            let pattern_token = self.current_token().clone();
+            let pattern = if let TokenKind::StringLit(value) = &pattern_token.kind {
+                let v = value.clone();
+                self.advance();
+                v
+            } else {
+                self.diagnostics.push(
+                    Diagnostic::error("expected string literal for case pattern").with_label(
+                        pattern_token.span,
+                        self.file_id,
+                        "expected string literal",
+                    ),
+                );
+                return None;
+            };
+
+            self.expect(&TokenKind::Colon)?;
+
+            // Parse the body: statements until next `case` or `}`
+            let mut body = Vec::new();
+            while !self.check(&TokenKind::Case) && !self.check(&TokenKind::RBrace) && !self.at_end()
+            {
+                if let Some(stmt) = self.parse_stmt() {
+                    body.push(stmt);
+                }
+            }
+
+            let case_end = self.previous_span();
+            cases.push(SwitchCase {
+                pattern,
+                body,
+                span: case_start.merge(case_end),
+            });
+        }
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        Some(SwitchStmt {
+            scrutinee,
+            cases,
+            span: start.merge(close.span),
         })
     }
 
@@ -2624,6 +2852,107 @@ mod tests {
         match &tpl.parts[4] {
             TemplatePart::String(s, _) => assert_eq!(s, " = "),
             _ => panic!("expected String part"),
+        }
+    }
+
+    // ---- Task 015: Enum and Switch tests ----
+
+    /// Helper: extract the first enum def from a module.
+    fn first_enum(module: &Module) -> &EnumDef {
+        for item in &module.items {
+            if let ItemKind::EnumDef(ed) = &item.kind {
+                return ed;
+            }
+        }
+        panic!("expected enum def item");
+    }
+
+    // Test T015-1: Parse simple enum definition → EnumDef with 4 Simple variants
+    #[test]
+    fn test_parser_simple_enum_four_variants() {
+        let source = r#"type Direction = "north" | "south" | "east" | "west""#;
+        let module = parse_ok(source);
+        let ed = first_enum(&module);
+        assert_eq!(ed.name.name, "Direction");
+        assert_eq!(ed.variants.len(), 4);
+        match &ed.variants[0] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "North"),
+            _ => panic!("expected Simple variant"),
+        }
+        match &ed.variants[3] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "West"),
+            _ => panic!("expected Simple variant"),
+        }
+    }
+
+    // Test T015-2: Parse data enum definition → EnumDef with Data variants
+    #[test]
+    fn test_parser_data_enum_two_variants_with_fields() {
+        let source = r#"
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+"#;
+        let module = parse_ok(source);
+        let ed = first_enum(&module);
+        assert_eq!(ed.name.name, "Shape");
+        assert_eq!(ed.variants.len(), 2);
+        match &ed.variants[0] {
+            EnumVariant::Data {
+                discriminant_value,
+                name,
+                fields,
+                ..
+            } => {
+                assert_eq!(discriminant_value, "circle");
+                assert_eq!(name.name, "Circle");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name.name, "radius");
+            }
+            _ => panic!("expected Data variant"),
+        }
+        match &ed.variants[1] {
+            EnumVariant::Data {
+                discriminant_value,
+                name,
+                fields,
+                ..
+            } => {
+                assert_eq!(discriminant_value, "rect");
+                assert_eq!(name.name, "Rect");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name.name, "width");
+                assert_eq!(fields[1].name.name, "height");
+            }
+            _ => panic!("expected Data variant"),
+        }
+    }
+
+    // Test T015-3: Parse switch statement → SwitchStmt with cases
+    #[test]
+    fn test_parser_switch_stmt_two_cases() {
+        let source = r#"
+function test(dir: Direction): Direction {
+  switch (dir) {
+    case "north":
+      return "south";
+    case "south":
+      return "north";
+  }
+}
+"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.body.stmts.len(), 1);
+        match &f.body.stmts[0] {
+            Stmt::Switch(switch) => {
+                assert_eq!(switch.cases.len(), 2);
+                assert_eq!(switch.cases[0].pattern, "north");
+                assert_eq!(switch.cases[1].pattern, "south");
+                assert_eq!(switch.cases[0].body.len(), 1);
+                assert_eq!(switch.cases[1].body.len(), 1);
+            }
+            _ => panic!("expected Switch statement"),
         }
     }
 }

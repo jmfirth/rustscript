@@ -721,3 +721,176 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("template_multiple_interpolations", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 015: Simple Enum Definition + Switch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_simple_enum_definition() {
+    let source = r#"type Direction = "north" | "south" | "east" | "west""#;
+
+    let expected = "\
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("simple_enum_definition", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_simple_enum_with_switch() {
+    let source = r#"
+type Direction = "north" | "south" | "east" | "west"
+
+function opposite(dir: Direction): Direction {
+  switch (dir) {
+    case "north":
+      return "south";
+    case "south":
+      return "north";
+    case "east":
+      return "west";
+    case "west":
+      return "east";
+  }
+}
+"#;
+
+    let expected = "\
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn opposite(dir: Direction) -> Direction {
+    match dir {
+        Direction::North => {
+            return Direction::South;
+        }
+        Direction::South => {
+            return Direction::North;
+        }
+        Direction::East => {
+            return Direction::West;
+        }
+        Direction::West => {
+            return Direction::East;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("simple_enum_switch", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 015: Data Enum (Discriminated Union) + Switch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_data_enum_definition() {
+    let source = r#"
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+"#;
+
+    let expected = "\
+enum Shape {
+    Circle {
+        pub radius: f64,
+    },
+    Rect {
+        pub width: f64,
+        pub height: f64,
+    },
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("data_enum_definition", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_data_enum_with_switch() {
+    let source = r#"
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+
+function area(shape: Shape): f64 {
+  switch (shape) {
+    case "circle":
+      return 3.14159 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}
+"#;
+
+    let expected = "\
+enum Shape {
+    Circle {
+        pub radius: f64,
+    },
+    Rect {
+        pub width: f64,
+        pub height: f64,
+    },
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle { radius } => {
+            return 3.14159 * radius * radius;
+        }
+        Shape::Rect { width, height } => {
+            return width * height;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("data_enum_switch", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 015: Enum Construction
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_enum_construction() {
+    let source = r#"
+type Direction = "north" | "south" | "east" | "west"
+
+function main() {
+  const dir: Direction = "north";
+}
+"#;
+
+    let expected = "\
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn main() {
+    let dir = Direction::North;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("enum_construction", &actual, expected);
+}

@@ -83,6 +83,14 @@ impl UseMap {
             ast::Stmt::Destructure(destr) => {
                 Self::collect_expr_uses(&destr.init, stmt_index, false, is_ref_call, uses);
             }
+            ast::Stmt::Switch(switch) => {
+                Self::collect_expr_uses(&switch.scrutinee, stmt_index, false, is_ref_call, uses);
+                for case in &switch.cases {
+                    for inner_stmt in &case.body {
+                        Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                    }
+                }
+            }
         }
     }
 
@@ -274,6 +282,13 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
             }
         }
         ast::Stmt::VarDecl(_) | ast::Stmt::Return(_) | ast::Stmt::Destructure(_) => {}
+        ast::Stmt::Switch(switch) => {
+            for case in &switch.cases {
+                for inner in &case.body {
+                    collect_assignments(inner, reassigned);
+                }
+            }
+        }
     }
 }
 

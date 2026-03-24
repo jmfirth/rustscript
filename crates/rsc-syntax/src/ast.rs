@@ -36,7 +36,8 @@ pub struct Item {
 
 /// The kinds of top-level items in a `RustScript` module.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds type definitions.
+/// Phase 0 supports function declarations; Phase 1 adds type definitions
+/// and enum definitions.
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
@@ -44,6 +45,9 @@ pub enum ItemKind {
     /// A type definition (`type Name = { field: Type, ... }`).
     /// Lowers to a Rust `struct`.
     TypeDef(TypeDef),
+    /// An enum definition (`type Direction = "north" | "south" | ...`).
+    /// Lowers to a Rust `enum`.
+    EnumDef(EnumDef),
 }
 
 /// A generic type parameter: `T` or `T extends Constraint`.
@@ -103,6 +107,44 @@ pub struct TypeDef {
     pub fields: Vec<FieldDef>,
     /// The span covering the entire type definition.
     pub span: Span,
+}
+
+/// A simple enum or discriminated union definition.
+///
+/// Simple enum: `type Direction = "north" | "south" | "east" | "west"`.
+/// Discriminated union: `type Shape = | { kind: "circle", radius: f64 } | ...`.
+/// Lowers to a Rust `enum`.
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    /// The enum name.
+    pub name: Ident,
+    /// The variants of the enum.
+    pub variants: Vec<EnumVariant>,
+    /// The span covering the entire enum definition.
+    pub span: Span,
+}
+
+/// A single enum variant.
+///
+/// `Simple` variants come from string literal unions (`"north"`).
+/// `Data` variants come from discriminated union objects (`{ kind: "circle", radius: f64 }`).
+#[derive(Debug, Clone)]
+pub enum EnumVariant {
+    /// A simple string variant: `"north"`. The `Ident` is the capitalized variant name.
+    Simple(Ident, Span),
+    /// A data variant: `{ kind: "circle", radius: f64 }`.
+    /// The discriminant value (`"circle"`) becomes the variant name (capitalized).
+    /// The `kind` field is consumed — only data fields appear.
+    Data {
+        /// The raw discriminant string value (e.g., `"circle"`).
+        discriminant_value: String,
+        /// The capitalized variant name (e.g., `Circle`).
+        name: Ident,
+        /// The data fields (excluding the `kind` discriminant).
+        fields: Vec<FieldDef>,
+        /// The span covering this variant.
+        span: Span,
+    },
 }
 
 /// A field in a type definition.
@@ -195,6 +237,9 @@ pub enum Stmt {
     /// A destructuring declaration: `const { name, age } = user;`.
     /// Lowers to Rust `let TypeName { field1, field2, .. } = expr;`.
     Destructure(DestructureStmt),
+    /// A `switch` statement for pattern matching over enums.
+    /// Lowers to a Rust `match` expression.
+    Switch(SwitchStmt),
 }
 
 /// A variable declaration with an initializer.
@@ -284,6 +329,34 @@ pub struct DestructureStmt {
     /// The initializer expression being destructured.
     pub init: Expr,
     /// The span covering the entire destructuring statement.
+    pub span: Span,
+}
+
+/// A switch statement for pattern matching over enums.
+///
+/// Corresponds to `switch (expr) { case "variant": stmts; ... }`.
+/// Lowers to a Rust `match` expression with enum variant patterns.
+#[derive(Debug, Clone)]
+pub struct SwitchStmt {
+    /// The scrutinee expression being matched.
+    pub scrutinee: Expr,
+    /// The case arms.
+    pub cases: Vec<SwitchCase>,
+    /// The span covering the entire switch statement.
+    pub span: Span,
+}
+
+/// A single case in a switch statement.
+///
+/// Corresponds to `case "variant_name": body_stmts;`.
+/// Lowers to a single match arm.
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    /// The pattern string literal (enum variant name, e.g., `"north"` or `"circle"`).
+    pub pattern: String,
+    /// The body of the case.
+    pub body: Vec<Stmt>,
+    /// The span covering this case.
     pub span: Span,
 }
 
