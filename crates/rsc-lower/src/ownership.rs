@@ -175,6 +175,13 @@ impl UseMap {
             ast::ExprKind::FieldAccess(fa) => {
                 Self::collect_expr_uses(&fa.object, stmt_index, false, is_ref_call, uses);
             }
+            ast::ExprKind::TemplateLit(tpl) => {
+                for part in &tpl.parts {
+                    if let ast::TemplatePart::Expr(e) = part {
+                        Self::collect_expr_uses(e, stmt_index, false, is_ref_call, uses);
+                    }
+                }
+            }
             ast::ExprKind::IntLit(_)
             | ast::ExprKind::FloatLit(_)
             | ast::ExprKind::StringLit(_)

@@ -113,6 +113,16 @@ pub(crate) enum TokenKind {
     /// `.`
     Dot,
 
+    // Template literals
+    /// The start of a template literal: `` `text${ `` — the string before the first interpolation.
+    TemplateHead(String),
+    /// A middle segment: `}text${ ` — string between interpolations.
+    TemplateMiddle(String),
+    /// The end of a template literal: `` }text` `` — the string after the last interpolation.
+    TemplateTail(String),
+    /// A template literal with no interpolations: `` `text` ``.
+    TemplateNoSub(String),
+
     // Special
     /// End of file marker — always the last token in the stream.
     Eof,

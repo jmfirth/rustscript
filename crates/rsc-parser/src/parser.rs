@@ -7,8 +7,8 @@
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, Expr, ExprKind,
     FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item, ItemKind, MethodCallExpr,
-    Module, Param, ReturnStmt, Stmt, StructLitExpr, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    Module, Param, ReturnStmt, Stmt, StructLitExpr, TemplateLitExpr, TemplatePart, TypeAnnotation,
+    TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -172,6 +172,9 @@ impl Parser {
             TokenKind::Dot => "`.`",
             TokenKind::Type => "`type`",
             TokenKind::Extends => "`extends`",
+            TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
+            TokenKind::TemplateMiddle(_) => "template literal middle",
+            TokenKind::TemplateTail(_) => "template literal tail",
             TokenKind::Eof => "end of file",
         }
     }
@@ -1342,6 +1345,8 @@ impl Parser {
                 );
                 None
             }
+            TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
+            TokenKind::TemplateHead(_) => self.parse_template_literal(),
             TokenKind::LParen => {
                 let open = self.advance();
                 let inner = self.parse_expr()?;
@@ -1365,6 +1370,85 @@ impl Parser {
                     ),
                 );
                 None
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Template literals
+    // ---------------------------------------------------------------
+
+    /// Parse a template literal with no interpolations: `` `text` ``.
+    fn parse_template_no_sub(&mut self) -> Expr {
+        let token = self.advance();
+        let TokenKind::TemplateNoSub(text) = token.kind else {
+            unreachable!("parse_template_no_sub called without TemplateNoSub token");
+        };
+        Expr {
+            kind: ExprKind::TemplateLit(TemplateLitExpr {
+                parts: vec![TemplatePart::String(text, token.span)],
+            }),
+            span: token.span,
+        }
+    }
+
+    /// Parse a template literal with interpolations: `` `text${expr}text` ``.
+    ///
+    /// Consumes `TemplateHead`, expression tokens, and `TemplateMiddle`/`TemplateTail`
+    /// tokens to build the complete `TemplateLitExpr`.
+    fn parse_template_literal(&mut self) -> Option<Expr> {
+        let head_token = self.advance();
+        let start_span = head_token.span;
+        let TokenKind::TemplateHead(head_text) = head_token.kind else {
+            unreachable!("parse_template_literal called without TemplateHead token");
+        };
+
+        let mut parts = Vec::new();
+        parts.push(TemplatePart::String(head_text, head_token.span));
+
+        loop {
+            // Parse the interpolated expression
+            let expr = self.parse_expr()?;
+            parts.push(TemplatePart::Expr(expr));
+
+            // After the expression, expect TemplateMiddle or TemplateTail
+            let next = self.current_token().clone();
+            match &next.kind {
+                TokenKind::TemplateTail(_) => {
+                    let tail_token = self.advance();
+                    let TokenKind::TemplateTail(tail_text) = tail_token.kind else {
+                        unreachable!();
+                    };
+                    parts.push(TemplatePart::String(tail_text, tail_token.span));
+                    let end_span = tail_token.span;
+                    return Some(Expr {
+                        kind: ExprKind::TemplateLit(TemplateLitExpr { parts }),
+                        span: start_span.merge(end_span),
+                    });
+                }
+                TokenKind::TemplateMiddle(_) => {
+                    let mid_token = self.advance();
+                    let TokenKind::TemplateMiddle(mid_text) = mid_token.kind else {
+                        unreachable!();
+                    };
+                    parts.push(TemplatePart::String(mid_text, mid_token.span));
+                    // Continue loop to parse next expression
+                }
+                _ => {
+                    // Error — expected template continuation
+                    self.diagnostics.push(
+                        Diagnostic::error(format!(
+                            "expected template literal continuation, found {}",
+                            Self::describe_kind(&next.kind)
+                        ))
+                        .with_label(
+                            next.span,
+                            self.file_id,
+                            "expected template middle or tail",
+                        ),
+                    );
+                    return None;
+                }
             }
         }
     }
@@ -2441,6 +2525,105 @@ mod tests {
         match &constraint.kind {
             TypeKind::Named(ident) => assert_eq!(ident.name, "PartialOrd"),
             _ => panic!("expected Named constraint"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Template literal parsing tests
+    // ---------------------------------------------------------------
+
+    // Test: Parse template literal with no interpolation
+    #[test]
+    fn test_parser_template_no_interpolation_produces_single_string_part() {
+        let module = parse_ok("function main() { const x = `hello`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TemplateLit(tpl) = &decl.init.kind else {
+            panic!("expected TemplateLit, got {:?}", decl.init.kind);
+        };
+        assert_eq!(tpl.parts.len(), 1);
+        match &tpl.parts[0] {
+            TemplatePart::String(s, _) => assert_eq!(s, "hello"),
+            _ => panic!("expected String part"),
+        }
+    }
+
+    // Test: Parse template literal with single interpolation
+    #[test]
+    fn test_parser_template_single_interpolation_produces_three_parts() {
+        let module = parse_ok("function main() { const x = `Hello, ${name}!`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TemplateLit(tpl) = &decl.init.kind else {
+            panic!("expected TemplateLit, got {:?}", decl.init.kind);
+        };
+        // parts: String("Hello, "), Expr(name), String("!")
+        assert_eq!(tpl.parts.len(), 3);
+        match &tpl.parts[0] {
+            TemplatePart::String(s, _) => assert_eq!(s, "Hello, "),
+            _ => panic!("expected String part"),
+        }
+        match &tpl.parts[1] {
+            TemplatePart::Expr(e) => {
+                assert!(matches!(&e.kind, ExprKind::Ident(ident) if ident.name == "name"));
+            }
+            _ => panic!("expected Expr part"),
+        }
+        match &tpl.parts[2] {
+            TemplatePart::String(s, _) => assert_eq!(s, "!"),
+            _ => panic!("expected String part"),
+        }
+    }
+
+    // Test: Parse template literal with expression interpolation
+    #[test]
+    fn test_parser_template_expression_interpolation_parses_binary() {
+        let module = parse_ok("function main() { const x = `${a + b}`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TemplateLit(tpl) = &decl.init.kind else {
+            panic!("expected TemplateLit, got {:?}", decl.init.kind);
+        };
+        // parts: String(""), Expr(a + b), String("")
+        assert_eq!(tpl.parts.len(), 3);
+        match &tpl.parts[1] {
+            TemplatePart::Expr(e) => {
+                assert!(matches!(&e.kind, ExprKind::Binary(_)));
+            }
+            _ => panic!("expected Expr part"),
+        }
+    }
+
+    // Test: Parse template literal with multiple interpolations
+    #[test]
+    fn test_parser_template_multiple_interpolations_five_parts() {
+        let module = parse_ok("function main() { const x = `${a} + ${b} = ${c}`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TemplateLit(tpl) = &decl.init.kind else {
+            panic!("expected TemplateLit, got {:?}", decl.init.kind);
+        };
+        // parts: String(""), Expr(a), String(" + "), Expr(b), String(" = "), Expr(c), String("")
+        assert_eq!(tpl.parts.len(), 7);
+        match &tpl.parts[2] {
+            TemplatePart::String(s, _) => assert_eq!(s, " + "),
+            _ => panic!("expected String part"),
+        }
+        match &tpl.parts[4] {
+            TemplatePart::String(s, _) => assert_eq!(s, " = "),
+            _ => panic!("expected String part"),
         }
     }
 }

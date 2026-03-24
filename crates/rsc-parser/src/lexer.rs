@@ -20,6 +20,12 @@ pub struct Lexer<'a> {
     pos: usize,
     file_id: FileId,
     diagnostics: Vec<Diagnostic>,
+    /// Buffered tokens from template literal lexing.
+    ///
+    /// Template literals produce multiple tokens (head, expression tokens,
+    /// middle, more expression tokens, tail) in a single lex operation.
+    /// These are queued here and drained before lexing new tokens.
+    token_buffer: Vec<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -32,6 +38,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             file_id,
             diagnostics: Vec::new(),
+            token_buffer: Vec::new(),
         }
     }
 
@@ -45,6 +52,11 @@ impl<'a> Lexer<'a> {
         let mut tokens = Vec::new();
 
         loop {
+            // Drain any buffered tokens first (from template literal lexing).
+            if !self.token_buffer.is_empty() {
+                tokens.append(&mut self.token_buffer);
+            }
+
             self.skip_whitespace_and_comments();
 
             if self.is_at_end() {
@@ -168,6 +180,11 @@ impl<'a> Lexer<'a> {
         // String literal
         if byte == b'"' {
             return Some(self.lex_string(start));
+        }
+
+        // Template literal
+        if byte == b'`' {
+            return self.lex_template_literal(start);
         }
 
         // Number literal
@@ -299,6 +316,285 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b) => {
                     value.push(b as char);
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Lex a template literal starting at the opening backtick.
+    ///
+    /// Produces one or more tokens depending on the template content:
+    /// - No interpolation: returns `TemplateNoSub` directly
+    /// - With interpolations: returns the first `TemplateHead` token and pushes
+    ///   expression tokens, `TemplateMiddle`s, and a `TemplateTail` into the
+    ///   token buffer
+    fn lex_template_literal(&mut self, start: usize) -> Option<Token> {
+        self.advance(); // consume opening backtick
+
+        let mut text = String::new();
+
+        loop {
+            match self.peek() {
+                None => {
+                    // Unterminated template literal
+                    let span = self.span_from(start);
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated template literal").with_label(
+                            span,
+                            self.file_id,
+                            "template literal starts here",
+                        ),
+                    );
+                    return Some(Token {
+                        kind: TokenKind::TemplateNoSub(text),
+                        span,
+                    });
+                }
+                Some(b'`') => {
+                    // Closing backtick — no interpolations (or final tail)
+                    self.advance();
+                    return Some(Token {
+                        kind: TokenKind::TemplateNoSub(text),
+                        span: self.span_from(start),
+                    });
+                }
+                Some(b'$') if self.peek_next() == Some(b'{') => {
+                    // Start of interpolation — emit head, then lex expressions
+                    self.advance(); // consume `$`
+                    self.advance(); // consume `{`
+
+                    let head_span = self.span_from(start);
+                    let head = Token {
+                        kind: TokenKind::TemplateHead(text),
+                        span: head_span,
+                    };
+
+                    // Lex the expression tokens and remaining template parts
+                    self.lex_template_expr_and_rest(start);
+
+                    return Some(head);
+                }
+                Some(b'\\') => {
+                    // Escape sequence within template literal
+                    self.advance(); // consume backslash
+                    match self.peek() {
+                        Some(b'\\') => {
+                            text.push('\\');
+                            self.advance();
+                        }
+                        Some(b'`') => {
+                            text.push('`');
+                            self.advance();
+                        }
+                        Some(b'$') => {
+                            text.push('$');
+                            self.advance();
+                        }
+                        Some(b'n') => {
+                            text.push('\n');
+                            self.advance();
+                        }
+                        Some(b't') => {
+                            text.push('\t');
+                            self.advance();
+                        }
+                        Some(b'r') => {
+                            text.push('\r');
+                            self.advance();
+                        }
+                        Some(b) => {
+                            let ch = b as char;
+                            let escape_start = self.pos - 1;
+                            self.advance();
+                            let span = self.span_from(escape_start);
+                            self.diagnostics.push(
+                                Diagnostic::error(format!("unknown escape sequence `\\{ch}`"))
+                                    .with_label(span, self.file_id, "unknown escape"),
+                            );
+                            text.push(ch);
+                        }
+                        None => {
+                            let span = self.span_from(start);
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated template literal").with_label(
+                                    span,
+                                    self.file_id,
+                                    "template literal starts here",
+                                ),
+                            );
+                            return Some(Token {
+                                kind: TokenKind::TemplateNoSub(text),
+                                span,
+                            });
+                        }
+                    }
+                }
+                Some(b) => {
+                    text.push(b as char);
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Lex expression tokens within a template interpolation, then continue
+    /// lexing the remaining template string parts.
+    ///
+    /// Tracks brace nesting depth so that `}` inside the expression (e.g.,
+    /// object literals) doesn't prematurely end the interpolation.
+    /// All tokens (expression tokens, middle segments, tail segment) are
+    /// pushed into `self.token_buffer`.
+    #[allow(clippy::too_many_lines)]
+    // Template expression and continuation lexing handles two modes (expr + string)
+    // in a single function; splitting would obscure the control flow.
+    fn lex_template_expr_and_rest(&mut self, template_start: usize) {
+        let mut brace_depth: usize = 0;
+
+        // Lex expression tokens until we find the matching `}`
+        loop {
+            self.skip_whitespace_and_comments();
+
+            if self.is_at_end() {
+                let span = self.span_from(template_start);
+                self.diagnostics.push(
+                    Diagnostic::error("unterminated template literal interpolation").with_label(
+                        span,
+                        self.file_id,
+                        "template literal starts here",
+                    ),
+                );
+                // Push an empty tail so the parser can recover
+                self.token_buffer.push(Token {
+                    kind: TokenKind::TemplateTail(String::new()),
+                    span,
+                });
+                return;
+            }
+
+            // Check for closing `}` at depth 0
+            if self.peek() == Some(b'}') && brace_depth == 0 {
+                self.advance(); // consume `}`
+                break;
+            }
+
+            // Track brace nesting
+            if self.peek() == Some(b'{') {
+                brace_depth += 1;
+            } else if self.peek() == Some(b'}') {
+                brace_depth = brace_depth.saturating_sub(1);
+            }
+
+            // Lex a normal token
+            if let Some(tok) = self.next_token() {
+                self.token_buffer.push(tok);
+            }
+        }
+
+        // Now continue scanning the template string after the `}`
+        let mut text = String::new();
+
+        loop {
+            match self.peek() {
+                None => {
+                    // Unterminated template literal
+                    let span = self.span_from(template_start);
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated template literal").with_label(
+                            span,
+                            self.file_id,
+                            "template literal starts here",
+                        ),
+                    );
+                    self.token_buffer.push(Token {
+                        kind: TokenKind::TemplateTail(text),
+                        span,
+                    });
+                    return;
+                }
+                Some(b'`') => {
+                    // End of template literal
+                    self.advance();
+                    let span = self.span_from(template_start);
+                    self.token_buffer.push(Token {
+                        kind: TokenKind::TemplateTail(text),
+                        span,
+                    });
+                    return;
+                }
+                Some(b'$') if self.peek_next() == Some(b'{') => {
+                    // Another interpolation — emit middle token
+                    self.advance(); // consume `$`
+                    self.advance(); // consume `{`
+
+                    let span = self.span_from(template_start);
+                    self.token_buffer.push(Token {
+                        kind: TokenKind::TemplateMiddle(text),
+                        span,
+                    });
+
+                    // Recurse to lex the next expression and remaining parts
+                    self.lex_template_expr_and_rest(template_start);
+                    return;
+                }
+                Some(b'\\') => {
+                    // Escape sequence
+                    self.advance(); // consume backslash
+                    match self.peek() {
+                        Some(b'\\') => {
+                            text.push('\\');
+                            self.advance();
+                        }
+                        Some(b'`') => {
+                            text.push('`');
+                            self.advance();
+                        }
+                        Some(b'$') => {
+                            text.push('$');
+                            self.advance();
+                        }
+                        Some(b'n') => {
+                            text.push('\n');
+                            self.advance();
+                        }
+                        Some(b't') => {
+                            text.push('\t');
+                            self.advance();
+                        }
+                        Some(b'r') => {
+                            text.push('\r');
+                            self.advance();
+                        }
+                        Some(b) => {
+                            let ch = b as char;
+                            let escape_start = self.pos - 1;
+                            self.advance();
+                            let span = self.span_from(escape_start);
+                            self.diagnostics.push(
+                                Diagnostic::error(format!("unknown escape sequence `\\{ch}`"))
+                                    .with_label(span, self.file_id, "unknown escape"),
+                            );
+                            text.push(ch);
+                        }
+                        None => {
+                            let span = self.span_from(template_start);
+                            self.diagnostics.push(
+                                Diagnostic::error("unterminated template literal").with_label(
+                                    span,
+                                    self.file_id,
+                                    "template literal starts here",
+                                ),
+                            );
+                            self.token_buffer.push(Token {
+                                kind: TokenKind::TemplateTail(text),
+                                span,
+                            });
+                            return;
+                        }
+                    }
+                }
+                Some(b) => {
+                    text.push(b as char);
                     self.advance();
                 }
             }
@@ -775,5 +1071,61 @@ mod tests {
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].kind, TokenKind::Eof);
         assert_eq!(tokens[0].span, Span::new(0, 0));
+    }
+
+    // 23. Template literal with no interpolation → TemplateNoSub
+    #[test]
+    fn test_lexer_template_no_sub_produces_template_no_sub() {
+        let tokens = tokenize("`hello`");
+        assert_eq!(tokens.len(), 2); // TemplateNoSub + Eof
+        assert_eq!(tokens[0].kind, TokenKind::TemplateNoSub("hello".into()));
+    }
+
+    // 24. Template literal with single interpolation → Head, expr, Tail
+    #[test]
+    fn test_lexer_template_single_interpolation_produces_head_expr_tail() {
+        let tokens = tokenize("`hello ${name}`");
+        // TemplateHead("hello "), Ident("name"), TemplateTail(""), Eof
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].kind, TokenKind::TemplateHead("hello ".into()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("name".into()));
+        assert!(matches!(tokens[2].kind, TokenKind::TemplateTail(ref s) if s.is_empty()));
+    }
+
+    // 25. Template literal with multiple interpolations → Head, expr, Middle, expr, Tail
+    #[test]
+    fn test_lexer_template_multi_interpolation_produces_head_middle_tail() {
+        let tokens = tokenize("`${a} and ${b}`");
+        // TemplateHead(""), Ident("a"), TemplateMiddle(" and "), Ident("b"), TemplateTail(""), Eof
+        assert_eq!(tokens.len(), 6);
+        assert!(matches!(tokens[0].kind, TokenKind::TemplateHead(ref s) if s.is_empty()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("a".into()));
+        assert_eq!(tokens[2].kind, TokenKind::TemplateMiddle(" and ".into()));
+        assert_eq!(tokens[3].kind, TokenKind::Ident("b".into()));
+        assert!(matches!(tokens[4].kind, TokenKind::TemplateTail(ref s) if s.is_empty()));
+    }
+
+    // 26. Template literal with expression containing operators
+    #[test]
+    fn test_lexer_template_expression_with_operators() {
+        let tokens = tokenize("`Result: ${a + b}`");
+        // TemplateHead("Result: "), Ident("a"), Plus, Ident("b"), TemplateTail(""), Eof
+        assert_eq!(tokens.len(), 6);
+        assert_eq!(tokens[0].kind, TokenKind::TemplateHead("Result: ".into()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("a".into()));
+        assert_eq!(tokens[2].kind, TokenKind::Plus);
+        assert_eq!(tokens[3].kind, TokenKind::Ident("b".into()));
+        assert!(matches!(tokens[4].kind, TokenKind::TemplateTail(ref s) if s.is_empty()));
+    }
+
+    // 27. Template literal with text after last interpolation
+    #[test]
+    fn test_lexer_template_tail_with_text() {
+        let tokens = tokenize("`Hello, ${name}!`");
+        // TemplateHead("Hello, "), Ident("name"), TemplateTail("!"), Eof
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].kind, TokenKind::TemplateHead("Hello, ".into()));
+        assert_eq!(tokens[1].kind, TokenKind::Ident("name".into()));
+        assert_eq!(tokens[2].kind, TokenKind::TemplateTail("!".into()));
     }
 }

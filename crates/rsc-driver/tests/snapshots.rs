@@ -654,3 +654,70 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("nested_field_access", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Template Literals (Task 025)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_template_simple_interpolation() {
+    let source = "\
+function main() {
+  const name = \"Alice\";
+  const greeting = `Hello, ${name}!`;
+  console.log(greeting);
+}";
+
+    let expected = "\
+fn main() {
+    let name = \"Alice\".to_string();
+    let greeting = format!(\"Hello, {}!\", name);
+    println!(\"{}\", greeting);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("template_simple_interpolation", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_template_no_interpolation() {
+    let source = "\
+function main() {
+  const msg = `hello world`;
+  console.log(msg);
+}";
+
+    let expected = "\
+fn main() {
+    let msg = \"hello world\".to_string();
+    println!(\"{}\", msg);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("template_no_interpolation", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_template_multiple_interpolations() {
+    let source = "\
+function main() {
+  const a: i32 = 5;
+  const b: i32 = 3;
+  const result = `${a} + ${b} = ${a + b}`;
+  console.log(result);
+}";
+
+    let expected = "\
+fn main() {
+    let a: i32 = 5;
+    let b: i32 = 3;
+    let result = format!(\"{} + {} = {}\", a, b, a + b);
+    println!(\"{}\", result);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("template_multiple_interpolations", &actual, expected);
+}
