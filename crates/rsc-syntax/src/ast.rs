@@ -190,6 +190,7 @@ pub struct TypeAnnotation {
 /// `Named` covers primitive types (`i32`, `i64`, `f64`, `bool`, `string`) and
 /// user-defined types. `Void` represents the absence of a return value.
 /// `Generic` represents parameterized types like `Array<string>`.
+/// `Union` represents `T | null` syntax (only `T | null` supported in Phase 1).
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     /// A named type (e.g., `i32`, `bool`, `string`, or a user-defined name).
@@ -199,6 +200,9 @@ pub enum TypeKind {
     /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
     /// The `Ident` is the base type name; the `Vec` is the type arguments.
     Generic(Ident, Vec<TypeAnnotation>),
+    /// Union type: `T | null`. Only `T | null` is supported in Phase 1.
+    /// Lowers to `Option<T>` in Rust.
+    Union(Vec<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
@@ -414,6 +418,14 @@ pub enum ExprKind {
     /// Index access: `arr[0]`, `map["key"]`.
     /// Lowers to Rust index syntax `expr[index]`.
     Index(IndexExpr),
+    /// The `null` literal. Lowers to `None` in Rust.
+    NullLit,
+    /// Optional chaining: `expr?.field` or `expr?.method(args)`.
+    /// Lowers to `expr.as_ref().map(|v| v.field)` or equivalent.
+    OptionalChain(OptionalChainExpr),
+    /// Nullish coalescing: `expr ?? default`.
+    /// Lowers to `expr.unwrap_or(default)`.
+    NullishCoalescing(NullishCoalescingExpr),
 }
 
 /// A binary expression with an operator and two operands.
@@ -618,6 +630,37 @@ pub struct IndexExpr {
     pub object: Box<Expr>,
     /// The index expression.
     pub index: Box<Expr>,
+}
+
+/// Optional chaining expression: `expr?.field` or `expr?.method(args)`.
+///
+/// Lowers to `expr.as_ref().map(|v| v.field)` or equivalent.
+#[derive(Debug, Clone)]
+pub struct OptionalChainExpr {
+    /// The object expression (must be `T | null`).
+    pub object: Box<Expr>,
+    /// The kind of access after `?.`.
+    pub access: OptionalAccess,
+}
+
+/// The kind of access in an optional chaining expression.
+#[derive(Debug, Clone)]
+pub enum OptionalAccess {
+    /// Field access: `expr?.field`.
+    Field(Ident),
+    /// Method call: `expr?.method(args)`.
+    Method(Ident, Vec<Expr>),
+}
+
+/// Nullish coalescing expression: `expr ?? default`.
+///
+/// Lowers to `expr.unwrap_or(default)` or `expr.unwrap_or_else(|| default)`.
+#[derive(Debug, Clone)]
+pub struct NullishCoalescingExpr {
+    /// The left-hand side (must be `T | null`).
+    pub left: Box<Expr>,
+    /// The default value to use when left is `null`.
+    pub right: Box<Expr>,
 }
 
 #[cfg(test)]

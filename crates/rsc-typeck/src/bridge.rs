@@ -27,10 +27,9 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             let rust_args: Vec<RustType> = args.iter().map(type_to_rust_type).collect();
             RustType::Generic(Box::new(base), rust_args)
         }
+        Type::Option(inner) => RustType::Option(Box::new(type_to_rust_type(inner))),
         // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
-        Type::Unit | Type::Option(_) | Type::Result(_, _) | Type::Function(_, _) | Type::Error => {
-            RustType::Unit
-        }
+        Type::Unit | Type::Result(_, _) | Type::Function(_, _) | Type::Error => RustType::Unit,
     }
 }
 
@@ -141,11 +140,15 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_unrepresented_types_produce_unit() {
+    fn test_bridge_option_type_produces_option() {
         assert_eq!(
             type_to_rust_type(&Type::Option(Box::new(Type::String))),
-            RustType::Unit
+            RustType::Option(Box::new(RustType::String))
         );
+    }
+
+    #[test]
+    fn test_bridge_unrepresented_types_produce_unit() {
         assert_eq!(
             type_to_rust_type(&Type::Result(Box::new(Type::String), Box::new(Type::Unit))),
             RustType::Unit

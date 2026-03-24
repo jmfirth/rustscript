@@ -207,7 +207,23 @@ impl UseMap {
             ast::ExprKind::IntLit(_)
             | ast::ExprKind::FloatLit(_)
             | ast::ExprKind::StringLit(_)
-            | ast::ExprKind::BoolLit(_) => {}
+            | ast::ExprKind::BoolLit(_)
+            | ast::ExprKind::NullLit => {}
+            ast::ExprKind::OptionalChain(chain) => {
+                Self::collect_expr_uses(&chain.object, stmt_index, false, is_ref_call, uses);
+                match &chain.access {
+                    ast::OptionalAccess::Field(_) => {}
+                    ast::OptionalAccess::Method(_, args) => {
+                        for arg in args {
+                            Self::collect_expr_uses(arg, stmt_index, false, is_ref_call, uses);
+                        }
+                    }
+                }
+            }
+            ast::ExprKind::NullishCoalescing(nc) => {
+                Self::collect_expr_uses(&nc.left, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(&nc.right, stmt_index, false, is_ref_call, uses);
+            }
         }
     }
 }

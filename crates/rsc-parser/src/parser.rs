@@ -7,9 +7,10 @@
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, EnumDef,
     EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt,
-    IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr, Param, ReturnStmt, Stmt,
-    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef,
-    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
+    OptionalAccess, OptionalChainExpr, Param, ReturnStmt, Stmt, StructLitExpr, SwitchCase,
+    SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -192,7 +193,12 @@ impl Parser {
             TokenKind::Switch => "`switch`",
             TokenKind::Case => "`case`",
             TokenKind::New => "`new`",
+            TokenKind::Null => "`null`",
             TokenKind::Pipe => "`|`",
+            TokenKind::QuestionDot => "`?.`",
+            TokenKind::QuestionQuestion => "`??`",
+            TokenKind::EqEqEq => "`===`",
+            TokenKind::BangEqEq => "`!==`",
             TokenKind::LBracket => "`[`",
             TokenKind::RBracket => "`]`",
             TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
@@ -652,12 +658,48 @@ impl Parser {
         })
     }
 
-    /// Parse a type annotation: `void`, a named type, or a generic type.
+    /// Parse a type annotation: `void`, a named type, a generic type, or a union type.
     ///
-    /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, etc.
+    /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, `T | null`, etc.
     fn parse_type_annotation(&mut self) -> Option<TypeAnnotation> {
+        let base = self.parse_base_type_annotation()?;
+
+        // Check for union type: `T | null`
+        if self.check(&TokenKind::Pipe) {
+            let start_span = base.span;
+            let mut members = vec![base];
+
+            while self.eat(&TokenKind::Pipe) {
+                let member = self.parse_base_type_annotation()?;
+                members.push(member);
+            }
+
+            let end_span = members.last().map_or(start_span, |m| m.span);
+            return Some(TypeAnnotation {
+                kind: TypeKind::Union(members),
+                span: start_span.merge(end_span),
+            });
+        }
+
+        Some(base)
+    }
+
+    /// Parse a base (non-union) type annotation: `void`, named, generic, or `null`.
+    fn parse_base_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let token = self.current_token().clone();
         match &token.kind {
+            TokenKind::Null => {
+                self.advance();
+                // Represent `null` as a named type "null" in the union — the
+                // lowering pass detects this pattern.
+                Some(TypeAnnotation {
+                    kind: TypeKind::Named(Ident {
+                        name: "null".to_owned(),
+                        span: token.span,
+                    }),
+                    span: token.span,
+                })
+            }
             TokenKind::Ident(name) if name == "void" => {
                 self.advance();
                 Some(TypeAnnotation {
@@ -1075,12 +1117,12 @@ impl Parser {
         result
     }
 
-    /// Parse assignment: `IDENT = assignment | IDENT op= assignment | logic_or`.
+    /// Parse assignment: `IDENT = assignment | IDENT op= assignment | nullish_coalesce`.
     ///
     /// Assignment is right-associative: `a = b = c` parses as `a = (b = c)`.
     /// Compound assignments (`+=`, `-=`, etc.) are desugared to `x = x op rhs`.
     fn parse_assignment(&mut self) -> Option<Expr> {
-        let expr = self.parse_logic_or()?;
+        let expr = self.parse_nullish_coalesce()?;
 
         // Check for compound assignment operators
         let compound_op = match self.peek() {
@@ -1167,6 +1209,28 @@ impl Parser {
         Some(expr)
     }
 
+    /// Parse nullish coalescing: `logic_or ( "??" logic_or )*`.
+    ///
+    /// `??` has lower precedence than `||`, so `a || b ?? c` is `(a || b) ?? c`.
+    fn parse_nullish_coalesce(&mut self) -> Option<Expr> {
+        let mut left = self.parse_logic_or()?;
+
+        while self.check(&TokenKind::QuestionQuestion) {
+            self.advance();
+            let right = self.parse_logic_or()?;
+            let span = left.span.merge(right.span);
+            left = Expr {
+                kind: ExprKind::NullishCoalescing(NullishCoalescingExpr {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
     /// Parse logical OR: `logic_and ( "||" logic_and )*`.
     fn parse_logic_or(&mut self) -> Option<Expr> {
         let mut left = self.parse_logic_and()?;
@@ -1209,14 +1273,14 @@ impl Parser {
         Some(left)
     }
 
-    /// Parse equality: `comparison ( ("==" | "!=") comparison )*`.
+    /// Parse equality: `comparison ( ("==" | "!=" | "===" | "!==") comparison )*`.
     fn parse_equality(&mut self) -> Option<Expr> {
         let mut left = self.parse_comparison()?;
 
         loop {
             let op = match self.peek() {
-                TokenKind::EqEq => BinaryOp::Eq,
-                TokenKind::BangEq => BinaryOp::Ne,
+                TokenKind::EqEq | TokenKind::EqEqEq => BinaryOp::Eq,
+                TokenKind::BangEq | TokenKind::BangEqEq => BinaryOp::Ne,
                 _ => break,
             };
             self.advance();
@@ -1385,6 +1449,34 @@ impl Parser {
                     }),
                     span,
                 };
+            } else if self.check(&TokenKind::QuestionDot) {
+                self.advance(); // consume `?.`
+                let member = self.parse_ident()?;
+
+                if self.check(&TokenKind::LParen) {
+                    // Optional method call: `?.method(args)`
+                    self.advance(); // consume `(`
+                    let args = self.parse_arg_list();
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = expr.span.merge(close.span);
+                    expr = Expr {
+                        kind: ExprKind::OptionalChain(OptionalChainExpr {
+                            object: Box::new(expr),
+                            access: OptionalAccess::Method(member, args),
+                        }),
+                        span,
+                    };
+                } else {
+                    // Optional field access: `?.field`
+                    let span = expr.span.merge(member.span);
+                    expr = Expr {
+                        kind: ExprKind::OptionalChain(OptionalChainExpr {
+                            object: Box::new(expr),
+                            access: OptionalAccess::Field(member),
+                        }),
+                        span,
+                    };
+                }
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // consume `.`
                 let member = self.parse_ident()?;
@@ -1562,6 +1654,13 @@ impl Parser {
                 self.advance();
                 Some(Expr {
                     kind: ExprKind::BoolLit(false),
+                    span: token.span,
+                })
+            }
+            TokenKind::Null => {
+                self.advance();
+                Some(Expr {
+                    kind: ExprKind::NullLit,
                     span: token.span,
                 })
             }
@@ -1864,6 +1963,7 @@ mod tests {
             TypeKind::Named(ident) => assert_eq!(ident.name, "i32"),
             TypeKind::Void => panic!("expected Named, got Void"),
             TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
+            TypeKind::Union(_) => panic!("expected Named, got Union"),
         }
         // Body has one return statement
         assert_eq!(f.body.stmts.len(), 1);
@@ -3187,6 +3287,143 @@ function test(dir: Direction): Direction {
                 assert_eq!(elements.len(), 2);
             }
             _ => panic!("expected ArrayLit"),
+        }
+    }
+
+    // --- Task 020: T | null, null literal, optional chaining, nullish coalescing ---
+
+    // Test 1: Parse `const x: string | null = null;`
+    #[test]
+    fn test_parser_union_type_string_or_null() {
+        let source = r#"function main() { const x: string | null = null; }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        let stmt = &f.body.stmts[0];
+        match stmt {
+            Stmt::VarDecl(decl) => {
+                assert_eq!(decl.name.name, "x");
+                let ann = decl.type_ann.as_ref().expect("expected type annotation");
+                match &ann.kind {
+                    TypeKind::Union(members) => {
+                        assert_eq!(members.len(), 2);
+                        match &members[0].kind {
+                            TypeKind::Named(n) => assert_eq!(n.name, "string"),
+                            _ => panic!("expected Named"),
+                        }
+                        match &members[1].kind {
+                            TypeKind::Named(n) => assert_eq!(n.name, "null"),
+                            _ => panic!("expected Named(null)"),
+                        }
+                    }
+                    _ => panic!("expected Union type annotation"),
+                }
+                assert!(matches!(decl.init.kind, ExprKind::NullLit));
+            }
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test 2: Parse `null` → ExprKind::NullLit
+    #[test]
+    fn test_parser_null_literal() {
+        let source = r#"function main() { return null; }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::Return(r) => {
+                let val = r.value.as_ref().expect("expected return value");
+                assert!(matches!(val.kind, ExprKind::NullLit));
+            }
+            _ => panic!("expected Return"),
+        }
+    }
+
+    // Test 3: Parse `user?.name` → OptionalChainExpr
+    #[test]
+    fn test_parser_optional_chain_field() {
+        let source = r#"function main() { const x = user?.name; }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::OptionalChain(chain) => match &chain.access {
+                    OptionalAccess::Field(field) => assert_eq!(field.name, "name"),
+                    _ => panic!("expected Field access"),
+                },
+                _ => panic!("expected OptionalChain, got {:?}", decl.init.kind),
+            },
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test 4: Parse `name ?? "Anonymous"` → NullishCoalescingExpr
+    #[test]
+    fn test_parser_nullish_coalescing() {
+        let source = r#"function main() { const x = name ?? "Anonymous"; }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::NullishCoalescing(nc) => {
+                    assert!(matches!(nc.left.kind, ExprKind::Ident(_)));
+                    assert!(matches!(nc.right.kind, ExprKind::StringLit(_)));
+                }
+                _ => panic!("expected NullishCoalescing"),
+            },
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test 5: Parse `if (x !== null)` → IfStmt with binary Ne comparison to null
+    #[test]
+    fn test_parser_if_not_null_check() {
+        let source = r#"function main() { if (x !== null) { return x; } }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::If(if_stmt) => match &if_stmt.condition.kind {
+                ExprKind::Binary(bin) => {
+                    assert_eq!(bin.op, BinaryOp::Ne);
+                    assert!(matches!(bin.left.kind, ExprKind::Ident(_)));
+                    assert!(matches!(bin.right.kind, ExprKind::NullLit));
+                }
+                _ => panic!("expected Binary"),
+            },
+            _ => panic!("expected If"),
+        }
+    }
+
+    // Test: Parse `===` and `!==` operators
+    #[test]
+    fn test_parser_strict_equality_operators() {
+        let source = r#"function main() { if (x === null) { } if (y !== null) { } }"#;
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::If(if_stmt) => match &if_stmt.condition.kind {
+                ExprKind::Binary(bin) => {
+                    assert_eq!(bin.op, BinaryOp::Eq);
+                    assert!(matches!(bin.right.kind, ExprKind::NullLit));
+                }
+                _ => panic!("expected Binary"),
+            },
+            _ => panic!("expected If"),
+        }
+        match &f.body.stmts[1] {
+            Stmt::If(if_stmt) => match &if_stmt.condition.kind {
+                ExprKind::Binary(bin) => {
+                    assert_eq!(bin.op, BinaryOp::Ne);
+                    assert!(matches!(bin.right.kind, ExprKind::NullLit));
+                }
+                _ => panic!("expected Binary"),
+            },
+            _ => panic!("expected If"),
         }
     }
 }

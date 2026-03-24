@@ -58,6 +58,8 @@ pub(crate) enum TokenKind {
     Case,
     /// `new`
     New,
+    /// `null`
+    Null,
 
     // Operators
     /// `+`
@@ -102,6 +104,14 @@ pub(crate) enum TokenKind {
     PercentEq,
     /// `|` (used in union type syntax)
     Pipe,
+    /// `?.` (optional chaining operator)
+    QuestionDot,
+    /// `??` (nullish coalescing operator)
+    QuestionQuestion,
+    /// `===` (strict equality — treated same as `==`)
+    EqEqEq,
+    /// `!==` (strict inequality — treated same as `!=`)
+    BangEqEq,
 
     // Delimiters
     /// `(`

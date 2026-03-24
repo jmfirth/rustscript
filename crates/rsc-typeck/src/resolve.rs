@@ -36,6 +36,38 @@ pub fn resolve_type_name(name: &str) -> Option<Type> {
     }
 }
 
+/// Resolve a union type annotation (`T | null`) to `Option<T>`.
+///
+/// Only `T | null` unions are supported in Phase 1. The resolver identifies
+/// which member is `null` and wraps the other member in `Type::Option`.
+/// Multi-member non-null unions are not supported and resolve to the first
+/// non-null member.
+fn resolve_union_type(
+    members: &[ast::TypeAnnotation],
+    mut resolve_member: impl FnMut(&ast::TypeAnnotation) -> Type,
+) -> Type {
+    let mut non_null_types = Vec::new();
+    let mut has_null = false;
+
+    for member in members {
+        if let ast::TypeKind::Named(ident) = &member.kind
+            && ident.name == "null"
+        {
+            has_null = true;
+            continue;
+        }
+        non_null_types.push(resolve_member(member));
+    }
+
+    if has_null {
+        let inner = non_null_types.into_iter().next().unwrap_or(Type::Unit);
+        Type::Option(Box::new(inner))
+    } else {
+        // No null member — just return the first type (unsupported union)
+        non_null_types.into_iter().next().unwrap_or(Type::Unit)
+    }
+}
+
 /// Infer the type of a literal expression.
 ///
 /// Returns `None` for non-literal expressions.
@@ -46,6 +78,7 @@ pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
         ast::ExprKind::FloatLit(_) => Some(Type::Primitive(PrimitiveType::F64)),
         ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => Some(Type::String),
         ast::ExprKind::BoolLit(_) => Some(Type::Primitive(PrimitiveType::Bool)),
+        ast::ExprKind::NullLit => Some(Type::Option(Box::new(Type::Error))),
         _ => None,
     }
 }
@@ -71,6 +104,9 @@ pub fn resolve_type_annotation(
             // Map collection type aliases to their Rust equivalents
             let rust_name = map_collection_type_name(&ident.name);
             Type::Generic(rust_name, resolved_args)
+        }
+        ast::TypeKind::Union(members) => {
+            resolve_union_type(members, |m| resolve_type_annotation(m, diagnostics))
         }
     }
 }
@@ -136,6 +172,9 @@ pub fn resolve_type_annotation_with_generics(
             let rust_name = map_collection_type_name(&ident.name);
             Type::Generic(rust_name, resolved_args)
         }
+        ast::TypeKind::Union(members) => resolve_union_type(members, |m| {
+            resolve_type_annotation_with_generics(m, registry, generic_param_names, diagnostics)
+        }),
     }
 }
 

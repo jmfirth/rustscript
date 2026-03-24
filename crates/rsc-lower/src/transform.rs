@@ -8,9 +8,10 @@ use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef,
-    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt,
-    RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
-    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt,
+    RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustParam, RustPattern,
+    RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+    RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -301,9 +302,13 @@ impl Transform {
             Some(ty)
         });
 
+        // Set return type context for Option wrapping in return statements
+        ctx.set_return_type(return_type.clone());
+
         // Lower the body
         let body = self.lower_block(&f.body, ctx, &use_map, 0, &reassigned);
 
+        ctx.set_return_type(None);
         ctx.pop_scope();
 
         RustFnDecl {
@@ -353,18 +358,9 @@ impl Transform {
                 let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
                 RustStmt::Semi(lowered)
             }
-            ast::Stmt::Return(ret) => {
-                let value = ret
-                    .value
-                    .as_ref()
-                    .map(|v| self.lower_expr(v, ctx, use_map, stmt_index));
-                RustStmt::Return(RustReturnStmt {
-                    value,
-                    span: Some(ret.span),
-                })
-            }
+            ast::Stmt::Return(ret) => self.lower_return(ret, ctx, use_map, stmt_index),
             ast::Stmt::If(if_stmt) => {
-                RustStmt::If(self.lower_if(if_stmt, ctx, use_map, stmt_index, reassigned))
+                self.lower_if_as_stmt(if_stmt, ctx, use_map, stmt_index, reassigned)
             }
             ast::Stmt::While(while_stmt) => {
                 RustStmt::While(self.lower_while(while_stmt, ctx, use_map, stmt_index, reassigned))
@@ -476,7 +472,53 @@ impl Transform {
         })
     }
 
-    /// Lower an if statement.
+    /// Lower a return statement, wrapping in `Some()` if the function returns `Option<T>`.
+    ///
+    /// - `return null;` in an `Option` function → `return None;`
+    /// - `return value;` in an `Option` function → `return Some(value);`
+    /// - Other returns pass through unchanged.
+    fn lower_return(
+        &self,
+        ret: &ast::ReturnStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustStmt {
+        let is_option_return = ctx
+            .current_return_type()
+            .is_some_and(|ty| matches!(ty, RustType::Option(_)));
+
+        let value = ret.value.as_ref().map(|v| {
+            if is_option_return {
+                // Check for `return null;`
+                if matches!(v.kind, ast::ExprKind::NullLit) {
+                    return RustExpr::new(RustExprKind::None, v.span);
+                }
+                // Non-null return in Option context → wrap in Some(...)
+                let lowered = self.lower_expr(v, ctx, use_map, stmt_index);
+                RustExpr::synthetic(RustExprKind::Some(Box::new(lowered)))
+            } else {
+                self.lower_expr(v, ctx, use_map, stmt_index)
+            }
+        });
+
+        // Bare `return;` in Option context → `return None;`
+        let value = if value.is_none() && is_option_return {
+            Some(RustExpr::new(RustExprKind::None, ret.span))
+        } else {
+            value
+        };
+
+        RustStmt::Return(RustReturnStmt {
+            value,
+            span: Some(ret.span),
+        })
+    }
+
+    /// Lower an if statement, detecting null check narrowing patterns.
+    ///
+    /// When the condition is `x !== null`, lowers to `if let Some(x) = x { ... }`.
+    /// When the condition is `x === null`, lowers to `if let Some(x) = x { else } else { then }`.
     fn lower_if(
         &self,
         if_stmt: &ast::IfStmt,
@@ -503,6 +545,108 @@ impl Transform {
             else_clause,
             span: Some(if_stmt.span),
         }
+    }
+
+    /// Detect a null check pattern in an if condition.
+    ///
+    /// Returns `Some((var_name, is_not_null))` if the condition is `x !== null`
+    /// or `x === null`.
+    fn detect_null_check(condition: &ast::Expr) -> Option<(String, bool)> {
+        if let ast::ExprKind::Binary(bin) = &condition.kind {
+            let var_name = match (&bin.left.kind, &bin.right.kind) {
+                (ast::ExprKind::Ident(ident), ast::ExprKind::NullLit)
+                | (ast::ExprKind::NullLit, ast::ExprKind::Ident(ident)) => Some(ident.name.clone()),
+                _ => None,
+            };
+
+            if let Some(var_name) = var_name {
+                return match bin.op {
+                    ast::BinaryOp::Ne => Some((var_name, true)), // !== null → not null
+                    ast::BinaryOp::Eq => Some((var_name, false)), // === null → is null
+                    _ => None,
+                };
+            }
+        }
+        None
+    }
+
+    /// Lower an if statement to an `IfLet` when a null check pattern is detected.
+    fn lower_if_as_stmt(
+        &self,
+        if_stmt: &ast::IfStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        if let Some((var_name, is_not_null)) = Self::detect_null_check(&if_stmt.condition) {
+            let expr = self.lower_expr(
+                &ast::Expr {
+                    kind: ast::ExprKind::Ident(ast::Ident {
+                        name: var_name.clone(),
+                        span: if_stmt.condition.span,
+                    }),
+                    span: if_stmt.condition.span,
+                },
+                ctx,
+                use_map,
+                stmt_index,
+            );
+
+            if is_not_null {
+                // `if (x !== null)` → `if let Some(x) = x { then } else { else }`
+                let then_block =
+                    self.lower_block(&if_stmt.then_block, ctx, use_map, stmt_index, reassigned);
+                let else_block = if_stmt.else_clause.as_ref().map(|ec| match ec {
+                    ast::ElseClause::Block(block) => {
+                        self.lower_block(block, ctx, use_map, stmt_index, reassigned)
+                    }
+                    ast::ElseClause::ElseIf(_) => {
+                        // For else-if chains after null check, fall back to normal if lowering
+                        // within an else block
+                        RustBlock {
+                            stmts: vec![],
+                            expr: None,
+                        }
+                    }
+                });
+
+                return RustStmt::IfLet(RustIfLetStmt {
+                    binding: var_name,
+                    expr,
+                    then_block,
+                    else_block,
+                    span: Some(if_stmt.span),
+                });
+            }
+            // `if (x === null)` → `if let Some(x) = x { else_block } else { then_block }`
+            // We swap the branches: the then block is the "is None" case
+            let then_of_some = if_stmt.else_clause.as_ref().map(|ec| match ec {
+                ast::ElseClause::Block(block) => {
+                    self.lower_block(block, ctx, use_map, stmt_index, reassigned)
+                }
+                ast::ElseClause::ElseIf(_) => RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+            });
+            let else_of_some =
+                Some(self.lower_block(&if_stmt.then_block, ctx, use_map, stmt_index, reassigned));
+
+            return RustStmt::IfLet(RustIfLetStmt {
+                binding: var_name,
+                expr,
+                then_block: then_of_some.unwrap_or(RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                }),
+                else_block: else_of_some,
+                span: Some(if_stmt.span),
+            });
+        }
+
+        // Not a null check — lower as normal if
+        RustStmt::If(self.lower_if(if_stmt, ctx, use_map, stmt_index, reassigned))
     }
 
     /// Lower a while statement.
@@ -1002,6 +1146,60 @@ impl Transform {
                     expr.span,
                 )
             }
+            ast::ExprKind::NullLit => RustExpr::new(RustExprKind::None, expr.span),
+            ast::ExprKind::OptionalChain(chain) => {
+                let object = self.lower_expr(&chain.object, ctx, use_map, stmt_index);
+                match &chain.access {
+                    ast::OptionalAccess::Field(field) => RustExpr::new(
+                        RustExprKind::OptionMap {
+                            expr: Box::new(object),
+                            closure_param: "v".to_owned(),
+                            closure_body: Box::new(RustExpr::synthetic(
+                                RustExprKind::FieldAccess {
+                                    object: Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                                        "v".to_owned(),
+                                    ))),
+                                    field: field.name.clone(),
+                                },
+                            )),
+                        },
+                        expr.span,
+                    ),
+                    ast::OptionalAccess::Method(method, args) => {
+                        let lowered_args: Vec<RustExpr> = args
+                            .iter()
+                            .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                            .collect();
+                        RustExpr::new(
+                            RustExprKind::OptionMap {
+                                expr: Box::new(object),
+                                closure_param: "v".to_owned(),
+                                closure_body: Box::new(RustExpr::synthetic(
+                                    RustExprKind::MethodCall {
+                                        receiver: Box::new(RustExpr::synthetic(
+                                            RustExprKind::Ident("v".to_owned()),
+                                        )),
+                                        method: method.name.clone(),
+                                        args: lowered_args,
+                                    },
+                                )),
+                            },
+                            expr.span,
+                        )
+                    }
+                }
+            }
+            ast::ExprKind::NullishCoalescing(nc) => {
+                let left = self.lower_expr(&nc.left, ctx, use_map, stmt_index);
+                let right = self.lower_expr(&nc.right, ctx, use_map, stmt_index);
+                RustExpr::new(
+                    RustExprKind::UnwrapOr {
+                        expr: Box::new(left),
+                        default: Box::new(right),
+                    },
+                    expr.span,
+                )
+            }
         }
     }
 
@@ -1271,6 +1469,9 @@ fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hash
                 scan_type_for_collections(arg, needs_hashmap, needs_hashset);
             }
         }
+        RustType::Option(inner) => {
+            scan_type_for_collections(inner, needs_hashmap, needs_hashset);
+        }
         _ => {}
     }
 }
@@ -1342,6 +1543,13 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(&arm.body, needs_hashmap, needs_hashset);
             }
         }
+        RustStmt::IfLet(if_let) => {
+            scan_expr_for_collections(&if_let.expr, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&if_let.then_block, needs_hashmap, needs_hashset);
+            if let Some(else_block) = &if_let.else_block {
+                scan_block_for_collections(else_block, needs_hashmap, needs_hashset);
+            }
+        }
     }
 }
 
@@ -1387,7 +1595,10 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
             }
         }
-        RustExprKind::Paren(inner) | RustExprKind::Clone(inner) | RustExprKind::ToString(inner) => {
+        RustExprKind::Paren(inner)
+        | RustExprKind::Clone(inner)
+        | RustExprKind::ToString(inner)
+        | RustExprKind::Some(inner) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustExprKind::Assign { value, .. } | RustExprKind::CompoundAssign { value, .. } => {
@@ -1406,7 +1617,18 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::StringLit(_)
         | RustExprKind::BoolLit(_)
         | RustExprKind::Ident(_)
-        | RustExprKind::EnumVariant { .. } => {}
+        | RustExprKind::EnumVariant { .. }
+        | RustExprKind::None => {}
+        RustExprKind::UnwrapOr { expr, default } => {
+            scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(default, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::OptionMap {
+            expr, closure_body, ..
+        } => {
+            scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(closure_body, needs_hashmap, needs_hashset);
+        }
     }
 }
 
@@ -1464,7 +1686,7 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         ast::TypeKind::Named(ident) | ast::TypeKind::Generic(ident, _) => {
                             vec![ident.name.clone()]
                         }
-                        ast::TypeKind::Void => vec![],
+                        ast::TypeKind::Void | ast::TypeKind::Union(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
@@ -1502,6 +1724,7 @@ fn is_default_literal_type(expr: &ast::Expr, ty: &RustType) -> bool {
         ast::ExprKind::FloatLit(_) => *ty == RustType::F64,
         ast::ExprKind::BoolLit(_) => *ty == RustType::Bool,
         ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => *ty == RustType::String,
+        ast::ExprKind::NullLit => matches!(ty, RustType::Option(_)),
         _ => false,
     }
 }
@@ -3444,5 +3667,261 @@ mod tests {
                 .any(|u| u.path == "std::collections::HashMap"),
             "expected use std::collections::HashMap"
         );
+    }
+
+    // ---- Task 020: T | null → Option lowering tests ----
+
+    // Test 6: Lower `T | null` return type → `Option<T>` in Rust
+    #[test]
+    fn test_lower_option_return_type() {
+        let module = make_module(vec![fn_item(FnDecl {
+            name: ident("find", 0, 4),
+            type_params: None,
+            params: vec![],
+            return_type: Some(TypeAnnotation {
+                kind: TypeKind::Union(vec![
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("string", 0, 6)),
+                        span: span(0, 6),
+                    },
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("null", 9, 13)),
+                        span: span(9, 13),
+                    },
+                ]),
+                span: span(0, 13),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(Expr {
+                        kind: ExprKind::NullLit,
+                        span: span(20, 24),
+                    }),
+                    span: span(15, 25),
+                })],
+                span: span(14, 26),
+            },
+            span: span(0, 26),
+        })]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        assert_eq!(
+            func.return_type,
+            Some(RustType::Option(Box::new(RustType::String)))
+        );
+    }
+
+    // Test 7: Lower `null` literal → `RustExprKind::None`
+    #[test]
+    fn test_lower_null_literal_to_none() {
+        let module = make_module(vec![fn_item(make_fn(
+            "test",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::NullLit,
+                    span: span(0, 4),
+                },
+                span: span(0, 5),
+            })],
+        ))]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(matches!(let_stmt.init.kind, RustExprKind::None));
+            }
+            _ => panic!("expected Let"),
+        }
+    }
+
+    // Test 8: Lower non-null return in Option context → `Some(expr)`
+    #[test]
+    fn test_lower_return_some_wrapping() {
+        let module = make_module(vec![fn_item(FnDecl {
+            name: ident("find", 0, 4),
+            type_params: None,
+            params: vec![],
+            return_type: Some(TypeAnnotation {
+                kind: TypeKind::Union(vec![
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("string", 0, 6)),
+                        span: span(0, 6),
+                    },
+                    TypeAnnotation {
+                        kind: TypeKind::Named(ident("null", 9, 13)),
+                        span: span(9, 13),
+                    },
+                ]),
+                span: span(0, 13),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(string_expr("hello", 20, 27)),
+                    span: span(15, 28),
+                })],
+                span: span(14, 29),
+            },
+            span: span(0, 29),
+        })]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Return(ret) => {
+                let val = ret.value.as_ref().expect("expected return value");
+                assert!(
+                    matches!(val.kind, RustExprKind::Some(_)),
+                    "expected Some wrapping, got {:?}",
+                    val.kind
+                );
+            }
+            _ => panic!("expected Return"),
+        }
+    }
+
+    // Test 9: Lower `x !== null` in if-condition → `if let Some(x) = x`
+    #[test]
+    fn test_lower_null_check_narrowing() {
+        let module = make_module(vec![fn_item(make_fn(
+            "test",
+            vec![],
+            None,
+            vec![Stmt::If(IfStmt {
+                condition: Expr {
+                    kind: ExprKind::Binary(BinaryExpr {
+                        op: BinaryOp::Ne,
+                        left: Box::new(ident_expr("x", 0, 1)),
+                        right: Box::new(Expr {
+                            kind: ExprKind::NullLit,
+                            span: span(5, 9),
+                        }),
+                    }),
+                    span: span(0, 9),
+                },
+                then_block: Block {
+                    stmts: vec![],
+                    span: span(10, 12),
+                },
+                else_clause: None,
+                span: span(0, 12),
+            })],
+        ))]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        assert!(
+            matches!(func.body.stmts[0], RustStmt::IfLet(_)),
+            "expected IfLet statement, got {:?}",
+            func.body.stmts[0]
+        );
+        match &func.body.stmts[0] {
+            RustStmt::IfLet(if_let) => {
+                assert_eq!(if_let.binding, "x");
+            }
+            _ => panic!("expected IfLet"),
+        }
+    }
+
+    // Test 10: Lower optional chaining → OptionMap expression
+    #[test]
+    fn test_lower_optional_chaining() {
+        let module = make_module(vec![fn_item(make_fn(
+            "test",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::OptionalChain(OptionalChainExpr {
+                        object: Box::new(ident_expr("user", 4, 8)),
+                        access: OptionalAccess::Field(ident("name", 10, 14)),
+                    }),
+                    span: span(4, 14),
+                },
+                span: span(0, 15),
+            })],
+        ))]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(
+                    matches!(let_stmt.init.kind, RustExprKind::OptionMap { .. }),
+                    "expected OptionMap, got {:?}",
+                    let_stmt.init.kind
+                );
+            }
+            _ => panic!("expected Let"),
+        }
+    }
+
+    // Test 11: Lower nullish coalescing → UnwrapOr expression
+    #[test]
+    fn test_lower_nullish_coalescing() {
+        let module = make_module(vec![fn_item(make_fn(
+            "test",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::NullishCoalescing(NullishCoalescingExpr {
+                        left: Box::new(ident_expr("name", 4, 8)),
+                        right: Box::new(string_expr("Anonymous", 12, 23)),
+                    }),
+                    span: span(4, 23),
+                },
+                span: span(0, 24),
+            })],
+        ))]);
+
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(
+                    matches!(let_stmt.init.kind, RustExprKind::UnwrapOr { .. }),
+                    "expected UnwrapOr, got {:?}",
+                    let_stmt.init.kind
+                );
+            }
+            _ => panic!("expected Let"),
+        }
     }
 }

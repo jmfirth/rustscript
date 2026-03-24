@@ -665,6 +665,7 @@ impl<'a> Lexer<'a> {
             "switch" => TokenKind::Switch,
             "case" => TokenKind::Case,
             "new" => TokenKind::New,
+            "null" => TokenKind::Null,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -674,11 +675,37 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Try to lex a two-character operator. Returns `None` if the current
-    /// position does not start a two-character operator.
+    /// Peek at the byte two positions ahead of current.
+    fn peek_two_ahead(&self) -> Option<u8> {
+        self.bytes.get(self.pos + 2).copied()
+    }
+
+    /// Try to lex a multi-character operator. Returns `None` if the current
+    /// position does not start a multi-character operator.
+    ///
+    /// Handles 3-char tokens (`===`, `!==`) before 2-char tokens to avoid
+    /// partial matches.
     fn try_two_char_operator(&mut self, start: usize) -> Option<Token> {
         let first = self.peek()?;
         let second = self.peek_next()?;
+
+        // 3-char operators: `===` and `!==`
+        if let Some(third) = self.peek_two_ahead() {
+            let kind_3 = match (first, second, third) {
+                (b'=', b'=', b'=') => Some(TokenKind::EqEqEq),
+                (b'!', b'=', b'=') => Some(TokenKind::BangEqEq),
+                _ => None,
+            };
+            if let Some(kind) = kind_3 {
+                self.advance();
+                self.advance();
+                self.advance();
+                return Some(Token {
+                    kind,
+                    span: self.span_from(start),
+                });
+            }
+        }
 
         let kind = match (first, second) {
             (b'=', b'=') => TokenKind::EqEq,
@@ -692,6 +719,8 @@ impl<'a> Lexer<'a> {
             (b'*', b'=') => TokenKind::StarEq,
             (b'/', b'=') => TokenKind::SlashEq,
             (b'%', b'=') => TokenKind::PercentEq,
+            (b'?', b'.') => TokenKind::QuestionDot,
+            (b'?', b'?') => TokenKind::QuestionQuestion,
             _ => return None,
         };
 
@@ -1153,5 +1182,43 @@ mod tests {
         let tokens = tokenize("[1, 2, 3]");
         assert_eq!(tokens[0].kind, TokenKind::LBracket);
         assert_eq!(tokens[6].kind, TokenKind::RBracket);
+    }
+
+    // --- Task 020: null, ?., ?? tokens ---
+
+    // 30. `null` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_null_keyword_produces_null_token() {
+        let tokens = tokenize("null");
+        assert_eq!(tokens.len(), 2); // Null + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Null);
+    }
+
+    // 31. `?.` tokenizes as single QuestionDot token
+    #[test]
+    fn test_lexer_question_dot_produces_question_dot_token() {
+        let tokens = tokenize("x?.name");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
+    }
+
+    // 32. `??` tokenizes as single QuestionQuestion token
+    #[test]
+    fn test_lexer_question_question_produces_question_question_token() {
+        let tokens = tokenize("x ?? y");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionQuestion);
+    }
+
+    // 33. `===` tokenizes as EqEqEq token
+    #[test]
+    fn test_lexer_triple_eq_produces_eq_eq_eq_token() {
+        let tokens = tokenize("x === y");
+        assert_eq!(tokens[1].kind, TokenKind::EqEqEq);
+    }
+
+    // 34. `!==` tokenizes as BangEqEq token
+    #[test]
+    fn test_lexer_bang_eq_eq_produces_bang_eq_eq_token() {
+        let tokens = tokenize("x !== y");
+        assert_eq!(tokens[1].kind, TokenKind::BangEqEq);
     }
 }

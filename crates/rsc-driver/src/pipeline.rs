@@ -238,4 +238,107 @@ function main() {
             result.rust_source
         );
     }
+
+    // ---- Task 020: T | null → Option correctness scenarios ----
+
+    // Correctness scenario 1: Null check narrowing e2e
+    #[test]
+    fn test_compile_source_null_check_narrowing() {
+        let source = r#"function findName(found: bool): string | null {
+  if (found) { return "Alice"; }
+  return null;
+}
+function main() {
+  const name = findName(true);
+  if (name !== null) {
+    console.log(name);
+  }
+}"#;
+        let result = compile_source(source, "null_narrowing.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("-> Option<String>"),
+            "expected Option<String> return type, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("return None"),
+            "expected return None, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("Some("),
+            "expected Some() wrapping, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("if let Some(name) = name"),
+            "expected if let Some narrowing, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 2: Nullish coalescing e2e
+    #[test]
+    fn test_compile_source_nullish_coalescing() {
+        let source = r#"function findName(found: bool): string | null {
+  if (found) { return "Bob"; }
+  return null;
+}
+function main() {
+  const name = findName(false) ?? "Anonymous";
+  console.log(name);
+}"#;
+        let result = compile_source(source, "nullish_coalesce.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".unwrap_or("),
+            "expected .unwrap_or(), got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 3: Optional chaining
+    #[test]
+    fn test_compile_source_optional_chaining() {
+        let source = r#"type User = { name: string }
+function getUser(found: bool): User | null {
+  if (found) { return { name: "Alice" }; }
+  return null;
+}
+function main() {
+  const user = getUser(true);
+  const name = user?.name ?? "Unknown";
+  console.log(name);
+}"#;
+        let result = compile_source(source, "optional_chain.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("Option<User>"),
+            "expected Option<User> return type, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".map("),
+            "expected .map() for optional chaining, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".unwrap_or("),
+            "expected .unwrap_or() for ??, got:\n{}",
+            result.rust_source
+        );
+    }
 }
