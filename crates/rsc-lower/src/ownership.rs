@@ -227,11 +227,16 @@ impl UseMap {
             | ast::ExprKind::StringLit(_)
             | ast::ExprKind::BoolLit(_)
             | ast::ExprKind::NullLit
+            | ast::ExprKind::This
             | ast::ExprKind::Closure(_) => {
-                // Closure bodies are opaque for ownership analysis —
+                // Closure bodies and `this` are opaque for ownership analysis —
                 // variables captured by a closure are not tracked in the
                 // outer function's use map. This is the conservative Phase 1
                 // approach per the task spec.
+            }
+            ast::ExprKind::FieldAssign(fa) => {
+                Self::collect_expr_uses(&fa.object, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(&fa.value, stmt_index, false, is_ref_call, uses);
             }
             ast::ExprKind::OptionalChain(chain) => {
                 Self::collect_expr_uses(&chain.object, stmt_index, false, is_ref_call, uses);
@@ -389,6 +394,70 @@ fn collect_if_assignments(if_stmt: &ast::IfStmt, reassigned: &mut HashSet<String
 fn collect_assignments_from_expr(expr: &ast::Expr, reassigned: &mut HashSet<String>) {
     if let ast::ExprKind::Assign(assign) = &expr.kind {
         reassigned.insert(assign.target.name.clone());
+    }
+    // FieldAssign (e.g., `this.field = value`) does not create new variable
+    // bindings — it modifies an existing object. Handled by the wildcard.
+}
+
+/// Find variables that are receivers of method calls in a block.
+///
+/// This is used to detect variables that may need `mut` because
+/// a class method called on them might take `&mut self`.
+pub(crate) fn find_method_call_receivers(body: &ast::Block) -> HashSet<String> {
+    let mut receivers = HashSet::new();
+    for stmt in &body.stmts {
+        collect_method_call_receivers(stmt, &mut receivers);
+    }
+    receivers
+}
+
+/// Collect variables that are receivers of method calls from a statement.
+fn collect_method_call_receivers(stmt: &ast::Stmt, receivers: &mut HashSet<String>) {
+    match stmt {
+        ast::Stmt::Expr(expr) => collect_method_receivers_from_expr(expr, receivers),
+        ast::Stmt::If(if_stmt) => {
+            for s in &if_stmt.then_block.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+            if let Some(else_clause) = &if_stmt.else_clause {
+                match else_clause {
+                    ast::ElseClause::Block(block) => {
+                        for s in &block.stmts {
+                            collect_method_call_receivers(s, receivers);
+                        }
+                    }
+                    ast::ElseClause::ElseIf(nested) => {
+                        let nested_block = ast::Block {
+                            stmts: vec![ast::Stmt::If(nested.as_ref().clone())],
+                            span: nested.span,
+                        };
+                        for s in &nested_block.stmts {
+                            collect_method_call_receivers(s, receivers);
+                        }
+                    }
+                }
+            }
+        }
+        ast::Stmt::While(w) => {
+            for s in &w.body.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+        }
+        ast::Stmt::For(for_of) => {
+            for s in &for_of.body.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract method call receivers from an expression.
+fn collect_method_receivers_from_expr(expr: &ast::Expr, receivers: &mut HashSet<String>) {
+    if let ast::ExprKind::MethodCall(mc) = &expr.kind
+        && let ast::ExprKind::Ident(ident) = &mc.object.kind
+    {
+        receivers.insert(ident.name.clone());
     }
 }
 

@@ -5,14 +5,15 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr, ClosureBody, ClosureExpr,
-    ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr,
-    InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr, ClassConstructor, ClassDef,
+    ClassField, ClassMember, ClassMethod, ClosureBody, ClosureExpr, ContinueStmt, DestructureStmt,
+    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
+    FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InterfaceDef,
+    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
+    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
+    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -225,6 +226,12 @@ impl Parser {
             TokenKind::From => "`from`",
             TokenKind::FatArrow => "`=>`",
             TokenKind::Ampersand => "`&`",
+            TokenKind::Class => "`class`",
+            TokenKind::Constructor => "`constructor`",
+            TokenKind::This => "`this`",
+            TokenKind::Private => "`private`",
+            TokenKind::Public => "`public`",
+            TokenKind::Implements => "`implements`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -260,7 +267,8 @@ impl Parser {
                 | TokenKind::Switch
                 | TokenKind::Try
                 | TokenKind::Throw
-                | TokenKind::Interface => return,
+                | TokenKind::Interface
+                | TokenKind::Class => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -310,6 +318,14 @@ impl Parser {
                 let span = iface.span;
                 Item {
                     kind: ItemKind::Interface(iface),
+                    exported: false,
+                    span,
+                }
+            }),
+            TokenKind::Class => self.parse_class_def().map(|cls| {
+                let span = cls.span;
+                Item {
+                    kind: ItemKind::Class(cls),
                     exported: false,
                     span,
                 }
@@ -396,6 +412,15 @@ impl Parser {
                 item.span = start.merge(item.span);
                 Some(item)
             }
+            TokenKind::Class => {
+                let cls = self.parse_class_def()?;
+                let span = start.merge(cls.span);
+                Some(Item {
+                    kind: ItemKind::Class(cls),
+                    exported: true,
+                    span,
+                })
+            }
             TokenKind::Interface => {
                 let iface = self.parse_interface_def()?;
                 let span = start.merge(iface.span);
@@ -435,7 +460,7 @@ impl Parser {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
                     Diagnostic::error(format!(
-                        "expected `function`, `type`, `interface`, or `{{` after `export`, found {}",
+                        "expected `function`, `type`, `interface`, `class`, or `{{` after `export`, found {}",
                         Self::describe_kind(&current.kind)
                     ))
                     .with_label(current.span, self.file_id, "unexpected token"),
@@ -904,6 +929,158 @@ impl Parser {
             return_type,
             span,
         })
+    }
+
+    // ---------------------------------------------------------------
+    // Class definitions
+    // ---------------------------------------------------------------
+
+    /// Parse a class definition: `class Name [<T>] [implements I1, I2] { members }`.
+    fn parse_class_def(&mut self) -> Option<ClassDef> {
+        let class_token = self.advance(); // consume `class`
+        let start = class_token.span;
+
+        let name = self.parse_ident()?;
+
+        // Optional generic type parameters
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
+        // Optional implements clause
+        let implements = if self.check(&TokenKind::Implements) {
+            self.advance(); // consume `implements`
+            let mut ifaces = Vec::new();
+            loop {
+                let iface = self.parse_ident()?;
+                ifaces.push(iface);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            ifaces
+        } else {
+            Vec::new()
+        };
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut members = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            if let Some(member) = self.parse_class_member() {
+                members.push(member);
+            } else {
+                // Error recovery: skip to next semicolon or closing brace
+                while !self.at_end()
+                    && !self.check(&TokenKind::Semicolon)
+                    && !self.check(&TokenKind::RBrace)
+                {
+                    self.advance();
+                }
+                self.eat(&TokenKind::Semicolon);
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+
+        Some(ClassDef {
+            name,
+            type_params,
+            implements,
+            members,
+            span,
+        })
+    }
+
+    /// Parse a single class member: field, constructor, or method.
+    ///
+    /// Disambiguates based on leading tokens:
+    /// - `constructor(` → constructor
+    /// - `private name :` → private field
+    /// - `public name :` → public field
+    /// - `private name (` → private method
+    /// - `public name (` → public method
+    /// - `name :` → public field (default visibility)
+    /// - `name (` → public method (default visibility)
+    fn parse_class_member(&mut self) -> Option<ClassMember> {
+        // Check for constructor
+        if matches!(self.peek(), TokenKind::Constructor) {
+            return self.parse_class_constructor().map(ClassMember::Constructor);
+        }
+
+        // Parse optional visibility modifier
+        let visibility = match self.peek() {
+            TokenKind::Private => {
+                self.advance();
+                Visibility::Private
+            }
+            TokenKind::Public => {
+                self.advance();
+                Visibility::Public
+            }
+            _ => Visibility::Public,
+        };
+
+        let member_start = self.current_token().span;
+        let name = self.parse_ident()?;
+
+        // Field: `name: Type;`
+        if self.check(&TokenKind::Colon) {
+            self.advance(); // consume `:`
+            let type_ann = self.parse_type_annotation()?;
+            self.expect(&TokenKind::Semicolon)?;
+            let span = member_start.merge(self.previous_span());
+            return Some(ClassMember::Field(ClassField {
+                visibility,
+                name,
+                type_ann,
+                span,
+            }));
+        }
+
+        // Method: `name<T>(params): ReturnType { body }`
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::LParen)?;
+        let params = self.parse_param_list();
+        self.expect(&TokenKind::RParen)?;
+
+        let return_type = self.parse_return_type_annotation();
+
+        let body = self.parse_block()?;
+        let span = member_start.merge(body.span);
+
+        Some(ClassMember::Method(ClassMethod {
+            visibility,
+            name,
+            type_params,
+            params,
+            return_type,
+            body,
+            span,
+        }))
+    }
+
+    /// Parse a class constructor: `constructor(params) { body }`.
+    fn parse_class_constructor(&mut self) -> Option<ClassConstructor> {
+        let ctor_token = self.advance(); // consume `constructor`
+        let start = ctor_token.span;
+
+        self.expect(&TokenKind::LParen)?;
+        let params = self.parse_param_list();
+        self.expect(&TokenKind::RParen)?;
+
+        let body = self.parse_block()?;
+        let span = start.merge(body.span);
+
+        Some(ClassConstructor { params, body, span })
     }
 
     // ---------------------------------------------------------------
@@ -1716,6 +1893,20 @@ impl Parser {
                     span,
                 });
             }
+            // Field assignment: `obj.field = value` (e.g., `this.count = 0`)
+            if let ExprKind::FieldAccess(fa) = expr.kind {
+                self.advance(); // consume `=`
+                let value = self.parse_assignment()?;
+                let span = fa.object.span.merge(value.span);
+                return Some(Expr {
+                    kind: ExprKind::FieldAssign(FieldAssignExpr {
+                        object: fa.object,
+                        field: fa.field,
+                        value: Box::new(value),
+                    }),
+                    span,
+                });
+            }
             // Assignment to non-identifier — emit diagnostic
             let eq_token = self.advance();
             self.diagnostics
@@ -2436,6 +2627,13 @@ impl Parser {
                 None
             }
             TokenKind::LBracket => self.parse_array_literal(),
+            TokenKind::This => {
+                let this_token = self.advance();
+                Some(Expr {
+                    kind: ExprKind::This,
+                    span: this_token.span,
+                })
+            }
             TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
@@ -4798,6 +4996,163 @@ function fail() throws string {
                 assert_eq!(ed.name.name, "Direction");
             }
             other => panic!("expected EnumDef item, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 023: Class parsing tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_class_with_fields_constructor_methods_produces_class_def() {
+        let source = "\
+class Counter {
+  private count: i32;
+
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  get(): i32 {
+    return this.count;
+  }
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.name.name, "Counter");
+                // 1 field + 1 constructor + 2 methods = 4 members
+                assert_eq!(cls.members.len(), 4);
+
+                // First member: private field
+                match &cls.members[0] {
+                    ClassMember::Field(f) => {
+                        assert_eq!(f.name.name, "count");
+                        assert_eq!(f.visibility, Visibility::Private);
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+
+                // Second member: constructor
+                match &cls.members[1] {
+                    ClassMember::Constructor(ctor) => {
+                        assert_eq!(ctor.params.len(), 1);
+                        assert_eq!(ctor.params[0].name.name, "initial");
+                    }
+                    other => panic!("expected Constructor, got {other:?}"),
+                }
+
+                // Third member: method increment
+                match &cls.members[2] {
+                    ClassMember::Method(m) => {
+                        assert_eq!(m.name.name, "increment");
+                        assert_eq!(m.params.len(), 0);
+                    }
+                    other => panic!("expected Method, got {other:?}"),
+                }
+
+                // Fourth member: method get
+                match &cls.members[3] {
+                    ClassMember::Method(m) => {
+                        assert_eq!(m.name.name, "get");
+                    }
+                    other => panic!("expected Method, got {other:?}"),
+                }
+            }
+            other => panic!("expected Class item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_class_private_and_public_visibility() {
+        let source = "\
+class Foo {
+  private x: i32;
+  public y: i32;
+  z: i32;
+}";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                match &cls.members[0] {
+                    ClassMember::Field(f) => assert_eq!(f.visibility, Visibility::Private),
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                match &cls.members[1] {
+                    ClassMember::Field(f) => assert_eq!(f.visibility, Visibility::Public),
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                // Default visibility is public
+                match &cls.members[2] {
+                    ClassMember::Field(f) => assert_eq!(f.visibility, Visibility::Public),
+                    other => panic!("expected Field, got {other:?}"),
+                }
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_class_this_field_access_produces_field_access_on_this() {
+        let source = "\
+class Foo {
+  x: i32;
+  constructor() {
+    this.x = 0;
+  }
+  get(): i32 {
+    return this.x;
+  }
+}";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                // Check constructor body has a FieldAssign
+                match &cls.members[1] {
+                    ClassMember::Constructor(ctor) => {
+                        assert_eq!(ctor.body.stmts.len(), 1);
+                        match &ctor.body.stmts[0] {
+                            Stmt::Expr(expr) => match &expr.kind {
+                                ExprKind::FieldAssign(fa) => {
+                                    assert!(
+                                        matches!(fa.object.kind, ExprKind::This),
+                                        "expected This"
+                                    );
+                                    assert_eq!(fa.field.name, "x");
+                                }
+                                other => panic!("expected FieldAssign, got {other:?}"),
+                            },
+                            other => panic!("expected Expr, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Constructor, got {other:?}"),
+                }
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_class_implements_produces_implements_list() {
+        let source = "\
+class Foo implements Bar, Baz {
+  describe(): string {
+    return \"foo\";
+  }
+}";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.implements.len(), 2);
+                assert_eq!(cls.implements[0].name, "Bar");
+                assert_eq!(cls.implements[1].name, "Baz");
+            }
+            other => panic!("expected Class, got {other:?}"),
         }
     }
 }

@@ -84,6 +84,18 @@ pub(crate) enum TokenKind {
     Export,
     /// `from`
     From,
+    /// `class`
+    Class,
+    /// `constructor`
+    Constructor,
+    /// `this`
+    This,
+    /// `private`
+    Private,
+    /// `public`
+    Public,
+    /// `implements`
+    Implements,
 
     // Operators
     /// `+`

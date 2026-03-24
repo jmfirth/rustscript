@@ -126,6 +126,17 @@ impl TypeRegistry {
     pub fn lookup(&self, name: &str) -> Option<&RegisteredTypeDef> {
         self.types.get(name)
     }
+
+    /// Look up the method signatures for a registered interface.
+    ///
+    /// Returns `None` if the name is not registered or is not an interface.
+    #[must_use]
+    pub fn get_interface_methods(&self, name: &str) -> Option<&[InterfaceMethodSig]> {
+        self.types.get(name).and_then(|td| match &td.kind {
+            TypeDefKind::Interface(methods) => Some(methods.as_slice()),
+            _ => None,
+        })
+    }
 }
 
 impl Default for TypeRegistry {

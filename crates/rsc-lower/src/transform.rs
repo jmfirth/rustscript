@@ -9,10 +9,11 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustCompoundAssignOp,
     RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
-    RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustItem,
-    RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam, RustPattern,
-    RustReturnStmt, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType,
-    RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+    RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock,
+    RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustMethod, RustParam,
+    RustPattern, RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
+    RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+    RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -71,6 +72,7 @@ impl Transform {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
                 ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
                 ast::ItemKind::Interface(iface) => self.register_interface_def(iface, &mut ctx),
+                ast::ItemKind::Class(cls) => self.register_class_def(cls, &mut ctx),
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_) => {}
@@ -109,6 +111,10 @@ impl Transform {
                     let mut lowered = self.lower_interface_def(iface, &mut ctx);
                     lowered.public = exported;
                     items.push(RustItem::Trait(lowered));
+                }
+                ast::ItemKind::Class(cls) => {
+                    let lowered = self.lower_class_def(cls, exported, &mut ctx);
+                    items.extend(lowered);
                 }
                 ast::ItemKind::Import(import) => {
                     let module_path = resolve_import_path(&import.source.value);
@@ -457,8 +463,12 @@ impl Transform {
         let generic_names = collect_generic_param_names(f.type_params.as_ref());
         let mut type_params = lower_type_params(f.type_params.as_ref());
 
-        // Phase 1: find reassigned variables for mutability analysis
-        let reassigned = ownership::find_reassigned_variables(&f.body);
+        // Phase 1: find reassigned variables for mutability analysis.
+        // Also include method call receivers, which need `mut` when calling
+        // `&mut self` methods on class instances.
+        let mut reassigned = ownership::find_reassigned_variables(&f.body);
+        let method_receivers = ownership::find_method_call_receivers(&f.body);
+        reassigned.extend(method_receivers);
 
         // Phase 2: build use map for ownership analysis
         let use_map = UseMap::analyze(&f.body, |obj, method| {
@@ -1617,6 +1627,15 @@ impl Transform {
                 self.lower_struct_lit(slit, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::FieldAccess(fa) => {
+                // `this.field` → `self.field`
+                if matches!(fa.object.kind, ast::ExprKind::This) {
+                    return RustExpr::new(
+                        RustExprKind::SelfFieldAccess {
+                            field: fa.field.name.clone(),
+                        },
+                        expr.span,
+                    );
+                }
                 let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                 RustExpr::new(
                     RustExprKind::FieldAccess {
@@ -1710,6 +1729,31 @@ impl Transform {
             }
             ast::ExprKind::Closure(closure) => {
                 self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),
+            ast::ExprKind::FieldAssign(fa) => {
+                // Check if this is `this.field = value` → `self.field = value`
+                if matches!(fa.object.kind, ast::ExprKind::This) {
+                    let value = self.lower_expr(&fa.value, ctx, use_map, stmt_index);
+                    RustExpr::new(
+                        RustExprKind::SelfFieldAssign {
+                            field: fa.field.name.clone(),
+                            value: Box::new(value),
+                        },
+                        expr.span,
+                    )
+                } else {
+                    // General field assignment: lower the value only.
+                    // Non-`this` field assignments are not yet supported in Phase 1.
+                    let value = self.lower_expr(&fa.value, ctx, use_map, stmt_index);
+                    RustExpr::new(
+                        RustExprKind::Assign {
+                            target: fa.field.name.clone(),
+                            value: Box::new(value),
+                        },
+                        expr.span,
+                    )
+                }
             }
         }
     }
@@ -1949,6 +1993,7 @@ impl Transform {
     ///
     /// `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`,
     /// `new Array()` → `vec![]` (empty vec).
+    /// `new ClassName(args)` → `ClassName::new(args)` (class constructor).
     fn lower_new_expr(
         &self,
         new_expr: &ast::NewExpr,
@@ -1973,6 +2018,7 @@ impl Transform {
             }
             _ => {
                 // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`
+                // `new ClassName(args)` → `ClassName::new(args)` (class constructor)
                 RustExpr::new(
                     RustExprKind::StaticCall {
                         type_name: rust_type_name,
@@ -1984,6 +2030,413 @@ impl Transform {
             }
         }
     }
+
+    /// Register a class definition in the type registry during the pre-pass.
+    fn register_class_def(&mut self, cls: &ast::ClassDef, ctx: &mut LoweringContext) {
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+        let fields: Vec<(String, rsc_typeck::types::Type)> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ast::ClassMember::Field(f) => {
+                    let ty = resolve::resolve_type_annotation_with_generics(
+                        &f.type_ann,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    Some((f.name.name.clone(), ty))
+                }
+                _ => None,
+            })
+            .collect();
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        self.type_registry.register(cls.name.name.clone(), fields);
+    }
+
+    /// Lower a class definition to a struct + impl block(s).
+    ///
+    /// Returns multiple `RustItem`s: one struct, one inherent impl, and
+    /// optionally trait impl blocks for each interface the class implements.
+    #[allow(clippy::too_many_lines)]
+    // Class lowering coordinates struct, constructor, methods, and trait impls;
+    // splitting would fragment the coherent pipeline.
+    fn lower_class_def(
+        &self,
+        cls: &ast::ClassDef,
+        exported: bool,
+        ctx: &mut LoweringContext,
+    ) -> Vec<RustItem> {
+        let mut items = Vec::new();
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+        let type_params = lower_type_params(cls.type_params.as_ref());
+
+        // 1. Build the struct definition from class fields
+        let fields: Vec<RustFieldDef> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ast::ClassMember::Field(f) => {
+                    let ty = resolve::resolve_type_annotation_with_generics(
+                        &f.type_ann,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                    Some(RustFieldDef {
+                        public: f.visibility == ast::Visibility::Public,
+                        name: f.name.name.clone(),
+                        ty: rust_ty,
+                        span: Some(f.span),
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        items.push(RustItem::Struct(RustStructDef {
+            public: exported,
+            name: cls.name.name.clone(),
+            type_params: type_params.clone(),
+            fields,
+            span: Some(cls.span),
+        }));
+
+        // Collect field names for the constructor's Self { } literal
+        let field_names: Vec<String> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ast::ClassMember::Field(f) => Some(f.name.name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // Collect interface method names for trait impl separation
+        let trait_method_names: std::collections::HashSet<String> = cls
+            .implements
+            .iter()
+            .filter_map(|iface_name| self.type_registry.get_interface_methods(&iface_name.name))
+            .flatten()
+            .map(|sig| sig.name.clone())
+            .collect();
+
+        // 2. Build methods
+        let mut inherent_methods: Vec<RustMethod> = Vec::new();
+        let mut trait_methods: std::collections::HashMap<String, Vec<RustMethod>> =
+            std::collections::HashMap::new();
+
+        // Initialize trait method buckets
+        for iface in &cls.implements {
+            trait_methods.entry(iface.name.clone()).or_default();
+        }
+
+        // Lower the constructor
+        for member in &cls.members {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                let method = self.lower_class_constructor(
+                    ctor,
+                    &field_names,
+                    &generic_names,
+                    ctx,
+                    &mut diags,
+                );
+                inherent_methods.push(method);
+            }
+        }
+
+        // Lower methods
+        for member in &cls.members {
+            if let ast::ClassMember::Method(method) = member {
+                let lowered = self.lower_class_method(method, &generic_names, ctx, &mut diags);
+
+                // Check if this method belongs to a trait impl
+                if trait_method_names.contains(&method.name.name) {
+                    // Find which interface this method belongs to
+                    for iface in &cls.implements {
+                        if let Some(iface_methods) =
+                            self.type_registry.get_interface_methods(&iface.name)
+                            && iface_methods.iter().any(|sig| sig.name == method.name.name)
+                        {
+                            trait_methods
+                                .entry(iface.name.clone())
+                                .or_default()
+                                .push(lowered.clone());
+                            break;
+                        }
+                    }
+                } else {
+                    inherent_methods.push(lowered);
+                }
+            }
+        }
+
+        // 3. Emit the inherent impl block
+        items.push(RustItem::Impl(RustImplBlock {
+            type_name: cls.name.name.clone(),
+            type_params: type_params.clone(),
+            methods: inherent_methods,
+            span: Some(cls.span),
+        }));
+
+        // 4. Emit trait impl blocks
+        for iface in &cls.implements {
+            if let Some(methods) = trait_methods.remove(&iface.name) {
+                items.push(RustItem::TraitImpl(RustTraitImplBlock {
+                    trait_name: iface.name.clone(),
+                    type_name: cls.name.name.clone(),
+                    type_params: type_params.clone(),
+                    methods,
+                    span: Some(cls.span),
+                }));
+            }
+        }
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        items
+    }
+
+    /// Lower a class constructor to a `fn new(params) -> Self { Self { fields } }`.
+    fn lower_class_constructor(
+        &self,
+        ctor: &ast::ClassConstructor,
+        field_names: &[String],
+        generic_names: &[String],
+        ctx: &mut LoweringContext,
+        diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
+    ) -> RustMethod {
+        ctx.push_scope();
+
+        let params: Vec<RustParam> = ctor
+            .params
+            .iter()
+            .map(|p| {
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    &p.type_ann,
+                    &self.type_registry,
+                    generic_names,
+                    diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                ctx.declare_variable(p.name.name.clone(), rust_ty.clone());
+                RustParam {
+                    name: p.name.name.clone(),
+                    ty: rust_ty,
+                    span: Some(p.span),
+                }
+            })
+            .collect();
+
+        // Analyze constructor body for field assignments: `this.field = value`
+        // Collect field name → initializer expression
+        let mut field_inits: Vec<(String, RustExpr)> = Vec::new();
+        let mut other_stmts: Vec<RustStmt> = Vec::new();
+
+        // Build use map for the constructor body
+        let empty_reassigned = std::collections::HashSet::new();
+        let use_map = UseMap::analyze(&ctor.body, |obj, method| {
+            self.builtins.is_ref_args(obj, method)
+        });
+
+        for (i, stmt) in ctor.body.stmts.iter().enumerate() {
+            match stmt {
+                ast::Stmt::Expr(expr) if matches!(expr.kind, ast::ExprKind::FieldAssign(_)) => {
+                    if let ast::ExprKind::FieldAssign(fa) = &expr.kind
+                        && matches!(fa.object.kind, ast::ExprKind::This)
+                    {
+                        let value = self.lower_expr(&fa.value, ctx, &use_map, i);
+                        field_inits.push((fa.field.name.clone(), value));
+                        continue;
+                    }
+                    let lowered = self.lower_stmt(stmt, ctx, &use_map, i, &empty_reassigned);
+                    other_stmts.push(lowered);
+                }
+                _ => {
+                    let lowered = self.lower_stmt(stmt, ctx, &use_map, i, &empty_reassigned);
+                    other_stmts.push(lowered);
+                }
+            }
+        }
+
+        // Build the return expression: `Self { field1: value1, field2: value2, ... }`
+        // Use the field names in declaration order, matching with the collected inits
+        let self_fields: Vec<(String, RustExpr)> = field_names
+            .iter()
+            .map(|name| {
+                let value = field_inits.iter().find(|(n, _)| n == name).map_or_else(
+                    || RustExpr::synthetic(RustExprKind::Ident(name.clone())),
+                    |(_, v)| v.clone(),
+                );
+                (name.clone(), value)
+            })
+            .collect();
+
+        // Build the body block
+        other_stmts.push(RustStmt::Expr(RustExpr::synthetic(
+            RustExprKind::SelfStructLit {
+                fields: self_fields,
+            },
+        )));
+
+        let body = RustBlock {
+            stmts: other_stmts,
+            expr: None,
+        };
+
+        ctx.pop_scope();
+
+        RustMethod {
+            name: "new".to_owned(),
+            self_param: None,
+            params,
+            return_type: Some(RustType::SelfType),
+            body,
+            span: Some(ctor.span),
+        }
+    }
+
+    /// Lower a class method to a `RustMethod`.
+    ///
+    /// Determines `&self` or `&mut self` by analyzing whether the method
+    /// writes to `this.field`.
+    fn lower_class_method(
+        &self,
+        method: &ast::ClassMethod,
+        generic_names: &[String],
+        ctx: &mut LoweringContext,
+        diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
+    ) -> RustMethod {
+        ctx.push_scope();
+
+        let params: Vec<RustParam> = method
+            .params
+            .iter()
+            .map(|p| {
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    &p.type_ann,
+                    &self.type_registry,
+                    generic_names,
+                    diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                ctx.declare_variable(p.name.name.clone(), rust_ty.clone());
+                RustParam {
+                    name: p.name.name.clone(),
+                    ty: rust_ty,
+                    span: Some(p.span),
+                }
+            })
+            .collect();
+
+        // Determine return type
+        let return_type = method.return_type.as_ref().and_then(|rt| {
+            rt.type_ann.as_ref().and_then(|ann| {
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    ann,
+                    &self.type_registry,
+                    generic_names,
+                    diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                if rust_ty == RustType::Unit {
+                    return None;
+                }
+                Some(rust_ty)
+            })
+        });
+
+        // Determine self_param: check if any statement writes to this.field
+        let mutates_self = method_mutates_self(&method.body);
+        let self_param = if mutates_self {
+            Some(RustSelfParam::RefMut)
+        } else {
+            Some(RustSelfParam::Ref)
+        };
+
+        // Build use map and lower the body
+        let reassigned = ownership::find_reassigned_variables(&method.body);
+        let use_map = UseMap::analyze(&method.body, |obj, method_name| {
+            self.builtins.is_ref_args(obj, method_name)
+        });
+
+        let body = self.lower_block(&method.body, ctx, &use_map, 0, &reassigned);
+
+        ctx.pop_scope();
+
+        RustMethod {
+            name: method.name.name.clone(),
+            self_param,
+            params,
+            return_type,
+            body,
+            span: Some(method.span),
+        }
+    }
+}
+
+/// Check whether a class method mutates `self` (writes to `this.field`).
+fn method_mutates_self(body: &ast::Block) -> bool {
+    for stmt in &body.stmts {
+        if stmt_mutates_self(stmt) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a statement contains a `this.field = value` assignment.
+fn stmt_mutates_self(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Expr(expr) => expr_mutates_self(expr),
+        ast::Stmt::If(if_stmt) => {
+            for s in &if_stmt.then_block.stmts {
+                if stmt_mutates_self(s) {
+                    return true;
+                }
+            }
+            if let Some(else_clause) = &if_stmt.else_clause {
+                match else_clause {
+                    ast::ElseClause::Block(block) => {
+                        for s in &block.stmts {
+                            if stmt_mutates_self(s) {
+                                return true;
+                            }
+                        }
+                    }
+                    ast::ElseClause::ElseIf(nested) => {
+                        let nested_block = ast::Block {
+                            stmts: vec![ast::Stmt::If(nested.as_ref().clone())],
+                            span: nested.span,
+                        };
+                        return method_mutates_self(&nested_block);
+                    }
+                }
+            }
+            false
+        }
+        ast::Stmt::While(w) => {
+            for s in &w.body.stmts {
+                if stmt_mutates_self(s) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Check if an expression contains a `this.field = value` pattern.
+fn expr_mutates_self(expr: &ast::Expr) -> bool {
+    matches!(expr.kind, ast::ExprKind::FieldAssign(ref fa) if matches!(fa.object.kind, ast::ExprKind::This))
 }
 
 /// Resolve a `RustScript` import path to a Rust module path.
@@ -2057,7 +2510,32 @@ fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_ha
                 }
             }
         }
+        RustItem::Impl(imp) => {
+            for method in &imp.methods {
+                scan_method_for_collections(method, needs_hashmap, needs_hashset);
+            }
+        }
+        RustItem::TraitImpl(ti) => {
+            for method in &ti.methods {
+                scan_method_for_collections(method, needs_hashmap, needs_hashset);
+            }
+        }
     }
+}
+
+/// Scan a method for `HashMap` or `HashSet` references.
+fn scan_method_for_collections(
+    method: &RustMethod,
+    needs_hashmap: &mut bool,
+    needs_hashset: &mut bool,
+) {
+    for p in &method.params {
+        scan_type_for_collections(&p.ty, needs_hashmap, needs_hashset);
+    }
+    if let Some(ret) = &method.return_type {
+        scan_type_for_collections(ret, needs_hashmap, needs_hashset);
+    }
+    scan_block_for_collections(&method.body, needs_hashmap, needs_hashset);
 }
 
 /// Scan a type for `HashMap` or `HashSet` references.
@@ -2225,10 +2703,12 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::Err(inner) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
-        RustExprKind::Assign { value, .. } | RustExprKind::CompoundAssign { value, .. } => {
+        RustExprKind::Assign { value, .. }
+        | RustExprKind::CompoundAssign { value, .. }
+        | RustExprKind::SelfFieldAssign { value, .. } => {
             scan_expr_for_collections(value, needs_hashmap, needs_hashset);
         }
-        RustExprKind::StructLit { fields, .. } => {
+        RustExprKind::StructLit { fields, .. } | RustExprKind::SelfStructLit { fields } => {
             for (_, val) in fields {
                 scan_expr_for_collections(val, needs_hashmap, needs_hashset);
             }
@@ -2242,7 +2722,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::BoolLit(_)
         | RustExprKind::Ident(_)
         | RustExprKind::EnumVariant { .. }
-        | RustExprKind::None => {}
+        | RustExprKind::None
+        | RustExprKind::SelfRef
+        | RustExprKind::SelfFieldAccess { .. } => {}
         RustExprKind::UnwrapOr { expr, default } => {
             scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             scan_expr_for_collections(default, needs_hashmap, needs_hashset);
@@ -2443,6 +2925,22 @@ mod tests {
             "unexpected lowering diagnostics: {lower_diags:?}"
         );
         rsc_emit::emit(&ir)
+    }
+
+    /// Parse and lower a RustScript source string, returning the Rust IR.
+    fn lower_source(source: &str) -> RustFile {
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, parse_diags) = rsc_parser::parse(source, file_id);
+        assert!(
+            parse_diags.is_empty(),
+            "unexpected parse diagnostics: {parse_diags:?}"
+        );
+        let (ir, lower_diags) = crate::lower(&module);
+        assert!(
+            lower_diags.is_empty(),
+            "unexpected lowering diagnostics: {lower_diags:?}"
+        );
+        ir
     }
 
     fn float_expr(value: f64, start: u32, end: u32) -> Expr {
@@ -5261,5 +5759,161 @@ function main() {}"#;
             resolve_import_path("./utils/helpers"),
             "crate::utils::helpers"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 023: Class lowering tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_class_produces_struct_and_impl() {
+        let source = "\
+class Counter {
+  private count: i32;
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+  get(): i32 {
+    return this.count;
+  }
+}";
+        let file = lower_source(source);
+        // Should produce: struct + impl block = 2 items
+        assert!(file.items.len() >= 2, "expected at least 2 items");
+
+        // First item: struct
+        match &file.items[0] {
+            RustItem::Struct(s) => {
+                assert_eq!(s.name, "Counter");
+                assert_eq!(s.fields.len(), 1);
+                assert_eq!(s.fields[0].name, "count");
+                assert!(!s.fields[0].public, "private field should not be pub");
+            }
+            other => panic!("expected Struct, got {other:?}"),
+        }
+
+        // Second item: impl block
+        match &file.items[1] {
+            RustItem::Impl(imp) => {
+                assert_eq!(imp.type_name, "Counter");
+                // Should have `new` + `get` = 2 methods
+                assert_eq!(imp.methods.len(), 2);
+                assert_eq!(imp.methods[0].name, "new");
+                assert!(
+                    imp.methods[0].self_param.is_none(),
+                    "new should not have self"
+                );
+                assert_eq!(imp.methods[1].name, "get");
+                assert_eq!(
+                    imp.methods[1].self_param,
+                    Some(RustSelfParam::Ref),
+                    "get should be &self"
+                );
+            }
+            other => panic!("expected Impl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_class_constructor_produces_new_with_self_type() {
+        let source = "\
+class Point {
+  public x: f64;
+  public y: f64;
+  constructor(x: f64, y: f64) {
+    this.x = x;
+    this.y = y;
+  }
+}";
+        let file = lower_source(source);
+        match &file.items[1] {
+            RustItem::Impl(imp) => {
+                let new_method = &imp.methods[0];
+                assert_eq!(new_method.name, "new");
+                assert_eq!(new_method.return_type, Some(RustType::SelfType));
+                assert_eq!(new_method.params.len(), 2);
+            }
+            other => panic!("expected Impl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_class_mutating_method_gets_mut_self() {
+        let source = "\
+class Counter {
+  private count: i32;
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+  increment(): void {
+    this.count = this.count + 1;
+  }
+}";
+        let file = lower_source(source);
+        match &file.items[1] {
+            RustItem::Impl(imp) => {
+                let increment = imp.methods.iter().find(|m| m.name == "increment");
+                assert!(increment.is_some(), "should have increment method");
+                assert_eq!(
+                    increment.unwrap().self_param,
+                    Some(RustSelfParam::RefMut),
+                    "mutating method should be &mut self"
+                );
+            }
+            other => panic!("expected Impl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_class_implements_generates_trait_impl() {
+        let source = "\
+interface Describable {
+  describe(): string;
+}
+class User implements Describable {
+  public name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  describe(): string {
+    return this.name;
+  }
+}";
+        let file = lower_source(source);
+        // Should produce: trait + struct + inherent impl + trait impl = 4 items
+        assert_eq!(
+            file.items.len(),
+            4,
+            "expected 4 items (trait + struct + impl + trait_impl)"
+        );
+
+        match &file.items[3] {
+            RustItem::TraitImpl(ti) => {
+                assert_eq!(ti.trait_name, "Describable");
+                assert_eq!(ti.type_name, "User");
+                assert_eq!(ti.methods.len(), 1);
+                assert_eq!(ti.methods[0].name, "describe");
+            }
+            other => panic!("expected TraitImpl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_class_private_field_not_pub() {
+        let source = "\
+class Foo {
+  private x: i32;
+  public y: i32;
+  constructor() {
+  }
+}";
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Struct(s) => {
+                assert!(!s.fields[0].public, "private field should not be pub");
+                assert!(s.fields[1].public, "public field should be pub");
+            }
+            other => panic!("expected Struct, got {other:?}"),
+        }
     }
 }
