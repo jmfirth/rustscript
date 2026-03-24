@@ -8,7 +8,7 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
 use rsc_syntax::span::Span;
 
-use crate::{Token, TokenKind};
+use crate::token::{Token, TokenKind};
 
 /// Lexer for `RustScript` source text.
 ///

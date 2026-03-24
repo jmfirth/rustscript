@@ -7,7 +7,7 @@ use rsc_syntax::span::Span;
 
 /// A single token produced by the lexer, carrying its kind and source span.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Token {
+pub(crate) struct Token {
     /// What kind of token this is (keyword, literal, operator, etc.).
     pub kind: TokenKind,
     /// The byte range in the source file that this token covers.
@@ -16,7 +16,7 @@ pub struct Token {
 
 /// The kind of a lexed token.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenKind {
+pub(crate) enum TokenKind {
     // Literals
     /// An integer literal parsed as `i64`.
     IntLit(i64),
