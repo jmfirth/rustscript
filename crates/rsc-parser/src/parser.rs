@@ -5,13 +5,13 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, EnumDef,
-    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt,
-    IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt,
-    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
-    VarDecl, WhileStmt,
+    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, ClosureBody, ClosureExpr, DestructureStmt,
+    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl,
+    Ident, IfStmt, IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr,
+    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
+    ReturnTypeAnnotation, Stmt, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
+    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
+    UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -23,9 +23,10 @@ use crate::token::{Token, TokenKind};
 /// adversarial input (e.g., deeply nested parentheses).
 ///
 /// Set conservatively to account for the full precedence chain per depth
-/// level in debug builds. Each expression depth level uses ~10 stack
-/// frames through the precedence hierarchy.
-const MAX_EXPR_DEPTH: usize = 64;
+/// level in debug builds. Each expression depth level uses ~12 stack
+/// frames through the precedence hierarchy, including arrow function
+/// disambiguation lookahead.
+const MAX_EXPR_DEPTH: usize = 50;
 
 /// Capitalize the first letter of a string.
 ///
@@ -199,6 +200,8 @@ impl Parser {
             TokenKind::Throws => "`throws`",
             TokenKind::Try => "`try`",
             TokenKind::Catch => "`catch`",
+            TokenKind::Move => "`move`",
+            TokenKind::FatArrow => "`=>`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -741,10 +744,14 @@ impl Parser {
         Some(base)
     }
 
-    /// Parse a base (non-union) type annotation: `void`, named, generic, or `null`.
+    /// Parse a base (non-union) type annotation: `void`, named, generic, `null`, or function type.
     fn parse_base_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let token = self.current_token().clone();
         match &token.kind {
+            TokenKind::LParen => {
+                // Function type: `(i32, i32) => i32`
+                self.parse_function_type_annotation()
+            }
             TokenKind::Null => {
                 self.advance();
                 // Represent `null` as a named type "null" in the union — the
@@ -813,6 +820,41 @@ impl Parser {
                 None
             }
         }
+    }
+
+    /// Parse a function type annotation: `(i32, string) => i32`.
+    ///
+    /// Called when `(` is seen in type annotation position.
+    fn parse_function_type_annotation(&mut self) -> Option<TypeAnnotation> {
+        let start = self.current_token().span;
+        self.advance(); // consume `(`
+
+        let mut param_types = Vec::new();
+        if !self.check(&TokenKind::RParen) && !self.at_end() {
+            loop {
+                let ty = self.parse_type_annotation()?;
+                param_types.push(ty);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+            }
+        }
+
+        self.expect(&TokenKind::RParen)?;
+        self.expect(&TokenKind::FatArrow)?;
+        let return_type = self.parse_type_annotation()?;
+        let span = start.merge(return_type.span);
+
+        Some(TypeAnnotation {
+            kind: TypeKind::Function(param_types, Box::new(return_type)),
+            span,
+        })
     }
 
     /// Parse an identifier token into an [`Ident`] AST node.
@@ -1707,6 +1749,218 @@ impl Parser {
     }
 
     // ---------------------------------------------------------------
+    // Arrow functions (closures)
+    // ---------------------------------------------------------------
+
+    /// Determine whether the current token sequence starts an arrow function.
+    ///
+    /// Uses a non-recursive scan through the token stream. Scans from `(`
+    /// through a parameter list, checks for `)` optionally followed by
+    /// `: ReturnType` and then `=>`. Never calls recursive parse functions
+    /// to avoid stack overflow on deeply nested parenthesized expressions.
+    fn is_arrow_function_ahead(&self) -> bool {
+        // If we see `move`, it's always an arrow function
+        if self.check(&TokenKind::Move) {
+            return true;
+        }
+
+        // Must start with `(`
+        if !self.check(&TokenKind::LParen) {
+            return false;
+        }
+
+        let mut i = self.pos + 1; // skip past `(`
+
+        // Scan past the parameter list to find the matching `)`
+        // Parameters are: ident [: type], ident [: type], ...
+        // We need to handle nested `<>` for generic types and nested `()`
+        // for function types in annotations.
+
+        // Empty parens: `() => ...`
+        if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::RParen) {
+            i += 1;
+            // Optional return type: `: Type`
+            if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::Colon) {
+                i += 1;
+                // Skip through the return type tokens to `=>`
+                i = self.skip_type_tokens(i);
+            }
+            return self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::FatArrow);
+        }
+
+        // Non-empty params: scan for pattern `ident :` at start
+        // If the first token after `(` is not an ident, or the second is
+        // not `:` or `,` or `)`, this is not an arrow function.
+        if !matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+        ) {
+            return false;
+        }
+
+        // Quick heuristic: check if second token after ident is `:` or `,` or `)`
+        let after_ident = self.tokens.get(i + 1).map(|t| &t.kind);
+        let looks_like_param = matches!(
+            after_ident,
+            Some(TokenKind::Colon | TokenKind::Comma | TokenKind::RParen)
+        );
+        if !looks_like_param {
+            return false;
+        }
+
+        // Scan to matching `)`, tracking nesting depth for `<>` and `()`
+        let mut paren_depth: u32 = 1; // we already consumed the opening `(`
+        while let Some(token) = self.tokens.get(i) {
+            match &token.kind {
+                TokenKind::LParen => paren_depth += 1,
+                TokenKind::RParen => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        i += 1; // skip past `)`
+                        break;
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+
+        if paren_depth != 0 {
+            return false;
+        }
+
+        // Optional return type annotation: `: Type`
+        if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::Colon) {
+            i += 1;
+            i = self.skip_type_tokens(i);
+        }
+
+        self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::FatArrow)
+    }
+
+    /// Skip over type annotation tokens starting at position `i`.
+    ///
+    /// Handles nested `<>` for generic types. Returns the position of the
+    /// first token after the type. Used only by `is_arrow_function_ahead`.
+    fn skip_type_tokens(&self, mut i: usize) -> usize {
+        // Skip the base type name
+        match self.tokens.get(i).map(|t| &t.kind) {
+            Some(TokenKind::Ident(_)) => i += 1,
+            Some(TokenKind::LParen) => {
+                // Function type in return position: `(i32) => i32`
+                // Skip past matching `)`
+                let mut depth: u32 = 1;
+                i += 1;
+                while let Some(token) = self.tokens.get(i) {
+                    match &token.kind {
+                        TokenKind::LParen => depth += 1,
+                        TokenKind::RParen => {
+                            depth -= 1;
+                            if depth == 0 {
+                                i += 1;
+                                break;
+                            }
+                        }
+                        TokenKind::Eof => return i,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                // After `)`, expect `=>` and then the return type
+                if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::FatArrow) {
+                    i += 1;
+                    return self.skip_type_tokens(i);
+                }
+                return i;
+            }
+            _ => return i,
+        }
+
+        // Check for generic args: `<...>`
+        if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::Lt) {
+            let mut depth: u32 = 1;
+            i += 1;
+            while let Some(token) = self.tokens.get(i) {
+                match &token.kind {
+                    TokenKind::Lt => depth += 1,
+                    TokenKind::Gt => {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    TokenKind::Eof => return i,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+
+        // Check for union type: `| null`
+        while self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::Pipe) {
+            i += 1; // skip `|`
+            i = self.skip_type_tokens(i);
+        }
+
+        i
+    }
+
+    /// Parse an arrow function (closure) expression.
+    ///
+    /// Syntax:
+    /// - `(params): ReturnType => expr`
+    /// - `(params): ReturnType => { block }`
+    /// - `move (params) => expr`
+    fn parse_arrow_function(&mut self) -> Option<Expr> {
+        let start = self.current_token().span;
+
+        // Optional `move` keyword
+        let is_move = self.eat(&TokenKind::Move);
+
+        // Parameter list
+        self.expect(&TokenKind::LParen)?;
+        let params = self.parse_param_list();
+        self.expect(&TokenKind::RParen)?;
+
+        // Optional return type annotation
+        let return_type = if self.check(&TokenKind::Colon) {
+            self.advance(); // consume `:`
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        // Fat arrow
+        self.expect(&TokenKind::FatArrow)?;
+
+        // Body: block or expression
+        let body = if self.check(&TokenKind::LBrace) {
+            let block = self.parse_block()?;
+            ClosureBody::Block(block)
+        } else {
+            let expr = self.parse_assignment()?;
+            ClosureBody::Expr(Box::new(expr))
+        };
+
+        let end = match &body {
+            ClosureBody::Block(block) => block.span,
+            ClosureBody::Expr(expr) => expr.span,
+        };
+
+        Some(Expr {
+            kind: ExprKind::Closure(ClosureExpr {
+                is_move,
+                params,
+                return_type,
+                body,
+            }),
+            span: start.merge(end),
+        })
+    }
+
+    // ---------------------------------------------------------------
     // Primary expressions
     // ---------------------------------------------------------------
 
@@ -1790,15 +2044,27 @@ impl Parser {
             TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
+            TokenKind::Move => {
+                // `move` keyword in expression position — must be a move closure
+                self.parse_arrow_function()
+            }
             TokenKind::LParen => {
-                let open = self.advance();
-                let inner = self.parse_expr()?;
-                let close = self.expect(&TokenKind::RParen)?;
-                let span = open.span.merge(close.span);
-                Some(Expr {
-                    kind: ExprKind::Paren(Box::new(inner)),
-                    span,
-                })
+                // Attempt arrow function disambiguation:
+                // Save position, try parsing as arrow function params.
+                // If `=>` follows, commit as arrow function.
+                // Otherwise restore and parse as parenthesized expression.
+                if self.is_arrow_function_ahead() {
+                    self.parse_arrow_function()
+                } else {
+                    let open = self.advance();
+                    let inner = self.parse_expr()?;
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = open.span.merge(close.span);
+                    Some(Expr {
+                        kind: ExprKind::Paren(Box::new(inner)),
+                        span,
+                    })
+                }
             }
             _ => {
                 self.diagnostics.push(
@@ -2067,6 +2333,7 @@ mod tests {
             TypeKind::Void => panic!("expected Named, got Void"),
             TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
             TypeKind::Union(_) => panic!("expected Named, got Union"),
+            TypeKind::Function(_, _) => panic!("expected Named, got Function"),
         }
         // Body has one return statement
         assert_eq!(f.body.stmts.len(), 1);
@@ -2737,8 +3004,8 @@ mod tests {
     #[test]
     fn test_parser_deeply_nested_expr_produces_diagnostic() {
         // Build a deeply nested expression: (((((...(1)...)))))
-        // with nesting > MAX_EXPR_DEPTH (64)
-        let depth = 66;
+        // with nesting > MAX_EXPR_DEPTH
+        let depth = MAX_EXPR_DEPTH + 2;
         let open = "(".repeat(depth);
         let close = ")".repeat(depth);
         let source = format!("function f() {{ {open}1{close}; }}");
@@ -2758,7 +3025,7 @@ mod tests {
     #[test]
     fn test_parser_expr_at_max_depth_minus_one_still_parses() {
         // Build a nested expression just under the limit
-        let depth = 63;
+        let depth = MAX_EXPR_DEPTH - 1;
         let open = "(".repeat(depth);
         let close = ")".repeat(depth);
         let source = format!("function f() {{ {open}1{close}; }}");
@@ -3612,5 +3879,206 @@ function fail() throws string {
             },
             _ => panic!("expected Expr statement"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 019: Closures and arrow functions
+    // ---------------------------------------------------------------
+
+    // Test T19-1: Parse `(x: i32): i32 => x * 2` → ClosureExpr with expression body
+    #[test]
+    fn test_parser_closure_expr_body_with_types() {
+        let source = "function main() { const double = (x: i32): i32 => x * 2; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        assert_eq!(decl.name.name, "double");
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert!(!closure.is_move);
+        assert_eq!(closure.params.len(), 1);
+        assert_eq!(closure.params[0].name.name, "x");
+        assert!(closure.return_type.is_some());
+        assert!(matches!(closure.body, ClosureBody::Expr(_)));
+    }
+
+    // Test T19-2: Parse `() => { console.log("hello"); }` → ClosureExpr with block body
+    #[test]
+    fn test_parser_closure_block_body() {
+        let source = "function main() { const greet = () => { console.log(\"hello\"); }; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert!(!closure.is_move);
+        assert!(closure.params.is_empty());
+        assert!(closure.return_type.is_none());
+        assert!(matches!(closure.body, ClosureBody::Block(_)));
+    }
+
+    // Test T19-3: Parse `move () => { process(ctx); }` → ClosureExpr with is_move true
+    #[test]
+    fn test_parser_closure_move() {
+        let source = "function main() { const handler = move () => { process(ctx); }; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert!(closure.is_move);
+        assert!(closure.params.is_empty());
+        assert!(matches!(closure.body, ClosureBody::Block(_)));
+    }
+
+    // Test T19-4: Parse closure as function argument
+    #[test]
+    fn test_parser_closure_as_argument() {
+        let source = "function main() { apply(5, (x: i32): i32 => x * 2); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let call = match &f.body.stmts[0] {
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::Call(c) => c,
+                other => panic!("expected Call, got {other:?}"),
+            },
+            _ => panic!("expected Expr statement"),
+        };
+        assert_eq!(call.args.len(), 2);
+        assert!(matches!(call.args[1].kind, ExprKind::Closure(_)));
+    }
+
+    // Test T19-5: Parse function type annotation `(i32) => i32`
+    #[test]
+    fn test_parser_function_type_annotation() {
+        let source = "function apply(x: i32, f: (i32) => i32): i32 { return f(x); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[1].name.name, "f");
+        match &f.params[1].type_ann.kind {
+            TypeKind::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(&ret.kind, TypeKind::Named(ident) if ident.name == "i32"));
+            }
+            other => panic!("expected Function type, got {other:?}"),
+        }
+    }
+
+    // Test T19-6: Disambiguate paren expression from arrow function
+    #[test]
+    fn test_parser_paren_expr_not_confused_with_closure() {
+        let source = "function main() { const x = (1 + 2); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        assert!(matches!(decl.init.kind, ExprKind::Paren(_)));
+    }
+
+    // Test T19-7: FatArrow token lexed via parser
+    #[test]
+    fn test_parser_fat_arrow_in_closure() {
+        // Verify `=>` is properly lexed and parsed in arrow function context
+        let source = "function f() { const g = (x: i32): i32 => x; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        assert!(matches!(decl.init.kind, ExprKind::Closure(_)));
+    }
+
+    // Test T19-8: Closure with multi-param
+    #[test]
+    fn test_parser_closure_multiple_params() {
+        let source = "function f() { const add = (a: i32, b: i32): i32 => a; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert_eq!(closure.params.len(), 2);
+        assert_eq!(closure.params[0].name.name, "a");
+        assert_eq!(closure.params[1].name.name, "b");
     }
 }

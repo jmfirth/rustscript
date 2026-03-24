@@ -198,6 +198,9 @@ pub enum RustType {
     Option(Box<RustType>),
     /// `Result<T, E>` — from `T throws E`.
     Result(Box<RustType>, Box<RustType>),
+    /// Function/closure type: `impl Fn(i32) -> i32`.
+    /// Produced by lowering `(i32) => i32` in parameter position.
+    ImplFn(Vec<RustType>, Box<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -229,6 +232,16 @@ impl std::fmt::Display for RustType {
             }
             Self::Option(inner) => return write!(f, "Option<{inner}>"),
             Self::Result(ok, err) => return write!(f, "Result<{ok}, {err}>"),
+            Self::ImplFn(params, ret) => {
+                write!(f, "impl Fn(")?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{param}")?;
+                }
+                return write!(f, ") -> {ret}");
+            }
         };
         f.write_str(s)
     }
@@ -602,6 +615,42 @@ pub enum RustExprKind {
         /// The closure body expression.
         closure_body: Box<RustExpr>,
     },
+    /// A closure expression: `|params| body` or `move |params| body`.
+    /// Produced by lowering `RustScript` arrow functions.
+    Closure {
+        /// Whether this is a `move` closure.
+        is_move: bool,
+        /// The closure parameters.
+        params: Vec<RustClosureParam>,
+        /// The return type (optional — omitted when Rust can infer).
+        return_type: Option<RustType>,
+        /// The closure body — expression or block.
+        body: RustClosureBody,
+    },
+}
+
+/// A closure parameter (may omit type for inference).
+///
+/// In the emitted Rust, parameters with types appear as `name: Type`,
+/// and parameters without types appear as just `name`.
+#[derive(Debug, Clone)]
+pub struct RustClosureParam {
+    /// The parameter name.
+    pub name: String,
+    /// The parameter type (explicit or omitted for inference).
+    pub ty: Option<RustType>,
+}
+
+/// Closure body — either an expression or a block.
+///
+/// Expression bodies: `|x| x * 2` — no braces, implicit return.
+/// Block bodies: `|| { stmt; stmt; }` — braces, explicit statements.
+#[derive(Debug, Clone)]
+pub enum RustClosureBody {
+    /// Expression body: `|x| x * 2`.
+    Expr(Box<RustExpr>),
+    /// Block body: `|| { stmts }`.
+    Block(RustBlock),
 }
 
 /// A compound assignment operator.

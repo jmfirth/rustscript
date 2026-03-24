@@ -28,8 +28,13 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             RustType::Generic(Box::new(base), rust_args)
         }
         Type::Option(inner) => RustType::Option(Box::new(type_to_rust_type(inner))),
+        Type::Function(params, ret) => {
+            let rust_params: Vec<RustType> = params.iter().map(type_to_rust_type).collect();
+            let rust_ret = type_to_rust_type(ret);
+            RustType::ImplFn(rust_params, Box::new(rust_ret))
+        }
         // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
-        Type::Unit | Type::Result(_, _) | Type::Function(_, _) | Type::Error => RustType::Unit,
+        Type::Unit | Type::Result(_, _) | Type::Error => RustType::Unit,
     }
 }
 
@@ -153,10 +158,21 @@ mod tests {
             type_to_rust_type(&Type::Result(Box::new(Type::String), Box::new(Type::Unit))),
             RustType::Unit
         );
+        assert_eq!(type_to_rust_type(&Type::Error), RustType::Unit);
+    }
+
+    #[test]
+    fn test_bridge_function_type_produces_impl_fn() {
+        assert_eq!(
+            type_to_rust_type(&Type::Function(
+                vec![Type::Primitive(PrimitiveType::I32)],
+                Box::new(Type::Primitive(PrimitiveType::I32))
+            )),
+            RustType::ImplFn(vec![RustType::I32], Box::new(RustType::I32))
+        );
         assert_eq!(
             type_to_rust_type(&Type::Function(vec![], Box::new(Type::Unit))),
-            RustType::Unit
+            RustType::ImplFn(vec![], Box::new(RustType::Unit))
         );
-        assert_eq!(type_to_rust_type(&Type::Error), RustType::Unit);
     }
 }

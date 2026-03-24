@@ -3,9 +3,9 @@
 //! Walks the Rust IR tree and produces formatted `.rs` source text.
 
 use rsc_syntax::rust_ir::{
-    RustBlock, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfLetStmt,
-    RustIfStmt, RustItem, RustMatchResultStmt, RustMatchStmt, RustPattern, RustStmt, RustStructDef,
-    RustTypeParam,
+    RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
+    RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustMatchResultStmt, RustMatchStmt,
+    RustPattern, RustStmt, RustStructDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -656,6 +656,42 @@ impl Emitter {
                 self.write("| ");
                 self.emit_expr(closure_body);
                 self.write(")");
+            }
+            RustExprKind::Closure {
+                is_move,
+                params,
+                return_type,
+                body,
+            } => {
+                if *is_move {
+                    self.write("move ");
+                }
+                self.write("|");
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&param.name);
+                    if let Some(ref ty) = param.ty {
+                        self.write(": ");
+                        self.write(&ty.to_string());
+                    }
+                }
+                self.write("|");
+                if let Some(ret) = return_type {
+                    self.write(" -> ");
+                    self.write(&ret.to_string());
+                }
+                match body {
+                    RustClosureBody::Expr(expr) => {
+                        self.write(" ");
+                        self.emit_expr(expr);
+                    }
+                    RustClosureBody::Block(block) => {
+                        self.write(" ");
+                        self.emit_block(block);
+                    }
+                }
             }
         }
     }
@@ -2303,6 +2339,146 @@ fn main() {
         assert!(
             output.contains("Err(err) =>"),
             "expected 'Err(err) =>' in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 019: Closures and arrow functions
+    // ---------------------------------------------------------------
+
+    // Test T19-8: Emit expression-body closure: `|x: i32| -> i32 x * 2`
+    #[test]
+    fn test_emit_closure_expr_body() {
+        use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "double".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::Closure {
+                    is_move: false,
+                    params: vec![RustClosureParam {
+                        name: "x".to_owned(),
+                        ty: Some(RustType::I32),
+                    }],
+                    return_type: Some(RustType::I32),
+                    body: RustClosureBody::Expr(Box::new(syn(RustExprKind::Binary {
+                        op: RustBinaryOp::Mul,
+                        left: Box::new(ident("x")),
+                        right: Box::new(int_lit(2)),
+                    }))),
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("|x: i32| -> i32 x * 2"),
+            "expected closure in output:\n{output}"
+        );
+    }
+
+    // Test T19-9: Emit block-body closure: `|| { ... }`
+    #[test]
+    fn test_emit_closure_block_body() {
+        use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "greet".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::Closure {
+                    is_move: false,
+                    params: vec![],
+                    return_type: None,
+                    body: RustClosureBody::Block(RustBlock {
+                        stmts: vec![RustStmt::Semi(syn(RustExprKind::Macro {
+                            name: "println".to_owned(),
+                            args: vec![syn(RustExprKind::StringLit("hello".to_owned()))],
+                        }))],
+                        expr: None,
+                    }),
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("|| {"),
+            "expected closure in output:\n{output}"
+        );
+    }
+
+    // Test T19-10: Emit move closure: `move || { ... }`
+    #[test]
+    fn test_emit_closure_move() {
+        use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "handler".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::Closure {
+                    is_move: true,
+                    params: vec![],
+                    return_type: None,
+                    body: RustClosureBody::Block(RustBlock {
+                        stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
+                            func: "process".to_owned(),
+                            args: vec![ident("ctx")],
+                        }))],
+                        expr: None,
+                    }),
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("move || {"),
+            "expected move closure in output:\n{output}"
+        );
+    }
+
+    // Test T19-11: Emit impl Fn type
+    #[test]
+    fn test_emit_impl_fn_type_in_param() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "apply".to_owned(),
+                type_params: vec![],
+                params: vec![
+                    RustParam {
+                        name: "x".to_owned(),
+                        ty: RustType::I32,
+                        span: None,
+                    },
+                    RustParam {
+                        name: "f".to_owned(),
+                        ty: RustType::ImplFn(vec![RustType::I32], Box::new(RustType::I32)),
+                        span: None,
+                    },
+                ],
+                return_type: Some(RustType::I32),
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("f: impl Fn(i32) -> i32"),
+            "expected impl Fn in output:\n{output}"
         );
     }
 }

@@ -670,6 +670,7 @@ impl<'a> Lexer<'a> {
             "throws" => TokenKind::Throws,
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
+            "move" => TokenKind::Move,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -725,6 +726,7 @@ impl<'a> Lexer<'a> {
             (b'%', b'=') => TokenKind::PercentEq,
             (b'?', b'.') => TokenKind::QuestionDot,
             (b'?', b'?') => TokenKind::QuestionQuestion,
+            (b'=', b'>') => TokenKind::FatArrow,
             _ => return None,
         };
 
@@ -1258,5 +1260,43 @@ mod tests {
         let tokens = tokenize("catch");
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].kind, TokenKind::Catch);
+    }
+
+    // ---------------------------------------------------------------
+    // Task 019: Closures and arrow functions
+    // ---------------------------------------------------------------
+
+    // 39. `move` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_move_keyword_produces_move_token() {
+        let tokens = tokenize("move");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Move);
+    }
+
+    // 40. `=>` fat arrow tokenizes correctly
+    #[test]
+    fn test_lexer_fat_arrow_produces_fat_arrow_token() {
+        let tokens = tokenize("=>");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::FatArrow);
+    }
+
+    // 41. `=>` does not conflict with `>=`
+    #[test]
+    fn test_lexer_fat_arrow_does_not_conflict_with_ge() {
+        let tokens = tokenize(">= =>");
+        assert_eq!(tokens.len(), 3); // GtEq, FatArrow, Eof
+        assert_eq!(tokens[0].kind, TokenKind::GtEq);
+        assert_eq!(tokens[1].kind, TokenKind::FatArrow);
+    }
+
+    // 42. `=` followed by `>` not confused with `=>` when separated
+    #[test]
+    fn test_lexer_eq_gt_separate_from_fat_arrow() {
+        let tokens = tokenize("= >");
+        assert_eq!(tokens.len(), 3); // Eq, Gt, Eof
+        assert_eq!(tokens[0].kind, TokenKind::Eq);
+        assert_eq!(tokens[1].kind, TokenKind::Gt);
     }
 }

@@ -7,11 +7,11 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef,
-    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt,
-    RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam,
-    RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp,
-    RustUseDecl, RustWhileStmt,
+    RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustCompoundAssignOp,
+    RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
+    RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustLetStmt,
+    RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
+    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -1293,7 +1293,7 @@ impl Transform {
             }
             ast::ExprKind::BoolLit(v) => RustExpr::new(RustExprKind::BoolLit(*v), expr.span),
             ast::ExprKind::Ident(ident) => {
-                self.lower_ident_ref(ident, expr.span, ctx, use_map, stmt_index)
+                Self::lower_ident_ref(ident, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Binary(bin) => {
                 let left = self.lower_expr(&bin.left, ctx, use_map, stmt_index);
@@ -1470,13 +1470,91 @@ impl Transform {
                 let lowered = self.lower_expr(value, ctx, use_map, stmt_index);
                 RustExpr::synthetic(RustExprKind::Err(Box::new(lowered)))
             }
+            ast::ExprKind::Closure(closure) => {
+                self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
+            }
         }
     }
 
     /// Lower an identifier reference, inserting a clone if needed.
     #[allow(clippy::unused_self)] // Method for consistency with other lower_* methods
-    fn lower_ident_ref(
+    /// Lower a closure / arrow function expression.
+    ///
+    /// Maps `(x: i32): i32 => x * 2` to `|x: i32| -> i32 { x * 2 }`.
+    fn lower_closure(
         &self,
+        closure: &ast::ClosureExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let mut diags = Vec::new();
+
+        // Lower parameters
+        let params: Vec<RustClosureParam> = closure
+            .params
+            .iter()
+            .map(|p| {
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    &p.type_ann,
+                    &self.type_registry,
+                    &[],
+                    &mut diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                RustClosureParam {
+                    name: p.name.name.clone(),
+                    ty: Some(rust_ty),
+                }
+            })
+            .collect();
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        // Lower return type
+        let return_type = closure.return_type.as_ref().map(|rt| {
+            let mut diags = Vec::new();
+            let ty = resolve::resolve_type_annotation_with_generics(
+                rt,
+                &self.type_registry,
+                &[],
+                &mut diags,
+            );
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
+            rsc_typeck::bridge::type_to_rust_type(&ty)
+        });
+
+        // Lower body
+        let body = match &closure.body {
+            ast::ClosureBody::Expr(expr) => {
+                let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                RustClosureBody::Expr(Box::new(lowered))
+            }
+            ast::ClosureBody::Block(block) => {
+                // Use an empty reassigned set for closure bodies — they are opaque
+                let reassigned = std::collections::HashSet::new();
+                let lowered = self.lower_block(block, ctx, use_map, 0, &reassigned);
+                RustClosureBody::Block(lowered)
+            }
+        };
+
+        RustExpr::new(
+            RustExprKind::Closure {
+                is_move: closure.is_move,
+                params,
+                return_type,
+                body,
+            },
+            span,
+        )
+    }
+
+    fn lower_ident_ref(
         ident: &ast::Ident,
         span: rsc_syntax::span::Span,
         ctx: &LoweringContext,
@@ -1914,6 +1992,14 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         RustExprKind::ClosureCall { body, .. } => {
             scan_block_for_collections(body, needs_hashmap, needs_hashset);
         }
+        RustExprKind::Closure { body, .. } => match body {
+            RustClosureBody::Expr(expr) => {
+                scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+            }
+            RustClosureBody::Block(block) => {
+                scan_block_for_collections(block, needs_hashmap, needs_hashset);
+            }
+        },
     }
 }
 
@@ -1971,7 +2057,9 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         ast::TypeKind::Named(ident) | ast::TypeKind::Generic(ident, _) => {
                             vec![ident.name.clone()]
                         }
-                        ast::TypeKind::Void | ast::TypeKind::Union(_) => vec![],
+                        ast::TypeKind::Void
+                        | ast::TypeKind::Union(_)
+                        | ast::TypeKind::Function(_, _) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
@@ -2068,6 +2156,22 @@ mod tests {
             kind: ExprKind::Ident(ident(name, start, end)),
             span: span(start, end),
         }
+    }
+
+    /// Parse, lower, and emit a RustScript source string to Rust output.
+    fn compile_and_emit(source: &str) -> String {
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, parse_diags) = rsc_parser::parse(source, file_id);
+        assert!(
+            parse_diags.is_empty(),
+            "unexpected parse diagnostics: {parse_diags:?}"
+        );
+        let (ir, lower_diags) = crate::lower(&module);
+        assert!(
+            lower_diags.is_empty(),
+            "unexpected lowering diagnostics: {lower_diags:?}"
+        );
+        rsc_emit::emit(&ir)
     }
 
     fn float_expr(value: f64, start: u32, end: u32) -> Expr {
@@ -4460,5 +4564,83 @@ mod tests {
     fn test_rust_type_result_display() {
         let ty = RustType::Result(Box::new(RustType::I32), Box::new(RustType::String));
         assert_eq!(ty.to_string(), "Result<i32, String>");
+    }
+
+    // ---------------------------------------------------------------
+    // Task 019: Closures and arrow functions
+    // ---------------------------------------------------------------
+
+    // Test T19-5: Lower expression-body closure
+    #[test]
+    fn test_lower_closure_expr_body() {
+        let source = "function main() { const double = (x: i32): i32 => x * 2; }";
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("|x: i32| -> i32"),
+            "expected closure in output:\n{output}"
+        );
+    }
+
+    // Test T19-6: Lower block-body closure
+    #[test]
+    fn test_lower_closure_block_body() {
+        let source = "function main() { const greet = (name: string) => { console.log(name); }; }";
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("|name: String|"),
+            "expected closure params in output:\n{output}"
+        );
+    }
+
+    // Test T19-7: Lower move closure
+    #[test]
+    fn test_lower_closure_move() {
+        let source = "function main() { const handler = move () => { console.log(\"hi\"); }; }";
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("move ||"),
+            "expected move closure in output:\n{output}"
+        );
+    }
+
+    // Test T19-11: Function type in parameter lowers to impl Fn
+    #[test]
+    fn test_lower_function_type_param_to_impl_fn() {
+        let source = "function apply(x: i32, f: (i32) => i32): i32 { return f(x); }";
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("impl Fn(i32) -> i32"),
+            "expected impl Fn in output:\n{output}"
+        );
+    }
+
+    // Test T19-12: Closure captures outer variable — compiles correctly
+    #[test]
+    fn test_lower_closure_captures_variable() {
+        let source = r#"function main() {
+            const greeting: string = "Hello";
+            const greet = (name: string) => {
+                console.log(greeting);
+                console.log(name);
+            };
+            greet("Alice");
+        }"#;
+        let output = compile_and_emit(source);
+        // Should produce a closure that references `greeting`
+        assert!(
+            output.contains("|name: String|"),
+            "expected closure in output:\n{output}"
+        );
+        assert!(
+            output.contains("greeting"),
+            "expected greeting reference in output:\n{output}"
+        );
+    }
+
+    // Test: ImplFn type display
+    #[test]
+    fn test_rust_type_impl_fn_display() {
+        let ty = RustType::ImplFn(vec![RustType::I32, RustType::I32], Box::new(RustType::I32));
+        assert_eq!(ty.to_string(), "impl Fn(i32, i32) -> i32");
     }
 }
