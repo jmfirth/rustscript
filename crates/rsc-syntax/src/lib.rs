@@ -1,10 +1,12 @@
 #![warn(clippy::pedantic)]
 //! Core syntax types for the `RustScript` compiler.
 //!
-//! Provides source spans, diagnostic infrastructure, and error types
-//! shared across all compiler passes.
+//! Provides the `RustScript` AST, Rust IR, source spans, diagnostic
+//! infrastructure, and error types shared across all compiler passes.
 
+pub mod ast;
 pub mod diagnostic;
 pub mod error;
+pub mod rust_ir;
 pub mod source;
 pub mod span;
