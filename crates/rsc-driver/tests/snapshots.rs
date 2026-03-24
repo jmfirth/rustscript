@@ -1392,8 +1392,6 @@ function main() {
   console.log(p.second);
 }";
 
-    // NOTE: Known bug — struct literal for generic type emits `Unknown { ... }`
-    // instead of `Pair { ... }`. This snapshot captures actual compiler output.
     let expected = "\
 struct Pair<T> {
     pub first: T,
@@ -1401,7 +1399,7 @@ struct Pair<T> {
 }
 
 fn main() {
-    let p: Pair<i32> = Unknown { first: 10, second: 20 };
+    let p: Pair<i32> = Pair { first: 10, second: 20 };
     println!(\"{}\", p.first);
     println!(\"{}\", p.second);
 }
@@ -1428,7 +1426,7 @@ function main() {
     let expected = "\
 fn main() {
     let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
-    for n in &numbers {
+    for &n in &numbers {
         println!(\"{}\", n);
     }
 }
@@ -1454,12 +1452,10 @@ function main() {
   }
 }";
 
-    // NOTE: Known bug — `n == 2` compares &i32 with i32, which won't compile
-    // in Rust. This snapshot captures actual compiler output.
     let expected = "\
 fn main() {
     let items: Vec<i32> = vec![1, 2, 3, 4, 5];
-    for n in &items {
+    for &n in &items {
         if n == 2 {
             continue;
         }
@@ -1487,11 +1483,9 @@ function main() {
   console.log(double(21));
 }";
 
-    // NOTE: Known bug — expression-body closure emits `|x: i32| -> i32 x * 2`
-    // instead of `|x: i32| -> i32 { x * 2 }`. Missing braces around expression body.
     let expected = "\
 fn main() {
-    let double = |x: i32| -> i32 x * 2;
+    let double = |x: i32| -> i32 { x * 2 };
     println!(\"{}\", double(21));
 }
 ";
@@ -1613,14 +1607,13 @@ function process(input: Serializable & Printable): string {
   return input.serialize();
 }";
 
-    // NOTE: Known behavior — void methods in trait definitions emit `-> ()`.
     let expected = "\
 trait Serializable {
     fn serialize(&self) -> String;
 }
 
 trait Printable {
-    fn print(&self) -> ();
+    fn print(&self);
 }
 
 fn process<T: Serializable + Printable>(input: T) -> String {
@@ -1852,7 +1845,7 @@ function main() {
 fn main() {
     let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
     let mut sum: i32 = 0;
-    for n in &numbers {
+    for &n in &numbers {
         sum += n;
     }
     println!(\"{}\", sum);

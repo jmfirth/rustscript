@@ -10,10 +10,10 @@ use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustCompoundAssignOp,
     RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
     RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock,
-    RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustMethod, RustParam,
-    RustPattern, RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
-    RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
-    RustWhileStmt,
+    RustItem, RustLetElseStmt, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
+    RustMethod, RustParam, RustPattern, RustReturnStmt, RustSelfParam, RustStmt, RustStructDef,
+    RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
+    RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -31,6 +31,8 @@ use rsc_typeck::types::Type;
 struct FnSignature {
     /// Whether this function has a `throws` annotation.
     throws: bool,
+    /// Resolved parameter types for enum variant resolution at call sites.
+    param_types: Vec<RustType>,
 }
 
 /// Map from function name to its throws signature.
@@ -437,7 +439,7 @@ impl Transform {
         }
     }
 
-    /// Register a function signature in the pre-pass for throws detection.
+    /// Register a function signature in the pre-pass for throws and parameter type detection.
     fn register_fn_signature(&mut self, f: &ast::FnDecl, _ctx: &mut LoweringContext) {
         let throws = f
             .return_type
@@ -445,8 +447,27 @@ impl Transform {
             .and_then(|rt| rt.throws.as_ref())
             .is_some();
 
-        self.fn_signatures
-            .insert(f.name.name.clone(), FnSignature { throws });
+        let mut diags = Vec::new();
+        let param_types: Vec<RustType> = f
+            .params
+            .iter()
+            .map(|p| {
+                let ty = rsc_typeck::resolve::resolve_type_annotation_with_registry(
+                    &p.type_ann,
+                    &self.type_registry,
+                    &mut diags,
+                );
+                rsc_typeck::bridge::type_to_rust_type(&ty)
+            })
+            .collect();
+
+        self.fn_signatures.insert(
+            f.name.name.clone(),
+            FnSignature {
+                throws,
+                param_types,
+            },
+        );
     }
 
     /// Lower a function declaration.
@@ -724,10 +745,7 @@ impl Transform {
 
         // Set the struct type context so struct literal lowering can resolve the
         // type name from the variable's annotation.
-        let struct_type_name = match &ty {
-            RustType::Named(name) => Some(name.clone()),
-            _ => None,
-        };
+        let struct_type_name = extract_named_type(&ty);
         ctx.set_struct_type_name(struct_type_name);
 
         // Check for enum construction: `const dir: Direction = "north"` → `Direction::North`
@@ -876,6 +894,18 @@ impl Transform {
         }
     }
 
+    /// Check whether a block always diverges (returns, throws, breaks, or continues).
+    ///
+    /// Returns true if the last statement in the block is guaranteed to prevent
+    /// reaching the end of the block.
+    fn block_always_diverges(block: &ast::Block) -> bool {
+        block.stmts.last().is_some_and(|stmt| match stmt {
+            ast::Stmt::Return(_) | ast::Stmt::Break(_) | ast::Stmt::Continue(_) => true,
+            ast::Stmt::Expr(expr) => matches!(expr.kind, ast::ExprKind::Throw(_)),
+            _ => false,
+        })
+    }
+
     /// Detect a null check pattern in an if condition.
     ///
     /// Returns `Some((var_name, is_not_null))` if the condition is `x !== null`
@@ -948,6 +978,19 @@ impl Transform {
                     span: Some(if_stmt.span),
                 });
             }
+            // `if (x === null) { throw/return; }` with no else → `let Some(x) = x else { ... };`
+            // This narrows x to non-null in the continuation scope.
+            if if_stmt.else_clause.is_none() && Self::block_always_diverges(&if_stmt.then_block) {
+                let else_block =
+                    self.lower_block(&if_stmt.then_block, ctx, use_map, stmt_index, reassigned);
+                return RustStmt::LetElse(RustLetElseStmt {
+                    binding: var_name,
+                    expr,
+                    else_block,
+                    span: Some(if_stmt.span),
+                });
+            }
+
             // `if (x === null)` → `if let Some(x) = x { else_block } else { then_block }`
             // We swap the branches: the then block is the "is None" case
             let then_of_some = if_stmt.else_clause.as_ref().map(|ec| match ec {
@@ -1010,12 +1053,24 @@ impl Transform {
         reassigned: &std::collections::HashSet<String>,
     ) -> RustForInStmt {
         let iterable = self.lower_expr(&for_of.iterable, ctx, use_map, stmt_index);
+
+        // Determine if the element type is Copy to use a deref pattern.
+        // For `for n in &items` where items: Vec<i32>, we emit `for &n in &items`
+        // so that n has type i32 instead of &i32.
+        let deref_pattern = if let ast::ExprKind::Ident(ident) = &for_of.iterable.kind {
+            ctx.lookup_variable(&ident.name)
+                .is_some_and(|info| element_type_is_copy(&info.ty))
+        } else {
+            false
+        };
+
         let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
 
         RustForInStmt {
             variable: for_of.variable.name.clone(),
             iterable,
             body,
+            deref_pattern,
             span: Some(for_of.span),
         }
     }
@@ -1038,10 +1093,7 @@ impl Transform {
         let type_name = match &destr.init.kind {
             ast::ExprKind::Ident(ident) => ctx
                 .lookup_variable(&ident.name)
-                .and_then(|info| match &info.ty {
-                    RustType::Named(name) => Some(name.clone()),
-                    _ => None,
-                })
+                .and_then(|info| extract_named_type(&info.ty))
                 .unwrap_or_else(|| "Unknown".to_owned()),
             _ => "Unknown".to_owned(),
         };
@@ -1099,10 +1151,7 @@ impl Transform {
         let enum_name = scrutinee_var_name
             .as_ref()
             .and_then(|name| ctx.lookup_variable(name))
-            .and_then(|info| match &info.ty {
-                RustType::Named(n) => Some(n.clone()),
-                _ => None,
-            })
+            .and_then(|info| extract_named_type(&info.ty))
             .unwrap_or_else(|| "Unknown".to_owned());
 
         let td = self.type_registry.lookup(&enum_name);
@@ -1568,10 +1617,33 @@ impl Transform {
                 )
             }
             ast::ExprKind::Call(call) => {
+                let sig = self.fn_signatures.get(&call.callee.name);
                 let args: Vec<RustExpr> = call
                     .args
                     .iter()
-                    .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                    .enumerate()
+                    .map(|(i, a)| {
+                        // Resolve string literals as enum variants when the parameter type is an enum
+                        if let ast::ExprKind::StringLit(s) = &a.kind
+                            && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
+                            && let Some(type_name) = extract_named_type(param_ty)
+                            && let Some(td) = self.type_registry.lookup(&type_name)
+                            && matches!(
+                                &td.kind,
+                                rsc_typeck::registry::TypeDefKind::SimpleEnum(_)
+                                    | rsc_typeck::registry::TypeDefKind::DataEnum(_)
+                            )
+                        {
+                            return RustExpr::new(
+                                RustExprKind::EnumVariant {
+                                    enum_name: type_name,
+                                    variant_name: capitalize_first(s),
+                                },
+                                a.span,
+                            );
+                        }
+                        self.lower_expr(a, ctx, use_map, stmt_index)
+                    })
                     .collect();
                 let call_expr = RustExpr::new(
                     RustExprKind::Call {
@@ -1582,10 +1654,7 @@ impl Transform {
                 );
                 // If the callee is a throws function and we're inside a throws function,
                 // wrap with `?` operator.
-                let callee_throws = self
-                    .fn_signatures
-                    .get(&call.callee.name)
-                    .is_some_and(|sig| sig.throws);
+                let callee_throws = sig.is_some_and(|sig| sig.throws);
                 if callee_throws && ctx.is_fn_throws() {
                     RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), expr.span)
                 } else {
@@ -2648,6 +2717,10 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(&for_in.iterable, needs_hashmap, needs_hashset);
             scan_block_for_collections(&for_in.body, needs_hashmap, needs_hashset);
         }
+        RustStmt::LetElse(let_else) => {
+            scan_expr_for_collections(&let_else.expr, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&let_else.else_block, needs_hashmap, needs_hashset);
+        }
         RustStmt::Break(_) | RustStmt::Continue(_) => {}
     }
 }
@@ -2829,6 +2902,49 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
 ///
 /// When this returns `true`, the type annotation can be omitted on the `let`
 /// binding because Rust will infer the same type.
+/// Check whether a collection type's element type is `Copy`.
+///
+/// For `Vec<i32>` (represented as `Generic(Named("Vec"), [I32])`), returns true.
+/// For `Vec<String>` or non-collection types, returns false.
+fn element_type_is_copy(ty: &RustType) -> bool {
+    if let RustType::Generic(_, args) = ty
+        && let Some(elem) = args.first()
+    {
+        return matches!(
+            elem,
+            RustType::I8
+                | RustType::I16
+                | RustType::I32
+                | RustType::I64
+                | RustType::U8
+                | RustType::U16
+                | RustType::U32
+                | RustType::U64
+                | RustType::F32
+                | RustType::F64
+                | RustType::Bool
+        );
+    }
+    false
+}
+
+/// Extract the base type name from a `RustType`.
+///
+/// Returns the name for `Named("Foo")` and `Generic(Named("Foo"), _)`.
+fn extract_named_type(ty: &RustType) -> Option<String> {
+    match ty {
+        RustType::Named(name) => Some(name.clone()),
+        RustType::Generic(base, _) => {
+            if let RustType::Named(name) = base.as_ref() {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Capitalize the first letter of a string.
 ///
 /// Used to derive Rust enum variant names from `RustScript` string literals.
@@ -5632,8 +5748,8 @@ mod tests {
 }"#;
         let output = compile_and_emit(source);
         assert!(
-            output.contains("for x in &items"),
-            "expected `for x in &items` in output, got:\n{output}"
+            output.contains("for &x in &items"),
+            "expected `for &x in &items` in output, got:\n{output}"
         );
     }
 

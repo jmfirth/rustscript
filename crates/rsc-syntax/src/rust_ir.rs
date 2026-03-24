@@ -399,6 +399,10 @@ pub enum RustStmt {
     /// A `for x in iter { ... }` loop.
     /// Produced by lowering `for (const x of items) { ... }`.
     ForIn(RustForInStmt),
+    /// A `let Some(name) = expr else { diverging_block };` statement.
+    /// Produced by lowering null-guard patterns where `if (x === null) { throw/return; }`
+    /// narrows `x` to non-null in the continuation scope.
+    LetElse(RustLetElseStmt),
     /// A `break;` statement.
     Break(Option<Span>),
     /// A `continue;` statement.
@@ -475,6 +479,10 @@ pub struct RustForInStmt {
     pub iterable: RustExpr,
     /// The loop body.
     pub body: RustBlock,
+    /// Whether to use a destructuring reference pattern (`for &n in &items`)
+    /// instead of a plain variable pattern (`for n in &items`).
+    /// Set to true for Copy element types so the loop variable has value type.
+    pub deref_pattern: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -531,6 +539,22 @@ pub struct RustIfLetStmt {
     pub then_block: RustBlock,
     /// The else block (value is `None`).
     pub else_block: Option<RustBlock>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A `let Some(name) = expr else { diverging_block };` statement.
+///
+/// Produced by lowering null-guard patterns: `if (x === null) { throw/return; }`.
+/// Rebinds the variable as the unwrapped value in the continuation scope.
+#[derive(Debug, Clone)]
+pub struct RustLetElseStmt {
+    /// The variable name to bind the unwrapped value to.
+    pub binding: String,
+    /// The expression being tested (must be `Option<T>`).
+    pub expr: RustExpr,
+    /// The diverging block (must contain return/throw/break/continue).
+    pub else_block: RustBlock,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }

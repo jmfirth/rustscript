@@ -4,9 +4,9 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
-    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem,
+    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt,
     RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
-    RustStructDef, RustTraitDef, RustTraitImplBlock, RustTypeParam,
+    RustStructDef, RustTraitDef, RustTraitImplBlock, RustType, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -216,7 +216,9 @@ impl Emitter {
 
             self.write(")");
 
-            if let Some(ref ret) = method.return_type {
+            if let Some(ref ret) = method.return_type
+                && !matches!(ret, RustType::Unit)
+            {
                 self.write(" -> ");
                 self.write(&ret.to_string());
             }
@@ -302,7 +304,9 @@ impl Emitter {
 
         self.write(")");
 
-        if let Some(ref ret) = method.return_type {
+        if let Some(ref ret) = method.return_type
+            && !matches!(ret, RustType::Unit)
+        {
             self.write(" -> ");
             self.write(&ret.to_string());
         }
@@ -379,7 +383,9 @@ impl Emitter {
 
         self.write(")");
 
-        if let Some(ref ret) = f.return_type {
+        if let Some(ref ret) = f.return_type
+            && !matches!(ret, RustType::Unit)
+        {
             self.write(" -> ");
             self.write(&ret.to_string());
         }
@@ -436,6 +442,8 @@ impl Emitter {
     }
 
     /// Emit a statement.
+    #[allow(clippy::too_many_lines)]
+    // Statement emission covers all IR statement kinds; splitting would obscure the match structure
     fn emit_stmt(&mut self, stmt: &RustStmt) {
         match stmt {
             RustStmt::Let(let_stmt) => {
@@ -516,6 +524,11 @@ impl Emitter {
                 self.emit_if_let(if_let);
                 self.newline();
             }
+            RustStmt::LetElse(let_else) => {
+                self.write_indent();
+                self.emit_let_else(let_else);
+                self.newline();
+            }
             RustStmt::MatchResult(match_result) => {
                 self.write_indent();
                 self.emit_match_result(match_result);
@@ -573,6 +586,17 @@ impl Emitter {
         }
     }
 
+    /// Emit a `let Some(name) = expr else { diverging_block };`.
+    fn emit_let_else(&mut self, let_else: &RustLetElseStmt) {
+        self.write("let Some(");
+        self.write(&let_else.binding);
+        self.write(") = ");
+        self.emit_expr(&let_else.expr);
+        self.write(" else ");
+        self.emit_block(&let_else.else_block);
+        self.write(";");
+    }
+
     /// Emit a `match` on `Result` for try/catch lowering.
     fn emit_match_result(&mut self, m: &RustMatchResultStmt) {
         self.write("match ");
@@ -602,8 +626,14 @@ impl Emitter {
     }
 
     /// Emit a for-in loop: `for variable in &iterable { body }`.
+    ///
+    /// When `deref_pattern` is true, emits `for &variable in &iterable { ... }`
+    /// so the loop variable gets bound by value for Copy types.
     fn emit_for_in(&mut self, for_in: &RustForInStmt) {
         self.write("for ");
+        if for_in.deref_pattern {
+            self.write("&");
+        }
         self.write(&for_in.variable);
         self.write(" in &");
         self.emit_expr(&for_in.iterable);
@@ -861,8 +891,15 @@ impl Emitter {
                 }
                 match body {
                     RustClosureBody::Expr(expr) => {
-                        self.write(" ");
-                        self.emit_expr(expr);
+                        if return_type.is_some() {
+                            // Rust requires braces around expression body when return type is annotated
+                            self.write(" { ");
+                            self.emit_expr(expr);
+                            self.write(" }");
+                        } else {
+                            self.write(" ");
+                            self.emit_expr(expr);
+                        }
                     }
                     RustClosureBody::Block(block) => {
                         self.write(" ");
@@ -2571,7 +2608,7 @@ fn main() {
     // Task 019: Closures and arrow functions
     // ---------------------------------------------------------------
 
-    // Test T19-8: Emit expression-body closure: `|x: i32| -> i32 x * 2`
+    // Test T19-8: Emit expression-body closure with return type wraps body in braces
     #[test]
     fn test_emit_closure_expr_body() {
         use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
@@ -2600,8 +2637,8 @@ fn main() {
         );
         let output = emit(&file);
         assert!(
-            output.contains("|x: i32| -> i32 x * 2"),
-            "expected closure in output:\n{output}"
+            output.contains("|x: i32| -> i32 { x * 2 }"),
+            "expected closure with braces in output:\n{output}"
         );
     }
 
@@ -2817,6 +2854,7 @@ fn main() {
                     }))],
                     expr: None,
                 },
+                deref_pattern: false,
                 span: None,
             })],
             None,
