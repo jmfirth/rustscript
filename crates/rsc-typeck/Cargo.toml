@@ -1,10 +1,9 @@
 [package]
-name = "rsc-lower"
+name = "rsc-typeck"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 rsc-syntax = { path = "../rsc-syntax" }
-rsc-typeck = { path = "../rsc-typeck" }
 thiserror = { workspace = true }

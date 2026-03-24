@@ -329,6 +329,7 @@ name = "rsc-lower"
 version = "0.1.0"
 dependencies = [
  "rsc-syntax",
+ "rsc-typeck",
  "thiserror",
 ]
 
@@ -345,6 +346,14 @@ name = "rsc-syntax"
 version = "0.1.0"
 dependencies = [
  "codespan-reporting",
+ "thiserror",
+]
+
+[[package]]
+name = "rsc-typeck"
+version = "0.1.0"
+dependencies = [
+ "rsc-syntax",
  "thiserror",
 ]
 

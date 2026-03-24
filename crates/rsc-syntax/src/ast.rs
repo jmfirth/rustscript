@@ -20,9 +20,25 @@ pub struct Module {
 
 /// A top-level item in a `RustScript` module.
 ///
+/// Wraps an [`ItemKind`] with metadata common to all items (export status,
+/// source span). Phase 0 supports only function declarations; Phase 1 will
+/// add type definitions, enums, interfaces, classes, and imports.
+#[derive(Debug, Clone)]
+pub struct Item {
+    /// The kind of item.
+    pub kind: ItemKind,
+    /// Whether this item is exported (`export` keyword). Defaults to `false`
+    /// until the module system is implemented (Task 024).
+    pub exported: bool,
+    /// The span covering the entire item.
+    pub span: Span,
+}
+
+/// The kinds of top-level items in a `RustScript` module.
+///
 /// Phase 0 supports only function declarations.
 #[derive(Debug, Clone)]
-pub enum Item {
+pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
     Function(FnDecl),
 }

@@ -15,7 +15,7 @@ use rsc_syntax::rust_ir::{
 use crate::builtins::BuiltinRegistry;
 use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
-use crate::types;
+use rsc_typeck::resolve;
 
 /// The AST-to-IR transformer.
 ///
@@ -39,13 +39,20 @@ impl Transform {
         let items = module
             .items
             .iter()
-            .map(|item| match item {
-                ast::Item::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
+            .map(|item| match &item.kind {
+                ast::ItemKind::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
             })
             .collect();
 
         let diagnostics = ctx.into_diagnostics();
-        (RustFile { items }, diagnostics)
+        (
+            RustFile {
+                uses: Vec::new(),
+                mod_decls: Vec::new(),
+                items,
+            },
+            diagnostics,
+        )
     }
 
     /// Lower a function declaration.
@@ -68,7 +75,8 @@ impl Transform {
             .params
             .iter()
             .map(|p| {
-                let ty = types::resolve_type_annotation(&p.type_ann, &mut Vec::new());
+                let ty =
+                    resolve::resolve_type_annotation_to_rust_type(&p.type_ann, &mut Vec::new());
                 ctx.declare_variable(p.name.name.clone(), ty.clone(), false);
                 RustParam {
                     name: p.name.name.clone(),
@@ -79,7 +87,7 @@ impl Transform {
             .collect();
 
         let return_type = f.return_type.as_ref().and_then(|ann| {
-            let ty = types::resolve_type_annotation(ann, &mut Vec::new());
+            let ty = resolve::resolve_type_annotation_to_rust_type(ann, &mut Vec::new());
             if ty == RustType::Unit {
                 return None;
             }
@@ -168,9 +176,9 @@ impl Transform {
         // Resolve the type from annotation or infer from literal
         let mut diags = Vec::new();
         let ty = if let Some(ann) = &decl.type_ann {
-            types::resolve_type_annotation(ann, &mut diags)
+            resolve::resolve_type_annotation_to_rust_type(ann, &mut diags)
         } else {
-            types::infer_literal_type(&decl.init).unwrap_or(RustType::I64)
+            resolve::infer_literal_rust_type(&decl.init).unwrap_or(RustType::I64)
         };
 
         for d in diags {
@@ -460,6 +468,15 @@ mod tests {
         }
     }
 
+    fn fn_item(f: FnDecl) -> Item {
+        let item_span = f.span;
+        Item {
+            kind: ItemKind::Function(f),
+            exported: false,
+            span: item_span,
+        }
+    }
+
     fn make_module(items: Vec<Item>) -> Module {
         Module {
             items,
@@ -500,7 +517,7 @@ mod tests {
     #[test]
     fn test_lower_empty_main_function() {
         let f = make_fn("main", vec![], None, vec![]);
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
@@ -526,7 +543,7 @@ mod tests {
             }),
             vec![],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
@@ -558,7 +575,7 @@ mod tests {
                 span: span(0, 18),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -598,7 +615,7 @@ mod tests {
                 }),
             ],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -638,7 +655,7 @@ mod tests {
                 span: span(0, 13),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -667,7 +684,7 @@ mod tests {
                 span: span(0, 20),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -704,7 +721,7 @@ mod tests {
                 span: span(0, 17),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -749,7 +766,7 @@ mod tests {
                 span: span(0, 13),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -785,7 +802,7 @@ mod tests {
                 span: span(0, 6),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -811,7 +828,7 @@ mod tests {
                 span: span(0, 7),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -843,7 +860,7 @@ mod tests {
                 span: span(0, 18),
             })],
         );
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (_, diags) = transform.lower_module(&module);
 
@@ -930,7 +947,7 @@ mod tests {
             span: span(0, 55),
         };
 
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
@@ -1000,7 +1017,7 @@ mod tests {
             span: span(0, 68),
         };
 
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -1068,7 +1085,7 @@ mod tests {
             span: span(0, 63),
         };
 
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
@@ -1162,7 +1179,7 @@ mod tests {
             span: span(0, 52),
         };
 
-        let module = make_module(vec![Item::Function(f)]);
+        let module = make_module(vec![fn_item(f)]);
         let transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 

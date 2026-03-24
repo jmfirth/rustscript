@@ -6,8 +6,8 @@
 
 use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, ElseClause, Expr, ExprKind, FnDecl, Ident,
-    IfStmt, Item, MethodCallExpr, Module, Param, ReturnStmt, Stmt, TypeAnnotation, TypeKind,
-    UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    IfStmt, Item, ItemKind, MethodCallExpr, Module, Param, ReturnStmt, Stmt, TypeAnnotation,
+    TypeKind, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -217,7 +217,14 @@ impl Parser {
     /// Parse a top-level item. In Phase 0, the only item is a function declaration.
     fn parse_item(&mut self) -> Option<Item> {
         if self.peek() == &TokenKind::Function {
-            self.parse_function_decl().map(Item::Function)
+            self.parse_function_decl().map(|f| {
+                let span = f.span;
+                Item {
+                    kind: ItemKind::Function(f),
+                    exported: false,
+                    span,
+                }
+            })
         } else {
             let current = self.current_token().clone();
             self.diagnostics.push(
@@ -975,8 +982,8 @@ mod tests {
     /// Helper: extract the first (and only) function declaration from a module.
     fn first_fn(module: &Module) -> &FnDecl {
         assert_eq!(module.items.len(), 1, "expected exactly one item");
-        match &module.items[0] {
-            Item::Function(f) => f,
+        match &module.items[0].kind {
+            ItemKind::Function(f) => f,
         }
     }
 
@@ -1427,14 +1434,14 @@ mod tests {
     fn test_parser_multiple_functions() {
         let module = parse_ok("function a() {} function b() {} function c() {}");
         assert_eq!(module.items.len(), 3);
-        match &module.items[0] {
-            Item::Function(f) => assert_eq!(f.name.name, "a"),
+        match &module.items[0].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "a"),
         }
-        match &module.items[1] {
-            Item::Function(f) => assert_eq!(f.name.name, "b"),
+        match &module.items[1].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "b"),
         }
-        match &module.items[2] {
-            Item::Function(f) => assert_eq!(f.name.name, "c"),
+        match &module.items[2].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "c"),
         }
     }
 

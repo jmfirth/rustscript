@@ -2,6 +2,7 @@
 members = [
     "crates/rsc-syntax",
     "crates/rsc-parser",
+    "crates/rsc-typeck",
     "crates/rsc-lower",
     "crates/rsc-emit",
     "crates/rsc-driver",

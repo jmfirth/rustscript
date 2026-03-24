@@ -10,7 +10,6 @@ mod context;
 pub mod error;
 mod ownership;
 mod transform;
-mod types;
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;

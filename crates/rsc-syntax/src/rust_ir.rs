@@ -12,8 +12,38 @@ use crate::span::Span;
 /// Produced by the lowering pass, consumed by the emitter.
 #[derive(Debug, Clone)]
 pub struct RustFile {
+    /// `use` declarations at the top of the file.
+    /// Populated by Tasks 017 and 024.
+    pub uses: Vec<RustUseDecl>,
+    /// `mod` declarations at the top of the file.
+    /// Populated by Task 024.
+    pub mod_decls: Vec<RustModDecl>,
     /// The top-level items in this file.
     pub items: Vec<RustItem>,
+}
+
+/// A Rust `use` declaration.
+///
+/// Represents `use path;` in the generated source.
+#[derive(Debug, Clone)]
+pub struct RustUseDecl {
+    /// The use path (e.g., `"std::collections::HashMap"`).
+    pub path: String,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust `mod` declaration.
+///
+/// Represents `[pub] mod name;` in the generated source.
+#[derive(Debug, Clone)]
+pub struct RustModDecl {
+    /// The module name.
+    pub name: String,
+    /// Whether this is a `pub mod` declaration.
+    pub public: bool,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A top-level item in a Rust file.
@@ -53,15 +83,29 @@ pub struct RustParam {
     pub span: Option<Span>,
 }
 
-/// Rust types available in the Phase 0 subset.
+/// Rust types available in the IR.
 ///
 /// Each variant corresponds to a concrete Rust type used in emitted code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RustType {
+    /// Rust `i8`.
+    I8,
+    /// Rust `i16`.
+    I16,
     /// Rust `i32`.
     I32,
     /// Rust `i64`.
     I64,
+    /// Rust `u8`.
+    U8,
+    /// Rust `u16`.
+    U16,
+    /// Rust `u32`.
+    U32,
+    /// Rust `u64`.
+    U64,
+    /// Rust `f32`.
+    F32,
     /// Rust `f64`.
     F64,
     /// Rust `bool`.
@@ -75,8 +119,15 @@ pub enum RustType {
 impl std::fmt::Display for RustType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::F32 => "f32",
             Self::F64 => "f64",
             Self::Bool => "bool",
             Self::String => "String",
@@ -424,8 +475,15 @@ mod tests {
 
     #[test]
     fn test_rust_type_display_all_variants() {
+        assert_eq!(RustType::I8.to_string(), "i8");
+        assert_eq!(RustType::I16.to_string(), "i16");
         assert_eq!(RustType::I32.to_string(), "i32");
         assert_eq!(RustType::I64.to_string(), "i64");
+        assert_eq!(RustType::U8.to_string(), "u8");
+        assert_eq!(RustType::U16.to_string(), "u16");
+        assert_eq!(RustType::U32.to_string(), "u32");
+        assert_eq!(RustType::U64.to_string(), "u64");
+        assert_eq!(RustType::F32.to_string(), "f32");
         assert_eq!(RustType::F64.to_string(), "f64");
         assert_eq!(RustType::Bool.to_string(), "bool");
         assert_eq!(RustType::String.to_string(), "String");
