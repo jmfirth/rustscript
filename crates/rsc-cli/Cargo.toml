@@ -1,0 +1,14 @@
+[package]
+name = "rsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rsc"
+path = "src/main.rs"
+
+[dependencies]
+rsc-driver = { path = "../rsc-driver" }
+clap = { workspace = true }
+anyhow = { workspace = true }

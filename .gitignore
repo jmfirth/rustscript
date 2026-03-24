@@ -1,0 +1,14 @@
+# Build artifacts
+target/
+.rsc-build/
+
+# Editor/OS
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.iml
