@@ -48,13 +48,15 @@ pub struct RustModDecl {
 
 /// A top-level item in a Rust file.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds struct definitions.
+/// Phase 0 supports function declarations; Phase 1 adds struct and enum definitions.
 #[derive(Debug, Clone)]
 pub enum RustItem {
     /// A `fn` declaration.
     Function(RustFnDecl),
     /// A `struct` definition.
     Struct(RustStructDef),
+    /// An `enum` definition.
+    Enum(RustEnumDef),
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
@@ -94,6 +96,33 @@ pub struct RustFieldDef {
     pub name: String,
     /// The field type.
     pub ty: RustType,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust enum definition.
+///
+/// Produced by lowering a `RustScript` [`EnumDef`](crate::ast::EnumDef).
+/// Supports both fieldless variants (simple enums) and struct variants (data enums).
+#[derive(Debug, Clone)]
+pub struct RustEnumDef {
+    /// The enum name.
+    pub name: String,
+    /// The variants of the enum.
+    pub variants: Vec<RustEnumVariant>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust enum variant.
+///
+/// Fieldless for simple enums, with fields for data enums.
+#[derive(Debug, Clone)]
+pub struct RustEnumVariant {
+    /// The variant name (e.g., `North`, `Circle`).
+    pub name: String,
+    /// The fields of this variant. Empty for simple enum variants.
+    pub fields: Vec<RustFieldDef>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -228,6 +257,8 @@ pub enum RustStmt {
     While(RustWhileStmt),
     /// Destructuring let: `let TypeName { field1, field2, .. } = expr;`.
     Destructure(RustDestructureStmt),
+    /// A `match` statement.
+    Match(RustMatchStmt),
 }
 
 /// A Rust `let` binding.
@@ -304,6 +335,39 @@ pub struct RustDestructureStmt {
     pub mutable: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
+}
+
+/// A Rust `match` expression used as a statement.
+///
+/// Produced by lowering a `RustScript` `switch` statement.
+#[derive(Debug, Clone)]
+pub struct RustMatchStmt {
+    /// The scrutinee expression.
+    pub scrutinee: RustExpr,
+    /// The match arms.
+    pub arms: Vec<RustMatchArm>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A single arm of a Rust `match` expression.
+#[derive(Debug, Clone)]
+pub struct RustMatchArm {
+    /// The pattern (e.g., `Direction::North` or `Shape::Circle { radius }`).
+    pub pattern: RustPattern,
+    /// The body block.
+    pub body: RustBlock,
+}
+
+/// A pattern in a Rust `match` arm.
+#[derive(Debug, Clone)]
+pub enum RustPattern {
+    /// A simple enum variant: `Direction::North`.
+    /// Fields: `(enum_name, variant_name)`.
+    EnumVariant(String, String),
+    /// A destructuring enum variant: `Shape::Circle { radius }`.
+    /// Fields: `(enum_name, variant_name, field_names)`.
+    EnumVariantFields(String, String, Vec<String>),
 }
 
 /// A Rust expression with optional source span.
@@ -424,6 +488,14 @@ pub enum RustExprKind {
         object: Box<RustExpr>,
         /// The field name.
         field: String,
+    },
+    /// Enum variant construction: `Direction::North`.
+    /// Fields: `(enum_name, variant_name)`.
+    EnumVariant {
+        /// The enum type name.
+        enum_name: String,
+        /// The variant name.
+        variant_name: String,
     },
 }
 

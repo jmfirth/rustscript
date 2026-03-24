@@ -662,6 +662,8 @@ impl<'a> Lexer<'a> {
             "false" => TokenKind::False,
             "type" => TokenKind::Type,
             "extends" => TokenKind::Extends,
+            "switch" => TokenKind::Switch,
+            "case" => TokenKind::Case,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -720,6 +722,7 @@ impl<'a> Lexer<'a> {
             b':' => Some(TokenKind::Colon),
             b';' => Some(TokenKind::Semicolon),
             b'.' => Some(TokenKind::Dot),
+            b'|' => Some(TokenKind::Pipe),
             _ => None,
         }
     }

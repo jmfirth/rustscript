@@ -3,8 +3,8 @@
 //! Walks the Rust IR tree and produces formatted `.rs` source text.
 
 use rsc_syntax::rust_ir::{
-    RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt, RustItem,
-    RustStmt, RustStructDef, RustTypeParam,
+    RustBlock, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt,
+    RustItem, RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -95,6 +95,7 @@ impl Emitter {
         match item {
             RustItem::Function(f) => self.emit_fn(f),
             RustItem::Struct(s) => self.emit_struct(s),
+            RustItem::Enum(e) => self.emit_enum(e),
         }
     }
 
@@ -121,6 +122,87 @@ impl Emitter {
         self.pop_indent();
         self.write_indent();
         self.writeln("}");
+    }
+
+    /// Emit an enum definition.
+    fn emit_enum(&mut self, e: &RustEnumDef) {
+        self.write_indent();
+        self.write("enum ");
+        self.write(&e.name);
+        self.writeln(" {");
+        self.push_indent();
+
+        for variant in &e.variants {
+            self.write_indent();
+            self.write(&variant.name);
+            if variant.fields.is_empty() {
+                self.writeln(",");
+            } else {
+                self.writeln(" {");
+                self.push_indent();
+                for field in &variant.fields {
+                    self.write_indent();
+                    if field.public {
+                        self.write("pub ");
+                    }
+                    self.write(&field.name);
+                    self.write(": ");
+                    self.write(&field.ty.to_string());
+                    self.writeln(",");
+                }
+                self.pop_indent();
+                self.write_indent();
+                self.writeln("},");
+            }
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+    }
+
+    /// Emit a match statement.
+    fn emit_match(&mut self, m: &RustMatchStmt) {
+        self.write("match ");
+        self.emit_expr(&m.scrutinee);
+        self.writeln(" {");
+        self.push_indent();
+
+        for arm in &m.arms {
+            self.write_indent();
+            self.emit_pattern(&arm.pattern);
+            self.write(" => ");
+            self.emit_block(&arm.body);
+            self.newline();
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.write("}");
+    }
+
+    /// Emit a match pattern.
+    fn emit_pattern(&mut self, pattern: &RustPattern) {
+        match pattern {
+            RustPattern::EnumVariant(enum_name, variant_name) => {
+                self.write(enum_name);
+                self.write("::");
+                self.write(variant_name);
+            }
+            RustPattern::EnumVariantFields(enum_name, variant_name, fields) => {
+                self.write(enum_name);
+                self.write("::");
+                self.write(variant_name);
+                self.write(" { ");
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(field);
+                }
+                self.write(" }");
+            }
+        }
     }
 
     /// Emit a function declaration.
@@ -268,6 +350,11 @@ impl Emitter {
                 self.write(", .. } = ");
                 self.emit_expr(&destr.init);
                 self.writeln(";");
+            }
+            RustStmt::Match(match_stmt) => {
+                self.write_indent();
+                self.emit_match(match_stmt);
+                self.newline();
             }
         }
     }
@@ -428,6 +515,14 @@ impl Emitter {
                 self.write(".");
                 self.write(field);
             }
+            RustExprKind::EnumVariant {
+                enum_name,
+                variant_name,
+            } => {
+                self.write(enum_name);
+                self.write("::");
+                self.write(variant_name);
+            }
         }
     }
 }
@@ -442,10 +537,11 @@ pub fn emit(file: &RustFile) -> String {
 #[cfg(test)]
 mod tests {
     use rsc_syntax::rust_ir::{
-        RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustExpr, RustExprKind,
-        RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustModDecl,
-        RustParam, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp,
-        RustUseDecl, RustWhileStmt,
+        RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
+        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem,
+        RustLetStmt, RustMatchArm, RustMatchStmt, RustModDecl, RustParam, RustPattern,
+        RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+        RustWhileStmt,
     };
 
     use super::emit;
@@ -1551,5 +1647,218 @@ fn main() {
     #[test]
     fn test_emit_type_param_display() {
         assert_eq!(RustType::TypeParam("T".to_owned()).to_string(), "T");
+    }
+
+    // ---- Task 015: Enum and Match emission tests ----
+
+    // Test T015-8: Emit simple enum
+    #[test]
+    fn test_emit_simple_enum_fieldless_variants() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Enum(RustEnumDef {
+                name: "Direction".to_owned(),
+                variants: vec![
+                    RustEnumVariant {
+                        name: "North".to_owned(),
+                        fields: vec![],
+                        span: None,
+                    },
+                    RustEnumVariant {
+                        name: "South".to_owned(),
+                        fields: vec![],
+                        span: None,
+                    },
+                    RustEnumVariant {
+                        name: "East".to_owned(),
+                        fields: vec![],
+                        span: None,
+                    },
+                    RustEnumVariant {
+                        name: "West".to_owned(),
+                        fields: vec![],
+                        span: None,
+                    },
+                ],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(output.contains("enum Direction {"));
+        assert!(output.contains("    North,"));
+        assert!(output.contains("    South,"));
+        assert!(output.contains("    East,"));
+        assert!(output.contains("    West,"));
+    }
+
+    // Test T015-9: Emit data enum with struct variants
+    #[test]
+    fn test_emit_data_enum_struct_variants() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Enum(RustEnumDef {
+                name: "Shape".to_owned(),
+                variants: vec![
+                    RustEnumVariant {
+                        name: "Circle".to_owned(),
+                        fields: vec![RustFieldDef {
+                            public: true,
+                            name: "radius".to_owned(),
+                            ty: RustType::F64,
+                            span: None,
+                        }],
+                        span: None,
+                    },
+                    RustEnumVariant {
+                        name: "Rect".to_owned(),
+                        fields: vec![
+                            RustFieldDef {
+                                public: true,
+                                name: "width".to_owned(),
+                                ty: RustType::F64,
+                                span: None,
+                            },
+                            RustFieldDef {
+                                public: true,
+                                name: "height".to_owned(),
+                                ty: RustType::F64,
+                                span: None,
+                            },
+                        ],
+                        span: None,
+                    },
+                ],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(output.contains("enum Shape {"));
+        assert!(output.contains("    Circle {"));
+        assert!(output.contains("        pub radius: f64,"));
+        assert!(output.contains("    Rect {"));
+        assert!(output.contains("        pub width: f64,"));
+        assert!(output.contains("        pub height: f64,"));
+    }
+
+    // Test T015-10: Emit match on simple enum
+    #[test]
+    fn test_emit_match_simple_enum_variant_patterns() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "test".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![RustStmt::Match(RustMatchStmt {
+                        scrutinee: ident("dir"),
+                        arms: vec![
+                            RustMatchArm {
+                                pattern: RustPattern::EnumVariant(
+                                    "Direction".to_owned(),
+                                    "North".to_owned(),
+                                ),
+                                body: RustBlock {
+                                    stmts: vec![RustStmt::Semi(int_lit(1))],
+                                    expr: None,
+                                },
+                            },
+                            RustMatchArm {
+                                pattern: RustPattern::EnumVariant(
+                                    "Direction".to_owned(),
+                                    "South".to_owned(),
+                                ),
+                                body: RustBlock {
+                                    stmts: vec![RustStmt::Semi(int_lit(2))],
+                                    expr: None,
+                                },
+                            },
+                        ],
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(output.contains("match dir {"));
+        assert!(output.contains("Direction::North => {"));
+        assert!(output.contains("Direction::South => {"));
+    }
+
+    // Test T015-11: Emit match on data enum with field binding
+    #[test]
+    fn test_emit_match_data_enum_field_destructuring() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "area".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![RustStmt::Match(RustMatchStmt {
+                        scrutinee: ident("shape"),
+                        arms: vec![
+                            RustMatchArm {
+                                pattern: RustPattern::EnumVariantFields(
+                                    "Shape".to_owned(),
+                                    "Circle".to_owned(),
+                                    vec!["radius".to_owned()],
+                                ),
+                                body: RustBlock {
+                                    stmts: vec![RustStmt::Semi(ident("radius"))],
+                                    expr: None,
+                                },
+                            },
+                            RustMatchArm {
+                                pattern: RustPattern::EnumVariantFields(
+                                    "Shape".to_owned(),
+                                    "Rect".to_owned(),
+                                    vec!["width".to_owned(), "height".to_owned()],
+                                ),
+                                body: RustBlock {
+                                    stmts: vec![RustStmt::Semi(ident("width"))],
+                                    expr: None,
+                                },
+                            },
+                        ],
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(output.contains("Shape::Circle { radius }"));
+        assert!(output.contains("Shape::Rect { width, height }"));
+    }
+
+    // Test T015-emit: Emit EnumVariant expression
+    #[test]
+    fn test_emit_enum_variant_expression() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "dir".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::EnumVariant {
+                    enum_name: "Direction".to_owned(),
+                    variant_name: "North".to_owned(),
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(output.contains("let dir = Direction::North;"));
     }
 }

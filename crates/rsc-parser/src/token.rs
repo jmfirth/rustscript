@@ -52,6 +52,10 @@ pub(crate) enum TokenKind {
     Type,
     /// `extends`
     Extends,
+    /// `switch`
+    Switch,
+    /// `case`
+    Case,
 
     // Operators
     /// `+`
@@ -94,6 +98,8 @@ pub(crate) enum TokenKind {
     SlashEq,
     /// `%=`
     PercentEq,
+    /// `|` (used in union type syntax)
+    Pipe,
 
     // Delimiters
     /// `(`

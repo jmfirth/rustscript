@@ -7,9 +7,10 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustExpr,
-    RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustParam,
-    RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustWhileStmt,
+    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef,
+    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt,
+    RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
+    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -48,8 +49,10 @@ impl Transform {
         // Pre-pass: register all type definitions so they can be resolved
         // during function lowering.
         for item in &module.items {
-            if let ast::ItemKind::TypeDef(td) = &item.kind {
-                self.register_type_def(td, &mut ctx);
+            match &item.kind {
+                ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
+                ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
+                ast::ItemKind::Function(_) => {}
             }
         }
 
@@ -59,6 +62,7 @@ impl Transform {
             .map(|item| match &item.kind {
                 ast::ItemKind::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
                 ast::ItemKind::TypeDef(td) => RustItem::Struct(self.lower_type_def(td, &mut ctx)),
+                ast::ItemKind::EnumDef(ed) => RustItem::Enum(self.lower_enum_def(ed, &mut ctx)),
             })
             .collect();
 
@@ -128,6 +132,108 @@ impl Transform {
             type_params,
             fields,
             span: Some(td.span),
+        }
+    }
+
+    /// Register an enum definition in the type registry during the pre-pass.
+    fn register_enum_def(&mut self, ed: &ast::EnumDef, ctx: &mut LoweringContext) {
+        // Determine if simple or data enum
+        let is_data = ed
+            .variants
+            .iter()
+            .any(|v| matches!(v, ast::EnumVariant::Data { .. }));
+
+        if is_data {
+            let mut diags = Vec::new();
+            let variants: Vec<(String, Vec<(String, rsc_typeck::types::Type)>)> = ed
+                .variants
+                .iter()
+                .filter_map(|v| match v {
+                    ast::EnumVariant::Data { name, fields, .. } => {
+                        let field_types: Vec<(String, rsc_typeck::types::Type)> = fields
+                            .iter()
+                            .map(|f| {
+                                let ty = resolve::resolve_type_annotation_with_generics(
+                                    &f.type_ann,
+                                    &self.type_registry,
+                                    &[],
+                                    &mut diags,
+                                );
+                                (f.name.name.clone(), ty)
+                            })
+                            .collect();
+                        Some((name.name.clone(), field_types))
+                    }
+                    ast::EnumVariant::Simple(..) => None,
+                })
+                .collect();
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
+            self.type_registry
+                .register_data_enum(ed.name.name.clone(), variants);
+        } else {
+            let variants: Vec<String> = ed
+                .variants
+                .iter()
+                .filter_map(|v| match v {
+                    ast::EnumVariant::Simple(ident, _) => Some(ident.name.clone()),
+                    ast::EnumVariant::Data { .. } => None,
+                })
+                .collect();
+            self.type_registry
+                .register_simple_enum(ed.name.name.clone(), variants);
+        }
+    }
+
+    /// Lower an enum definition to a Rust enum.
+    fn lower_enum_def(&self, ed: &ast::EnumDef, ctx: &mut LoweringContext) -> RustEnumDef {
+        let mut diags = Vec::new();
+        let variants = ed
+            .variants
+            .iter()
+            .map(|v| match v {
+                ast::EnumVariant::Simple(ident, span) => RustEnumVariant {
+                    name: ident.name.clone(),
+                    fields: vec![],
+                    span: Some(*span),
+                },
+                ast::EnumVariant::Data {
+                    name, fields, span, ..
+                } => {
+                    let rust_fields = fields
+                        .iter()
+                        .map(|f| {
+                            let ty = resolve::resolve_type_annotation_with_generics(
+                                &f.type_ann,
+                                &self.type_registry,
+                                &[],
+                                &mut diags,
+                            );
+                            let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                            RustFieldDef {
+                                public: true,
+                                name: f.name.name.clone(),
+                                ty: rust_ty,
+                                span: Some(f.span),
+                            }
+                        })
+                        .collect();
+                    RustEnumVariant {
+                        name: name.name.clone(),
+                        fields: rust_fields,
+                        span: Some(*span),
+                    }
+                }
+            })
+            .collect();
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        RustEnumDef {
+            name: ed.name.name.clone(),
+            variants,
+            span: Some(ed.span),
         }
     }
 
@@ -263,6 +369,9 @@ impl Transform {
             ast::Stmt::Destructure(destr) => {
                 self.lower_destructure(destr, ctx, use_map, stmt_index)
             }
+            ast::Stmt::Switch(switch) => {
+                self.lower_switch(switch, ctx, use_map, stmt_index, reassigned)
+            }
         }
     }
 
@@ -307,7 +416,34 @@ impl Transform {
         };
         ctx.set_struct_type_name(struct_type_name);
 
-        let init = self.lower_expr(&decl.init, ctx, use_map, stmt_index);
+        // Check for enum construction: `const dir: Direction = "north"` → `Direction::North`
+        let init = if let (RustType::Named(type_name), ast::ExprKind::StringLit(s)) =
+            (&ty, &decl.init.kind)
+        {
+            if let Some(td) = self.type_registry.lookup(type_name) {
+                let variant_name = capitalize_first(s);
+                let is_enum = matches!(
+                    &td.kind,
+                    rsc_typeck::registry::TypeDefKind::SimpleEnum(_)
+                        | rsc_typeck::registry::TypeDefKind::DataEnum(_)
+                );
+                if is_enum {
+                    RustExpr::new(
+                        RustExprKind::EnumVariant {
+                            enum_name: type_name.clone(),
+                            variant_name,
+                        },
+                        decl.init.span,
+                    )
+                } else {
+                    self.lower_expr(&decl.init, ctx, use_map, stmt_index)
+                }
+            } else {
+                self.lower_expr(&decl.init, ctx, use_map, stmt_index)
+            }
+        } else {
+            self.lower_expr(&decl.init, ctx, use_map, stmt_index)
+        };
 
         ctx.set_struct_type_name(None);
 
@@ -415,10 +551,11 @@ impl Transform {
 
         // Declare the extracted fields as variables in the current scope.
         // Look up their types from the type registry.
-        if let Some(td) = self.type_registry.lookup(&type_name) {
+        if let Some(td) = self.type_registry.lookup(&type_name)
+            && let Some(fields) = td.struct_fields()
+        {
             for field_ident in &destr.fields {
-                let field_ty = td
-                    .fields
+                let field_ty = fields
                     .iter()
                     .find(|(name, _)| name == &field_ident.name)
                     .map_or(RustType::Unit, |(_, ty)| {
@@ -435,6 +572,299 @@ impl Transform {
             mutable: destr.binding == ast::VarBinding::Let,
             span: Some(destr.span),
         })
+    }
+
+    /// Lower a switch statement to a Rust match statement.
+    ///
+    /// Resolves the scrutinee type to determine the enum being matched.
+    /// For simple enums, generates `EnumVariant` patterns.
+    /// For data enums, generates `EnumVariantFields` patterns with field bindings.
+    /// Inside case bodies, rewrites `scrutinee.field` to just `field` (the
+    /// destructured binding from the match arm).
+    fn lower_switch(
+        &self,
+        switch: &ast::SwitchStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        let scrutinee = self.lower_expr(&switch.scrutinee, ctx, use_map, stmt_index);
+
+        // Determine the enum name from the scrutinee's type
+        let scrutinee_var_name = match &switch.scrutinee.kind {
+            ast::ExprKind::Ident(ident) => Some(ident.name.clone()),
+            _ => None,
+        };
+
+        let enum_name = scrutinee_var_name
+            .as_ref()
+            .and_then(|name| ctx.lookup_variable(name))
+            .and_then(|info| match &info.ty {
+                RustType::Named(n) => Some(n.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Unknown".to_owned());
+
+        let td = self.type_registry.lookup(&enum_name);
+
+        let arms: Vec<RustMatchArm> = switch
+            .cases
+            .iter()
+            .map(|case| {
+                let variant_name = capitalize_first(&case.pattern);
+
+                let (pattern, bound_fields) = match td.map(|t| &t.kind) {
+                    Some(rsc_typeck::registry::TypeDefKind::DataEnum(variants)) => {
+                        // Find the variant's fields
+                        let field_names: Vec<String> = variants
+                            .iter()
+                            .find(|(vn, _)| *vn == variant_name)
+                            .map(|(_, fields)| fields.iter().map(|(n, _)| n.clone()).collect())
+                            .unwrap_or_default();
+                        (
+                            RustPattern::EnumVariantFields(
+                                enum_name.clone(),
+                                variant_name.clone(),
+                                field_names.clone(),
+                            ),
+                            field_names,
+                        )
+                    }
+                    _ => (
+                        RustPattern::EnumVariant(enum_name.clone(), variant_name),
+                        Vec::new(),
+                    ),
+                };
+
+                // Lower case body with field binding context
+                let body = self.lower_switch_case_body(
+                    &case.body,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    reassigned,
+                    scrutinee_var_name.as_deref(),
+                    &bound_fields,
+                    &enum_name,
+                );
+
+                RustMatchArm { pattern, body }
+            })
+            .collect();
+
+        RustStmt::Match(RustMatchStmt {
+            scrutinee,
+            arms,
+            span: Some(switch.span),
+        })
+    }
+
+    /// Lower switch case body statements, rewriting field accesses on the
+    /// scrutinee variable to direct identifier references (the destructured
+    /// bindings from the match arm pattern).
+    ///
+    /// Also rewrites string literals in return position that match enum variant
+    /// names to `EnumName::VariantName` expressions.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_switch_case_body(
+        &self,
+        stmts: &[ast::Stmt],
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+        scrutinee_var: Option<&str>,
+        bound_fields: &[String],
+        enum_name: &str,
+    ) -> RustBlock {
+        let rust_stmts: Vec<RustStmt> = stmts
+            .iter()
+            .enumerate()
+            .map(|(i, stmt)| {
+                self.lower_switch_case_stmt(
+                    stmt,
+                    ctx,
+                    use_map,
+                    stmt_index + i,
+                    reassigned,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                )
+            })
+            .collect();
+
+        RustBlock {
+            stmts: rust_stmts,
+            expr: None,
+        }
+    }
+
+    /// Lower a single statement within a switch case body.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_switch_case_stmt(
+        &self,
+        stmt: &ast::Stmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+        scrutinee_var: Option<&str>,
+        bound_fields: &[String],
+        enum_name: &str,
+    ) -> RustStmt {
+        match stmt {
+            ast::Stmt::Return(ret) => {
+                let value = ret.value.as_ref().map(|v| {
+                    self.lower_switch_case_expr(
+                        v,
+                        ctx,
+                        use_map,
+                        stmt_index,
+                        scrutinee_var,
+                        bound_fields,
+                        enum_name,
+                    )
+                });
+                RustStmt::Return(RustReturnStmt {
+                    value,
+                    span: Some(ret.span),
+                })
+            }
+            ast::Stmt::Expr(expr) => {
+                let lowered = self.lower_switch_case_expr(
+                    expr,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                );
+                RustStmt::Semi(lowered)
+            }
+            // For other statement types, fall back to the normal lowering
+            _ => self.lower_stmt(stmt, ctx, use_map, stmt_index, reassigned),
+        }
+    }
+
+    /// Lower an expression within a switch case body.
+    ///
+    /// This handles two key rewrites:
+    /// 1. `scrutinee.field` → `field` when `field` is a bound destructured binding
+    /// 2. String literals that match enum variant names → `EnumName::VariantName`
+    #[allow(clippy::too_many_arguments)]
+    fn lower_switch_case_expr(
+        &self,
+        expr: &ast::Expr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        scrutinee_var: Option<&str>,
+        bound_fields: &[String],
+        enum_name: &str,
+    ) -> RustExpr {
+        match &expr.kind {
+            // Rewrite: scrutinee.field → field (destructured binding)
+            ast::ExprKind::FieldAccess(fa) => {
+                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
+                    && scrutinee_var == Some(obj_ident.name.as_str())
+                    && bound_fields.contains(&fa.field.name)
+                {
+                    return RustExpr::new(RustExprKind::Ident(fa.field.name.clone()), expr.span);
+                }
+                // Not a match binding — lower normally
+                let object = self.lower_switch_case_expr(
+                    &fa.object,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                );
+                RustExpr::new(
+                    RustExprKind::FieldAccess {
+                        object: Box::new(object),
+                        field: fa.field.name.clone(),
+                    },
+                    expr.span,
+                )
+            }
+            // Rewrite: string literal → enum variant when return type is an enum
+            ast::ExprKind::StringLit(s) => {
+                // Check if this string matches an enum variant
+                if let Some(td) = self.type_registry.lookup(enum_name) {
+                    let variant_name = capitalize_first(s);
+                    let is_variant = match &td.kind {
+                        rsc_typeck::registry::TypeDefKind::SimpleEnum(variants) => {
+                            variants.contains(&variant_name)
+                        }
+                        rsc_typeck::registry::TypeDefKind::DataEnum(variants) => {
+                            variants.iter().any(|(vn, _)| *vn == variant_name)
+                        }
+                        rsc_typeck::registry::TypeDefKind::Struct(_) => false,
+                    };
+                    if is_variant {
+                        return RustExpr::new(
+                            RustExprKind::EnumVariant {
+                                enum_name: enum_name.to_owned(),
+                                variant_name,
+                            },
+                            expr.span,
+                        );
+                    }
+                }
+                // Not an enum variant — lower as normal string
+                self.lower_expr(expr, ctx, use_map, stmt_index)
+            }
+            // Binary expressions: recurse into operands
+            ast::ExprKind::Binary(bin) => {
+                let left = self.lower_switch_case_expr(
+                    &bin.left,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                );
+                let right = self.lower_switch_case_expr(
+                    &bin.right,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                );
+                let op = lower_binary_op(bin.op);
+                RustExpr::new(
+                    RustExprKind::Binary {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    expr.span,
+                )
+            }
+            // Paren: recurse
+            ast::ExprKind::Paren(inner) => {
+                let lowered = self.lower_switch_case_expr(
+                    inner,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    scrutinee_var,
+                    bound_fields,
+                    enum_name,
+                );
+                RustExpr::new(RustExprKind::Paren(Box::new(lowered)), expr.span)
+            }
+            // Everything else: use normal lowering
+            _ => self.lower_expr(expr, ctx, use_map, stmt_index),
+        }
     }
 
     /// Lower an expression.
@@ -777,6 +1207,21 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
 ///
 /// When this returns `true`, the type annotation can be omitted on the `let`
 /// binding because Rust will infer the same type.
+/// Capitalize the first letter of a string.
+///
+/// Used to derive Rust enum variant names from `RustScript` string literals.
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => {
+            let mut result = c.to_uppercase().to_string();
+            result.push_str(chars.as_str());
+            result
+        }
+        None => String::new(),
+    }
+}
+
 fn is_default_literal_type(expr: &ast::Expr, ty: &RustType) -> bool {
     match &expr.kind {
         ast::ExprKind::IntLit(_) => *ty == RustType::I64,
@@ -2395,5 +2840,112 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "Result: {}"));
         assert!(matches!(&args[1].kind, RustExprKind::Binary { .. }));
+    }
+
+    // ---- Task 015: Enum lowering tests ----
+
+    // Test T015-4: Lower simple enum → RustEnumDef with fieldless variants, names capitalized
+    #[test]
+    fn test_lower_simple_enum_capitalized_variants() {
+        let module = Module {
+            items: vec![Item {
+                kind: ItemKind::EnumDef(EnumDef {
+                    name: ident("Direction", 0, 9),
+                    variants: vec![
+                        EnumVariant::Simple(ident("North", 0, 5), span(0, 5)),
+                        EnumVariant::Simple(ident("South", 0, 5), span(0, 5)),
+                        EnumVariant::Simple(ident("East", 0, 4), span(0, 4)),
+                        EnumVariant::Simple(ident("West", 0, 4), span(0, 4)),
+                    ],
+                    span: span(0, 50),
+                }),
+                exported: false,
+                span: span(0, 50),
+            }],
+            span: span(0, 50),
+        };
+
+        let mut transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+        assert_eq!(file.items.len(), 1);
+        match &file.items[0] {
+            RustItem::Enum(e) => {
+                assert_eq!(e.name, "Direction");
+                assert_eq!(e.variants.len(), 4);
+                assert_eq!(e.variants[0].name, "North");
+                assert!(e.variants[0].fields.is_empty());
+                assert_eq!(e.variants[3].name, "West");
+            }
+            _ => panic!("expected Enum item"),
+        }
+    }
+
+    // Test T015-5: Lower data enum → RustEnumDef with struct variants, kind field removed
+    #[test]
+    fn test_lower_data_enum_struct_variants() {
+        let module = Module {
+            items: vec![Item {
+                kind: ItemKind::EnumDef(EnumDef {
+                    name: ident("Shape", 0, 5),
+                    variants: vec![
+                        EnumVariant::Data {
+                            discriminant_value: "circle".to_owned(),
+                            name: ident("Circle", 0, 6),
+                            fields: vec![FieldDef {
+                                name: ident("radius", 0, 6),
+                                type_ann: TypeAnnotation {
+                                    kind: TypeKind::Named(ident("f64", 0, 3)),
+                                    span: span(0, 3),
+                                },
+                                span: span(0, 10),
+                            }],
+                            span: span(0, 30),
+                        },
+                        EnumVariant::Data {
+                            discriminant_value: "rect".to_owned(),
+                            name: ident("Rect", 0, 4),
+                            fields: vec![
+                                FieldDef {
+                                    name: ident("width", 0, 5),
+                                    type_ann: TypeAnnotation {
+                                        kind: TypeKind::Named(ident("f64", 0, 3)),
+                                        span: span(0, 3),
+                                    },
+                                    span: span(0, 10),
+                                },
+                                FieldDef {
+                                    name: ident("height", 0, 6),
+                                    type_ann: TypeAnnotation {
+                                        kind: TypeKind::Named(ident("f64", 0, 3)),
+                                        span: span(0, 3),
+                                    },
+                                    span: span(0, 10),
+                                },
+                            ],
+                            span: span(0, 50),
+                        },
+                    ],
+                    span: span(0, 80),
+                }),
+                exported: false,
+                span: span(0, 80),
+            }],
+            span: span(0, 80),
+        };
+
+        let mut transform = Transform::new();
+        let (file, _) = transform.lower_module(&module);
+        match &file.items[0] {
+            RustItem::Enum(e) => {
+                assert_eq!(e.name, "Shape");
+                assert_eq!(e.variants.len(), 2);
+                assert_eq!(e.variants[0].name, "Circle");
+                assert_eq!(e.variants[0].fields.len(), 1);
+                assert_eq!(e.variants[0].fields[0].name, "radius");
+                assert_eq!(e.variants[1].name, "Rect");
+                assert_eq!(e.variants[1].fields.len(), 2);
+            }
+            _ => panic!("expected Enum item"),
+        }
     }
 }
