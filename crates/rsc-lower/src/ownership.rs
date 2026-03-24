@@ -225,7 +225,18 @@ pub(crate) fn find_reassigned_variables(body: &ast::Block) -> HashSet<String> {
 fn is_copy_type(ty: &RustType) -> bool {
     matches!(
         ty,
-        RustType::I32 | RustType::I64 | RustType::F64 | RustType::Bool | RustType::Unit
+        RustType::I8
+            | RustType::I16
+            | RustType::I32
+            | RustType::I64
+            | RustType::U8
+            | RustType::U16
+            | RustType::U32
+            | RustType::U64
+            | RustType::F32
+            | RustType::F64
+            | RustType::Bool
+            | RustType::Unit
     )
 }
 
@@ -434,6 +445,39 @@ mod tests {
         assert!(!needs_clone("x", 0, &use_map, &RustType::I64));
         assert!(!needs_clone("x", 0, &use_map, &RustType::F64));
         assert!(!needs_clone("x", 0, &use_map, &RustType::Bool));
+    }
+
+    // Test 8b: needs_clone for extended Copy types returns false (Task 013)
+    #[test]
+    fn test_needs_clone_extended_copy_types_returns_false() {
+        let block = Block {
+            stmts: vec![
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("foo", 0, 3),
+                        args: vec![ident_expr("x", 4, 5)],
+                    }),
+                    span: span(0, 6),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("foo", 10, 13),
+                        args: vec![ident_expr("x", 14, 15)],
+                    }),
+                    span: span(10, 16),
+                }),
+            ],
+            span: span(0, 16),
+        };
+
+        let use_map = UseMap::analyze(&block, no_ref_call);
+        assert!(!needs_clone("x", 0, &use_map, &RustType::I8));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::I16));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::U8));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::U16));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::U32));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::U64));
+        assert!(!needs_clone("x", 0, &use_map, &RustType::F32));
     }
 
     // Test 9: println! args are NOT move positions

@@ -345,3 +345,214 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("explicit_type", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// 12. Extended primitive: u8 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_u8_const_generates_let_u8() {
+    let source = "\
+function main() {
+  const x: u8 = 255;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: u8 = 255;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("u8_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 13. Extended primitive: u16 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_u16_const_generates_let_u16() {
+    let source = "\
+function main() {
+  const x: u16 = 1000;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: u16 = 1000;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("u16_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 14. Extended primitive: u32 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_u32_const_generates_let_u32() {
+    let source = "\
+function main() {
+  const x: u32 = 42;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: u32 = 42;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("u32_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 15. Extended primitive: u64 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_u64_const_generates_let_u64() {
+    let source = "\
+function main() {
+  const x: u64 = 42;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: u64 = 42;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("u64_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 16. Extended primitive: i8 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_i8_const_generates_let_i8() {
+    let source = "\
+function main() {
+  const x: i8 = -1;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: i8 = -1;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("i8_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 17. Extended primitive: i16 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_i16_const_generates_let_i16() {
+    let source = "\
+function main() {
+  const x: i16 = 1000;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: i16 = 1000;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("i16_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 18. Extended primitive: f32 (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_f32_const_generates_let_f32() {
+    let source = "\
+function main() {
+  const x: f32 = 3.14;
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let x: f32 = 3.14;
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("f32_const", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 19. Extended primitives: u32 function params and return (Task 013)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_u32_function_params_and_return() {
+    let source = "\
+function add(a: u32, b: u32): u32 {
+  return a + b;
+}
+
+function main() {
+  console.log(add(10, 20));
+}";
+
+    let expected = "\
+fn add(a: u32, b: u32) -> u32 {
+    return a + b;
+}
+
+fn main() {
+    println!(\"{}\", add(10, 20));
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("u32_function", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 20. Cross-type mismatch preserved for rustc (Task 013 correctness scenario 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_cross_type_mismatch_preserves_types() {
+    let source = "\
+function convert(x: i32): i64 {
+  return x;
+}";
+
+    let expected = "\
+fn convert(x: i32) -> i64 {
+    return x;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("cross_type_mismatch", &actual, expected);
+}
