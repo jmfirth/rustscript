@@ -2383,7 +2383,7 @@ fn main() {
     // Test T19-9: Emit block-body closure: `|| { ... }`
     #[test]
     fn test_emit_closure_block_body() {
-        use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
+        use rsc_syntax::rust_ir::RustClosureBody;
         let file = simple_fn(
             "main",
             vec![RustStmt::Let(RustLetStmt {
@@ -2416,7 +2416,7 @@ fn main() {
     // Test T19-10: Emit move closure: `move || { ... }`
     #[test]
     fn test_emit_closure_move() {
-        use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam};
+        use rsc_syntax::rust_ir::RustClosureBody;
         let file = simple_fn(
             "main",
             vec![RustStmt::Let(RustLetStmt {
