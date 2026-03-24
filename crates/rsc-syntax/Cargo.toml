@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+codespan-reporting = { workspace = true }
