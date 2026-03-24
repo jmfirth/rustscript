@@ -108,6 +108,14 @@ pub fn resolve_type_annotation(
         ast::TypeKind::Union(members) => {
             resolve_union_type(members, |m| resolve_type_annotation(m, diagnostics))
         }
+        ast::TypeKind::Function(param_types, return_type) => {
+            let params: Vec<Type> = param_types
+                .iter()
+                .map(|p| resolve_type_annotation(p, diagnostics))
+                .collect();
+            let ret = resolve_type_annotation(return_type, diagnostics);
+            Type::Function(params, Box::new(ret))
+        }
     }
 }
 
@@ -175,6 +183,26 @@ pub fn resolve_type_annotation_with_generics(
         ast::TypeKind::Union(members) => resolve_union_type(members, |m| {
             resolve_type_annotation_with_generics(m, registry, generic_param_names, diagnostics)
         }),
+        ast::TypeKind::Function(param_types, return_type) => {
+            let params: Vec<Type> = param_types
+                .iter()
+                .map(|p| {
+                    resolve_type_annotation_with_generics(
+                        p,
+                        registry,
+                        generic_param_names,
+                        diagnostics,
+                    )
+                })
+                .collect();
+            let ret = resolve_type_annotation_with_generics(
+                return_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            );
+            Type::Function(params, Box::new(ret))
+        }
     }
 }
 

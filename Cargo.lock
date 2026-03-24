@@ -328,6 +328,8 @@ dependencies = [
 name = "rsc-lower"
 version = "0.1.0"
 dependencies = [
+ "rsc-emit",
+ "rsc-parser",
  "rsc-syntax",
  "rsc-typeck",
  "thiserror",

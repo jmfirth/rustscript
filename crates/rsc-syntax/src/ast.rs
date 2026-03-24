@@ -217,6 +217,9 @@ pub enum TypeKind {
     /// Union type: `T | null`. Only `T | null` is supported in Phase 1.
     /// Lowers to `Option<T>` in Rust.
     Union(Vec<TypeAnnotation>),
+    /// Function type: `(i32, i32) => i32`.
+    /// Lowers to `impl Fn(i32, i32) -> i32` in Rust.
+    Function(Vec<TypeAnnotation>, Box<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
@@ -464,6 +467,9 @@ pub enum ExprKind {
     /// A `throw` expression: `throw expr`.
     /// In a `throws` function, lowers to `return Err(expr)`.
     Throw(Box<Expr>),
+    /// Arrow function / closure: `(x: i32): i32 => x * 2` or `() => { ... }`.
+    /// Lowers to a Rust closure expression.
+    Closure(ClosureExpr),
 }
 
 /// A binary expression with an operator and two operands.
@@ -699,6 +705,34 @@ pub struct NullishCoalescingExpr {
     pub left: Box<Expr>,
     /// The default value to use when left is `null`.
     pub right: Box<Expr>,
+}
+
+/// A closure / arrow function expression.
+///
+/// Corresponds to `(params): ReturnType => body` in `RustScript`.
+/// Lowers to a Rust closure expression: `|params| -> RetType { body }`.
+#[derive(Debug, Clone)]
+pub struct ClosureExpr {
+    /// Whether this is a `move` closure.
+    pub is_move: bool,
+    /// Parameters (with type annotations).
+    pub params: Vec<Param>,
+    /// Return type annotation (optional).
+    pub return_type: Option<TypeAnnotation>,
+    /// The body — either a single expression or a block.
+    pub body: ClosureBody,
+}
+
+/// The body of a closure — either a single expression or a block.
+///
+/// Expression body: `(x) => x * 2` — implicit return.
+/// Block body: `() => { stmt; stmt; return value; }` — explicit statements.
+#[derive(Debug, Clone)]
+pub enum ClosureBody {
+    /// Expression body: `(x) => x * 2`.
+    Expr(Box<Expr>),
+    /// Block body: `() => { stmt; stmt; return value; }`.
+    Block(Block),
 }
 
 #[cfg(test)]

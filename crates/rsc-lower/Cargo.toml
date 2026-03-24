@@ -8,3 +8,7 @@ license.workspace = true
 rsc-syntax = { path = "../rsc-syntax" }
 rsc-typeck = { path = "../rsc-typeck" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+rsc-parser = { path = "../rsc-parser" }
+rsc-emit = { path = "../rsc-emit" }

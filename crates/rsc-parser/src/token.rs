@@ -68,6 +68,8 @@ pub(crate) enum TokenKind {
     Try,
     /// `catch`
     Catch,
+    /// `move`
+    Move,
 
     // Operators
     /// `+`
@@ -120,6 +122,8 @@ pub(crate) enum TokenKind {
     EqEqEq,
     /// `!==` (strict inequality — treated same as `!=`)
     BangEqEq,
+    /// `=>` (fat arrow, used in arrow functions / closures)
+    FatArrow,
 
     // Delimiters
     /// `(`

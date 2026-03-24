@@ -216,7 +216,13 @@ impl UseMap {
             | ast::ExprKind::FloatLit(_)
             | ast::ExprKind::StringLit(_)
             | ast::ExprKind::BoolLit(_)
-            | ast::ExprKind::NullLit => {}
+            | ast::ExprKind::NullLit
+            | ast::ExprKind::Closure(_) => {
+                // Closure bodies are opaque for ownership analysis —
+                // variables captured by a closure are not tracked in the
+                // outer function's use map. This is the conservative Phase 1
+                // approach per the task spec.
+            }
             ast::ExprKind::OptionalChain(chain) => {
                 Self::collect_expr_uses(&chain.object, stmt_index, false, is_ref_call, uses);
                 match &chain.access {
