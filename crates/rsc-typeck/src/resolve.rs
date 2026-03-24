@@ -116,6 +116,14 @@ pub fn resolve_type_annotation(
             let ret = resolve_type_annotation(return_type, diagnostics);
             Type::Function(params, Box::new(ret))
         }
+        ast::TypeKind::Intersection(members) => {
+            // Intersection types are used for trait bounds — resolve each member
+            // individually. The lowering pass handles them specially for function parameters.
+            // For type resolution, treat the first member as the resolved type.
+            members
+                .first()
+                .map_or(Type::Unit, |m| resolve_type_annotation(m, diagnostics))
+        }
     }
 }
 
@@ -148,6 +156,11 @@ pub fn resolve_type_annotation_with_generics(
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
         ast::TypeKind::Named(ident) => {
+            // `Self` is a special type used in interface method return types.
+            // It passes through to the lowering pass which handles it natively.
+            if ident.name == "Self" {
+                return Type::Named("Self".to_owned());
+            }
             // Check if this is a generic type parameter in scope
             if generic_param_names.contains(&ident.name) {
                 return Type::TypeVar(ident.name.clone());
@@ -202,6 +215,13 @@ pub fn resolve_type_annotation_with_generics(
                 diagnostics,
             );
             Type::Function(params, Box::new(ret))
+        }
+        ast::TypeKind::Intersection(members) => {
+            // Intersection types are used for trait bounds — resolve each member.
+            // For type resolution, treat the first member as the resolved type.
+            members.first().map_or(Type::Unit, |m| {
+                resolve_type_annotation_with_generics(m, registry, generic_param_names, diagnostics)
+            })
         }
     }
 }

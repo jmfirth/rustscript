@@ -671,6 +671,7 @@ impl<'a> Lexer<'a> {
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
             "move" => TokenKind::Move,
+            "interface" => TokenKind::Interface,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -761,6 +762,7 @@ impl<'a> Lexer<'a> {
             b'|' => Some(TokenKind::Pipe),
             b'[' => Some(TokenKind::LBracket),
             b']' => Some(TokenKind::RBracket),
+            b'&' => Some(TokenKind::Ampersand),
             _ => None,
         }
     }

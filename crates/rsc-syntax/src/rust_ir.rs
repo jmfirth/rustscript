@@ -48,7 +48,7 @@ pub struct RustModDecl {
 
 /// A top-level item in a Rust file.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds struct and enum definitions.
+/// Phase 0 supports function declarations; Phase 1 adds struct, enum, and trait definitions.
 #[derive(Debug, Clone)]
 pub enum RustItem {
     /// A `fn` declaration.
@@ -57,6 +57,8 @@ pub enum RustItem {
     Struct(RustStructDef),
     /// An `enum` definition.
     Enum(RustEnumDef),
+    /// A `trait` definition.
+    Trait(RustTraitDef),
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
@@ -123,6 +125,38 @@ pub struct RustEnumVariant {
     pub name: String,
     /// The fields of this variant. Empty for simple enum variants.
     pub fields: Vec<RustFieldDef>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust trait definition.
+///
+/// Produced by lowering a `RustScript` [`InterfaceDef`](crate::ast::InterfaceDef).
+#[derive(Debug, Clone)]
+pub struct RustTraitDef {
+    /// The trait name.
+    pub name: String,
+    /// Generic type parameters on the trait.
+    pub type_params: Vec<RustTypeParam>,
+    /// The method signatures in this trait.
+    pub methods: Vec<RustTraitMethod>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A method signature in a Rust trait.
+///
+/// Produced by lowering a `RustScript` [`InterfaceMethod`](crate::ast::InterfaceMethod).
+#[derive(Debug, Clone)]
+pub struct RustTraitMethod {
+    /// The method name.
+    pub name: String,
+    /// The parameter list (excluding `&self`).
+    pub params: Vec<RustParam>,
+    /// The return type, if not unit.
+    pub return_type: Option<RustType>,
+    /// Whether the method takes `&self` as the first parameter.
+    pub has_self: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -201,6 +235,9 @@ pub enum RustType {
     /// Function/closure type: `impl Fn(i32) -> i32`.
     /// Produced by lowering `(i32) => i32` in parameter position.
     ImplFn(Vec<RustType>, Box<RustType>),
+    /// The `Self` type in trait method signatures.
+    /// Produced by lowering `Self` in interface method return types.
+    SelfType,
 }
 
 impl std::fmt::Display for RustType {
@@ -242,6 +279,7 @@ impl std::fmt::Display for RustType {
                 }
                 return write!(f, ") -> {ret}");
             }
+            Self::SelfType => "Self",
         };
         f.write_str(s)
     }

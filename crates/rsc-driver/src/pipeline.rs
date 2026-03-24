@@ -341,4 +341,108 @@ function main() {
             result.rust_source
         );
     }
+
+    // ---- Task 022: Interface → Trait correctness scenarios ----
+
+    // Correctness scenario 1: Interface definition e2e
+    #[test]
+    fn test_compile_source_interface_definition_e2e() {
+        let source = r#"interface Printable {
+  display(): string;
+}
+
+interface Serializable {
+  serialize(): string;
+}"#;
+        let result = compile_source(source, "interfaces.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("trait Printable {"),
+            "expected trait Printable in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("fn display(&self) -> String;"),
+            "expected fn display(&self) -> String in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("trait Serializable {"),
+            "expected trait Serializable in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("fn serialize(&self) -> String;"),
+            "expected fn serialize(&self) -> String in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 2: Intersection type parameter e2e
+    #[test]
+    fn test_compile_source_intersection_type_parameter_e2e() {
+        let source = r#"interface Serializable {
+  serialize(): string;
+}
+interface Printable {
+  print(): void;
+}
+function process(input: Serializable & Printable): string {
+  input.print();
+  return input.serialize();
+}"#;
+        let result = compile_source(source, "intersection.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("fn process<T: Serializable + Printable>(input: T) -> String"),
+            "expected generic fn with trait bounds in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("input.print();"),
+            "expected input.print() in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("return input.serialize();"),
+            "expected return input.serialize() in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 3: Interface with Self type
+    #[test]
+    fn test_compile_source_interface_self_type_e2e() {
+        let source = r#"interface Cloneable {
+  clone(): Self;
+}"#;
+        let result = compile_source(source, "cloneable.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("trait Cloneable {"),
+            "expected trait Cloneable in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("fn clone(&self) -> Self;"),
+            "expected fn clone(&self) -> Self; in output:\n{}",
+            result.rust_source
+        );
+    }
 }

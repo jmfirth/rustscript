@@ -11,7 +11,8 @@ use rsc_syntax::rust_ir::{
     RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
     RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustLetStmt,
     RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
-    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+    RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
+    RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -69,6 +70,7 @@ impl Transform {
             match &item.kind {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
                 ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
+                ast::ItemKind::Interface(iface) => self.register_interface_def(iface, &mut ctx),
                 ast::ItemKind::Function(_) => {}
             }
         }
@@ -87,6 +89,9 @@ impl Transform {
                 ast::ItemKind::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
                 ast::ItemKind::TypeDef(td) => RustItem::Struct(self.lower_type_def(td, &mut ctx)),
                 ast::ItemKind::EnumDef(ed) => RustItem::Enum(self.lower_enum_def(ed, &mut ctx)),
+                ast::ItemKind::Interface(iface) => {
+                    RustItem::Trait(self.lower_interface_def(iface, &mut ctx))
+                }
             })
             .collect();
 
@@ -213,6 +218,124 @@ impl Transform {
         }
     }
 
+    /// Register an interface definition in the type registry during the pre-pass.
+    fn register_interface_def(&mut self, iface: &ast::InterfaceDef, ctx: &mut LoweringContext) {
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(iface.type_params.as_ref());
+        let methods: Vec<rsc_typeck::registry::InterfaceMethodSig> = iface
+            .methods
+            .iter()
+            .map(|m| {
+                let param_types: Vec<(String, rsc_typeck::types::Type)> = m
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let ty = resolve::resolve_type_annotation_with_generics(
+                            &p.type_ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        (p.name.name.clone(), ty)
+                    })
+                    .collect();
+                let return_type = m.return_type.as_ref().and_then(|rt| {
+                    rt.type_ann.as_ref().map(|ann| {
+                        resolve::resolve_type_annotation_with_generics(
+                            ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        )
+                    })
+                });
+                rsc_typeck::registry::InterfaceMethodSig {
+                    name: m.name.name.clone(),
+                    param_types,
+                    return_type,
+                }
+            })
+            .collect();
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        self.type_registry
+            .register_interface(iface.name.name.clone(), methods);
+    }
+
+    /// Lower an interface definition to a Rust trait.
+    fn lower_interface_def(
+        &self,
+        iface: &ast::InterfaceDef,
+        ctx: &mut LoweringContext,
+    ) -> RustTraitDef {
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(iface.type_params.as_ref());
+        let type_params = lower_type_params(iface.type_params.as_ref());
+
+        let methods = iface
+            .methods
+            .iter()
+            .map(|m| {
+                let params: Vec<RustParam> = m
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let ty = resolve::resolve_type_annotation_with_generics(
+                            &p.type_ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                        RustParam {
+                            name: p.name.name.clone(),
+                            ty: rust_ty,
+                            span: Some(p.span),
+                        }
+                    })
+                    .collect();
+
+                let return_type = m.return_type.as_ref().and_then(|rt| {
+                    rt.type_ann.as_ref().map(|ann| {
+                        // Handle `Self` return type specially
+                        if let ast::TypeKind::Named(ident) = &ann.kind
+                            && ident.name == "Self"
+                        {
+                            return RustType::SelfType;
+                        }
+                        let ty = resolve::resolve_type_annotation_with_generics(
+                            ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        rsc_typeck::bridge::type_to_rust_type(&ty)
+                    })
+                });
+
+                RustTraitMethod {
+                    name: m.name.name.clone(),
+                    params,
+                    return_type,
+                    has_self: true, // All interface methods take &self
+                    span: Some(m.span),
+                }
+            })
+            .collect();
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        RustTraitDef {
+            name: iface.name.name.clone(),
+            type_params,
+            methods,
+            span: Some(iface.span),
+        }
+    }
+
     /// Lower an enum definition to a Rust enum.
     fn lower_enum_def(&self, ed: &ast::EnumDef, ctx: &mut LoweringContext) -> RustEnumDef {
         let mut diags = Vec::new();
@@ -280,11 +403,15 @@ impl Transform {
     ///
     /// Performs two-pass analysis: first finds reassigned variables and builds
     /// a use map, then lowers the body with that context.
+    #[allow(clippy::too_many_lines)]
+    // The function coordinates multiple analysis passes (ownership, mutability,
+    // type resolution, intersection desugaring, throws wrapping) that share
+    // mutable context — splitting would fragment the coherent pipeline.
     pub fn lower_fn(&self, f: &ast::FnDecl, ctx: &mut LoweringContext) -> RustFnDecl {
         ctx.push_scope();
 
         let generic_names = collect_generic_param_names(f.type_params.as_ref());
-        let type_params = lower_type_params(f.type_params.as_ref());
+        let mut type_params = lower_type_params(f.type_params.as_ref());
 
         // Phase 1: find reassigned variables for mutability analysis
         let reassigned = ownership::find_reassigned_variables(&f.body);
@@ -294,12 +421,49 @@ impl Transform {
             self.builtins.is_ref_args(obj, method)
         });
 
+        // Track intersection type parameter counter for fresh names
+        let mut intersection_param_counter = 0_u32;
+
         // Declare parameters in scope
         let params: Vec<RustParam> = f
             .params
             .iter()
             .map(|p| {
                 let mut diags = Vec::new();
+
+                // Check for intersection type parameters
+                if let ast::TypeKind::Intersection(members) = &p.type_ann.kind {
+                    let fresh_name = if intersection_param_counter == 0 {
+                        "T".to_owned()
+                    } else {
+                        format!("T{intersection_param_counter}")
+                    };
+                    intersection_param_counter += 1;
+
+                    // Collect trait bound names from each member
+                    let bounds: Vec<String> = members
+                        .iter()
+                        .filter_map(|m| match &m.kind {
+                            ast::TypeKind::Named(ident) => Some(ident.name.clone()),
+                            _ => None,
+                        })
+                        .collect();
+
+                    // Add the fresh type parameter with bounds
+                    type_params.push(RustTypeParam {
+                        name: fresh_name.clone(),
+                        bounds,
+                    });
+
+                    let ty = RustType::TypeParam(fresh_name);
+                    ctx.declare_variable(p.name.name.clone(), ty.clone());
+                    return RustParam {
+                        name: p.name.name.clone(),
+                        ty,
+                        span: Some(p.span),
+                    };
+                }
+
                 let ty_inner = resolve::resolve_type_annotation_with_generics(
                     &p.type_ann,
                     &self.type_registry,
@@ -1056,7 +1220,8 @@ impl Transform {
                         rsc_typeck::registry::TypeDefKind::DataEnum(variants) => {
                             variants.iter().any(|(vn, _)| *vn == variant_name)
                         }
-                        rsc_typeck::registry::TypeDefKind::Struct(_) => false,
+                        rsc_typeck::registry::TypeDefKind::Struct(_)
+                        | rsc_typeck::registry::TypeDefKind::Interface(_) => false,
                     };
                     if is_variant {
                         return RustExpr::new(
@@ -1798,6 +1963,16 @@ fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_ha
                 }
             }
         }
+        RustItem::Trait(t) => {
+            for method in &t.methods {
+                for p in &method.params {
+                    scan_type_for_collections(&p.ty, needs_hashmap, needs_hashset);
+                }
+                if let Some(ret) = &method.return_type {
+                    scan_type_for_collections(ret, needs_hashmap, needs_hashset);
+                }
+            }
+        }
     }
 }
 
@@ -2057,6 +2232,13 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         ast::TypeKind::Named(ident) | ast::TypeKind::Generic(ident, _) => {
                             vec![ident.name.clone()]
                         }
+                        ast::TypeKind::Intersection(members) => members
+                            .iter()
+                            .filter_map(|m| match &m.kind {
+                                ast::TypeKind::Named(ident) => Some(ident.name.clone()),
+                                _ => None,
+                            })
+                            .collect(),
                         ast::TypeKind::Void
                         | ast::TypeKind::Union(_)
                         | ast::TypeKind::Function(_, _) => vec![],
@@ -4642,5 +4824,209 @@ mod tests {
     fn test_rust_type_impl_fn_display() {
         let ty = RustType::ImplFn(vec![RustType::I32, RustType::I32], Box::new(RustType::I32));
         assert_eq!(ty.to_string(), "impl Fn(i32, i32) -> i32");
+    }
+
+    // ---- Task 022: Interface lowering tests ----
+
+    #[test]
+    fn test_lower_interface_to_trait_with_self_param() {
+        let module = Module {
+            items: vec![Item {
+                kind: ItemKind::Interface(InterfaceDef {
+                    name: ident("Serializable", 0, 12),
+                    type_params: None,
+                    methods: vec![InterfaceMethod {
+                        name: ident("serialize", 15, 24),
+                        params: vec![],
+                        return_type: Some(ReturnTypeAnnotation {
+                            type_ann: Some(TypeAnnotation {
+                                kind: TypeKind::Named(ident("string", 28, 34)),
+                                span: span(28, 34),
+                            }),
+                            throws: None,
+                            span: span(28, 34),
+                        }),
+                        span: span(15, 35),
+                    }],
+                    span: span(0, 37),
+                }),
+                exported: false,
+                span: span(0, 37),
+            }],
+            span: span(0, 37),
+        };
+
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(file.items.len(), 1);
+        match &file.items[0] {
+            RustItem::Trait(t) => {
+                assert_eq!(t.name, "Serializable");
+                assert_eq!(t.methods.len(), 1);
+                assert_eq!(t.methods[0].name, "serialize");
+                assert!(t.methods[0].has_self);
+                assert_eq!(t.methods[0].return_type, Some(RustType::String));
+            }
+            other => panic!("expected Trait, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_interface_self_return_type_to_self() {
+        let module = Module {
+            items: vec![Item {
+                kind: ItemKind::Interface(InterfaceDef {
+                    name: ident("Cloneable", 0, 9),
+                    type_params: None,
+                    methods: vec![InterfaceMethod {
+                        name: ident("clone", 12, 17),
+                        params: vec![],
+                        return_type: Some(ReturnTypeAnnotation {
+                            type_ann: Some(TypeAnnotation {
+                                kind: TypeKind::Named(ident("Self", 21, 25)),
+                                span: span(21, 25),
+                            }),
+                            throws: None,
+                            span: span(21, 25),
+                        }),
+                        span: span(12, 26),
+                    }],
+                    span: span(0, 28),
+                }),
+                exported: false,
+                span: span(0, 28),
+            }],
+            span: span(0, 28),
+        };
+
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        match &file.items[0] {
+            RustItem::Trait(t) => {
+                assert_eq!(t.methods[0].return_type, Some(RustType::SelfType));
+            }
+            other => panic!("expected Trait, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_intersection_type_parameter_to_generic_bounds() {
+        let module = Module {
+            items: vec![
+                Item {
+                    kind: ItemKind::Interface(InterfaceDef {
+                        name: ident("Serializable", 0, 12),
+                        type_params: None,
+                        methods: vec![InterfaceMethod {
+                            name: ident("serialize", 15, 24),
+                            params: vec![],
+                            return_type: Some(ReturnTypeAnnotation {
+                                type_ann: Some(TypeAnnotation {
+                                    kind: TypeKind::Named(ident("string", 28, 34)),
+                                    span: span(28, 34),
+                                }),
+                                throws: None,
+                                span: span(28, 34),
+                            }),
+                            span: span(15, 35),
+                        }],
+                        span: span(0, 37),
+                    }),
+                    exported: false,
+                    span: span(0, 37),
+                },
+                Item {
+                    kind: ItemKind::Interface(InterfaceDef {
+                        name: ident("Printable", 40, 49),
+                        type_params: None,
+                        methods: vec![InterfaceMethod {
+                            name: ident("print", 52, 57),
+                            params: vec![],
+                            return_type: None,
+                            span: span(52, 60),
+                        }],
+                        span: span(40, 62),
+                    }),
+                    exported: false,
+                    span: span(40, 62),
+                },
+                Item {
+                    kind: ItemKind::Function(FnDecl {
+                        name: ident("process", 65, 72),
+                        type_params: None,
+                        params: vec![Param {
+                            name: ident("input", 73, 78),
+                            type_ann: TypeAnnotation {
+                                kind: TypeKind::Intersection(vec![
+                                    TypeAnnotation {
+                                        kind: TypeKind::Named(ident("Serializable", 80, 92)),
+                                        span: span(80, 92),
+                                    },
+                                    TypeAnnotation {
+                                        kind: TypeKind::Named(ident("Printable", 95, 104)),
+                                        span: span(95, 104),
+                                    },
+                                ]),
+                                span: span(80, 104),
+                            },
+                            span: span(73, 104),
+                        }],
+                        return_type: Some(ReturnTypeAnnotation {
+                            type_ann: Some(TypeAnnotation {
+                                kind: TypeKind::Named(ident("string", 107, 113)),
+                                span: span(107, 113),
+                            }),
+                            throws: None,
+                            span: span(107, 113),
+                        }),
+                        body: Block {
+                            stmts: vec![Stmt::Return(ReturnStmt {
+                                value: Some(Expr {
+                                    kind: ExprKind::MethodCall(MethodCallExpr {
+                                        object: Box::new(Expr {
+                                            kind: ExprKind::Ident(ident("input", 130, 135)),
+                                            span: span(130, 135),
+                                        }),
+                                        method: ident("serialize", 136, 145),
+                                        args: vec![],
+                                    }),
+                                    span: span(130, 147),
+                                }),
+                                span: span(123, 148),
+                            })],
+                            span: span(115, 150),
+                        },
+                        span: span(65, 150),
+                    }),
+                    exported: false,
+                    span: span(65, 150),
+                },
+            ],
+            span: span(0, 150),
+        };
+
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+        // The function should have a generated type parameter T with bounds
+        let func = match &file.items[2] {
+            RustItem::Function(f) => f,
+            other => panic!("expected Function, got {other:?}"),
+        };
+        // Should have a fresh type parameter T: Serializable + Printable
+        assert_eq!(func.type_params.len(), 1);
+        assert_eq!(func.type_params[0].name, "T");
+        assert_eq!(func.type_params[0].bounds.len(), 2);
+        assert!(
+            func.type_params[0]
+                .bounds
+                .contains(&"Serializable".to_owned())
+        );
+        assert!(func.type_params[0].bounds.contains(&"Printable".to_owned()));
+        // Parameter should use the type parameter
+        assert_eq!(func.params[0].ty, RustType::TypeParam("T".to_owned()));
     }
 }

@@ -70,6 +70,8 @@ pub(crate) enum TokenKind {
     Catch,
     /// `move`
     Move,
+    /// `interface`
+    Interface,
 
     // Operators
     /// `+`
@@ -124,6 +126,8 @@ pub(crate) enum TokenKind {
     BangEqEq,
     /// `=>` (fat arrow, used in arrow functions / closures)
     FatArrow,
+    /// `&` (ampersand, used in intersection types)
+    Ampersand,
 
     // Delimiters
     /// `(`

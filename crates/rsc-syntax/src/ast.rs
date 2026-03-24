@@ -36,8 +36,8 @@ pub struct Item {
 
 /// The kinds of top-level items in a `RustScript` module.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds type definitions
-/// and enum definitions.
+/// Phase 0 supports function declarations; Phase 1 adds type definitions,
+/// enum definitions, and interface definitions.
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
@@ -48,6 +48,9 @@ pub enum ItemKind {
     /// An enum definition (`type Direction = "north" | "south" | ...`).
     /// Lowers to a Rust `enum`.
     EnumDef(EnumDef),
+    /// An interface definition (`interface Name { method(): Type; ... }`).
+    /// Lowers to a Rust `trait`.
+    Interface(InterfaceDef),
 }
 
 /// A generic type parameter: `T` or `T extends Constraint`.
@@ -161,6 +164,38 @@ pub enum EnumVariant {
     },
 }
 
+/// An interface definition: `interface Serializable { ... }`.
+///
+/// Corresponds to a `RustScript` interface declaration. Lowers to a Rust `trait`.
+/// Interface methods have no body — they are abstract method signatures.
+#[derive(Debug, Clone)]
+pub struct InterfaceDef {
+    /// The interface name.
+    pub name: Ident,
+    /// Optional generic type parameters: `<T>`.
+    pub type_params: Option<TypeParams>,
+    /// The method signatures declared in this interface.
+    pub methods: Vec<InterfaceMethod>,
+    /// The span covering the entire interface definition.
+    pub span: Span,
+}
+
+/// A method signature in an interface (no body).
+///
+/// Corresponds to `methodName(params): ReturnType;` within an interface body.
+/// Lowers to a Rust trait method with `&self` as the first parameter.
+#[derive(Debug, Clone)]
+pub struct InterfaceMethod {
+    /// The method name.
+    pub name: Ident,
+    /// The parameter list (excluding the implicit `self`).
+    pub params: Vec<Param>,
+    /// The return type annotation, if present. Absent means `void`.
+    pub return_type: Option<ReturnTypeAnnotation>,
+    /// The span covering the method signature.
+    pub span: Span,
+}
+
 /// A field in a type definition.
 ///
 /// Corresponds to `name: Type` within a type definition body.
@@ -220,6 +255,10 @@ pub enum TypeKind {
     /// Function type: `(i32, i32) => i32`.
     /// Lowers to `impl Fn(i32, i32) -> i32` in Rust.
     Function(Vec<TypeAnnotation>, Box<TypeAnnotation>),
+    /// Intersection type: `Serializable & Printable`.
+    /// Used for trait bounds in function parameters.
+    /// Lowers to generic type parameters with multiple bounds: `T: A + B`.
+    Intersection(Vec<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
