@@ -15,6 +15,10 @@ use rsc_syntax::span::Span;
 
 use crate::token::{Token, TokenKind};
 
+/// Maximum nesting depth for expressions to prevent stack overflow on
+/// adversarial input (e.g., deeply nested parentheses).
+const MAX_EXPR_DEPTH: usize = 256;
+
 /// Recursive descent parser for the `RustScript` Phase 0 grammar.
 ///
 /// Created with a token stream from the lexer and a file identifier.
@@ -24,6 +28,7 @@ pub(crate) struct Parser {
     pos: usize,
     diagnostics: Vec<Diagnostic>,
     file_id: FileId,
+    expr_depth: usize,
 }
 
 impl Parser {
@@ -34,6 +39,7 @@ impl Parser {
             pos: 0,
             diagnostics: Vec::new(),
             file_id,
+            expr_depth: 0,
         }
     }
 
@@ -555,8 +561,25 @@ impl Parser {
     // ---------------------------------------------------------------
 
     /// Parse an expression (entry point — starts at assignment level).
+    ///
+    /// Tracks recursion depth to prevent stack overflow on adversarial input.
     fn parse_expr(&mut self) -> Option<Expr> {
-        self.parse_assignment()
+        self.expr_depth += 1;
+        if self.expr_depth > MAX_EXPR_DEPTH {
+            let span = self.current_token().span;
+            self.diagnostics.push(
+                Diagnostic::error("expression nesting depth exceeded maximum").with_label(
+                    span,
+                    self.file_id,
+                    "here",
+                ),
+            );
+            self.expr_depth -= 1;
+            return None;
+        }
+        let result = self.parse_assignment();
+        self.expr_depth -= 1;
+        result
     }
 
     /// Parse assignment: `IDENT = assignment | logic_or`.
