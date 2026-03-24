@@ -10,3 +10,6 @@ rsc-parser = { path = "../rsc-parser" }
 rsc-lower = { path = "../rsc-lower" }
 rsc-emit = { path = "../rsc-emit" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
