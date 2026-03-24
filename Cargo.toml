@@ -18,3 +18,4 @@ license = "Apache-2.0"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+codespan-reporting = "0.11"

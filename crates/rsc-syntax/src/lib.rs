@@ -1,5 +1,10 @@
-//! Shared types for the `RustScript` compiler.
-//!
-//! This crate defines the core data structures — AST nodes, spans, and error
-//! types — used across all stages of the compilation pipeline.
 #![warn(clippy::pedantic)]
+//! Core syntax types for the `RustScript` compiler.
+//!
+//! Provides source spans, diagnostic infrastructure, and error types
+//! shared across all compiler passes.
+
+pub mod diagnostic;
+pub mod error;
+pub mod source;
+pub mod span;
