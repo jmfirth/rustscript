@@ -1,0 +1,81 @@
+//! Shared test helpers for RustScript integration tests.
+//!
+//! Provides three core operations:
+//! - [`compile_to_rust`]: fast — compiles `.rts` source to generated `.rs` string
+//! - [`compile_and_run`]: slow — compiles, builds with cargo, runs, returns stdout
+//! - [`compile_diagnostics`]: fast — compiles and returns diagnostic messages
+
+use std::fs;
+use std::process::Command;
+
+use rsc_driver::compile_source;
+
+/// Compile a `.rts` source string and return the generated `.rs` output.
+///
+/// Panics if compilation produces errors.
+pub fn compile_to_rust(rts_source: &str) -> String {
+    let result = compile_source(rts_source, "test.rts");
+
+    assert!(
+        !result.has_errors,
+        "compilation failed with errors: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+
+    result.rust_source
+}
+
+/// Compile a `.rts` source string, write to a temp project, build with cargo,
+/// run, and return stdout.
+///
+/// This is necessarily slow (invokes cargo) — tests using it should be `#[ignore]`.
+///
+/// Panics if compilation, building, or running fails.
+pub fn compile_and_run(rts_source: &str) -> String {
+    let rust_source = compile_to_rust(rts_source);
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+
+    let src_dir = tmp_dir.path().join("src");
+    fs::create_dir_all(&src_dir).expect("failed to create src dir");
+
+    // Write Cargo.toml — [workspace] prevents Cargo from walking up to
+    // the rsc workspace root, which is virtual and would confuse cargo.
+    let cargo_toml =
+        "[package]\nname = \"rsc-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n";
+    fs::write(tmp_dir.path().join("Cargo.toml"), cargo_toml).expect("failed to write Cargo.toml");
+
+    // Write the generated Rust source.
+    fs::write(src_dir.join("main.rs"), &rust_source).expect("failed to write main.rs");
+
+    // Build and run with cargo.
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(tmp_dir.path())
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        output.status.success(),
+        "cargo run failed.\nstdout: {}\nstderr: {}\ngenerated Rust:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        rust_source,
+    );
+
+    String::from_utf8(output.stdout).expect("stdout is not valid utf-8")
+}
+
+/// Compile a `.rts` source string and return diagnostic messages.
+///
+/// Useful for testing error cases. Returns the message string from each
+/// diagnostic, preserving order.
+pub fn compile_diagnostics(rts_source: &str) -> Vec<String> {
+    let result = compile_source(rts_source, "test.rts");
+
+    result.diagnostics.into_iter().map(|d| d.message).collect()
+}
