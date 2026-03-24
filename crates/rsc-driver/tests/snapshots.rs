@@ -1348,3 +1348,649 @@ function main() {
         "expected Point::new() call in output:\n{actual}"
     );
 }
+
+// ===========================================================================
+// Phase 1 Integration Snapshots (Task 026)
+//
+// These snapshot tests cover Phase 1 features that did not yet have
+// golden-file style snapshot coverage.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// P1-1. Generic function snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_generic_function() {
+    let source = "\
+function identity<T>(x: T): T {
+  return x;
+}";
+
+    let expected = "\
+fn identity<T>(x: T) -> T {
+    return x;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_generic_function", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-2. Generic struct snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_generic_struct() {
+    let source = "\
+type Pair<T> = { first: T, second: T }
+
+function main() {
+  const p: Pair<i32> = { first: 10, second: 20 };
+  console.log(p.first);
+  console.log(p.second);
+}";
+
+    // NOTE: Known bug — struct literal for generic type emits `Unknown { ... }`
+    // instead of `Pair { ... }`. This snapshot captures actual compiler output.
+    let expected = "\
+struct Pair<T> {
+    pub first: T,
+    pub second: T,
+}
+
+fn main() {
+    let p: Pair<i32> = Unknown { first: 10, second: 20 };
+    println!(\"{}\", p.first);
+    println!(\"{}\", p.second);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_generic_struct", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-3. For-of loop snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_for_loop() {
+    let source = "\
+function main() {
+  const numbers: Array<i32> = [1, 2, 3, 4, 5];
+  for (const n of numbers) {
+    console.log(n);
+  }
+}";
+
+    let expected = "\
+fn main() {
+    let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
+    for n in &numbers {
+        println!(\"{}\", n);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_for_loop", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-4. For-of with break and continue snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_for_loop_break_continue() {
+    let source = "\
+function main() {
+  const items: Array<i32> = [1, 2, 3, 4, 5];
+  for (const n of items) {
+    if (n == 2) { continue; }
+    if (n == 4) { break; }
+    console.log(n);
+  }
+}";
+
+    // NOTE: Known bug — `n == 2` compares &i32 with i32, which won't compile
+    // in Rust. This snapshot captures actual compiler output.
+    let expected = "\
+fn main() {
+    let items: Vec<i32> = vec![1, 2, 3, 4, 5];
+    for n in &items {
+        if n == 2 {
+            continue;
+        }
+        if n == 4 {
+            break;
+        }
+        println!(\"{}\", n);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_for_loop_break_continue", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-5. Closure expression body snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_closure_expression() {
+    let source = "\
+function main() {
+  const double = (x: i32): i32 => x * 2;
+  console.log(double(21));
+}";
+
+    // NOTE: Known bug — expression-body closure emits `|x: i32| -> i32 x * 2`
+    // instead of `|x: i32| -> i32 { x * 2 }`. Missing braces around expression body.
+    let expected = "\
+fn main() {
+    let double = |x: i32| -> i32 x * 2;
+    println!(\"{}\", double(21));
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_closure_expression", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-6. Closure block body snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_closure_block() {
+    let source = "\
+function main() {
+  const add = (a: i32, b: i32): i32 => {
+    return a + b;
+  };
+  console.log(add(3, 4));
+}";
+
+    let expected = "\
+fn main() {
+    let add = |a: i32, b: i32| -> i32 {
+        return a + b;
+    };
+    println!(\"{}\", add(3, 4));
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_closure_block", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-7. Option/null snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_option_null() {
+    let source = "\
+function findName(found: bool): string | null {
+  if (found) { return \"Alice\"; }
+  return null;
+}
+
+function main() {
+  const name = findName(true);
+  if (name !== null) {
+    console.log(name);
+  }
+}";
+
+    let expected = "\
+fn findName(found: bool) -> Option<String> {
+    if found {
+        return Some(\"Alice\".to_string());
+    }
+    return None;
+}
+
+fn main() {
+    let name = findName(true);
+    if let Some(name) = name {
+        println!(\"{}\", name);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_option_null", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-8. Interface definition snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_interface() {
+    let source = "\
+interface Printable {
+  display(): string;
+}
+
+interface Sizeable {
+  size(): u32;
+}";
+
+    let expected = "\
+trait Printable {
+    fn display(&self) -> String;
+}
+
+trait Sizeable {
+    fn size(&self) -> u32;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_interface", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// P1-9. Interface with intersection type parameter snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_interface_intersection() {
+    let source = "\
+interface Serializable {
+  serialize(): string;
+}
+interface Printable {
+  print(): void;
+}
+function process(input: Serializable & Printable): string {
+  input.print();
+  return input.serialize();
+}";
+
+    // NOTE: Known behavior — void methods in trait definitions emit `-> ()`.
+    let expected = "\
+trait Serializable {
+    fn serialize(&self) -> String;
+}
+
+trait Printable {
+    fn print(&self) -> ();
+}
+
+fn process<T: Serializable + Printable>(input: T) -> String {
+    input.print();
+    return input.serialize();
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_interface_intersection", &actual, expected);
+}
+
+// ===========================================================================
+// Phase 1 Multi-Feature Integration Snapshots (Task 026)
+//
+// These snapshots exercise multiple Phase 1 features composed together.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Integration 1: Enum + switch + template literals
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_enum_switch_template() {
+    let source = r#"type Direction = "north" | "south"
+
+function label(d: Direction): string {
+  switch (d) {
+    case "north": return `Going North`;
+    case "south": return `Going South`;
+  }
+}
+
+function main() {
+  const d: Direction = "north";
+  console.log(label(d));
+}"#;
+
+    let expected = "\
+enum Direction {
+    North,
+    South,
+}
+
+fn label(d: Direction) -> String {
+    match d {
+        Direction::North => {
+            return \"Going North\".to_string();
+        }
+        Direction::South => {
+            return \"Going South\".to_string();
+        }
+    }
+}
+
+fn main() {
+    let d = Direction::North;
+    println!(\"{}\", label(d));
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_enum_switch_template", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 2: Struct + template literal + function
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_struct_template() {
+    let source = "\
+type Person = { name: string, age: u32 }
+
+function greet(p: Person): string {
+  return `Hello, ${p.name}!`;
+}
+
+function main() {
+  const p: Person = { name: \"Alice\", age: 30 };
+  console.log(greet(p));
+}";
+
+    let expected = "\
+struct Person {
+    pub name: String,
+    pub age: u32,
+}
+
+fn greet(p: Person) -> String {
+    return format!(\"Hello, {}!\", p.name);
+}
+
+fn main() {
+    let p = Person { name: \"Alice\".to_string(), age: 30 };
+    println!(\"{}\", greet(p));
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_struct_template", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 3: Throws + try/catch + Result
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_throws_try_catch() {
+    let source = "\
+function risky(x: i32): i32 throws string {
+  if (x < 0) {
+    throw \"negative\";
+  }
+  return x * 2;
+}
+
+function main() {
+  try {
+    const val = risky(5);
+    console.log(val);
+  } catch (err: string) {
+    console.log(err);
+  }
+}";
+
+    let expected = "\
+fn risky(x: i32) -> Result<i32, String> {
+    if x < 0 {
+        return Err(\"negative\".to_string());
+    }
+    return Ok(x * 2);
+}
+
+fn main() {
+    match risky(5) {
+        Ok(val) => {
+            println!(\"{}\", val);
+        }
+        Err(err) => {
+            println!(\"{}\", err);
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_throws_try_catch", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 4: Class + methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_class_methods() {
+    let source = "\
+class Counter {
+  private count: i32;
+
+  constructor(initial: i32) {
+    this.count = initial;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  get(): i32 {
+    return this.count;
+  }
+}
+
+function main() {
+  let c = new Counter(0);
+  c.increment();
+  c.increment();
+  console.log(c.get());
+}";
+
+    let expected = "\
+struct Counter {
+    count: i32,
+}
+
+impl Counter {
+    fn new(initial: i32) -> Self {
+        Self { count: initial }
+    }
+
+    fn increment(&mut self) {
+        self.count = self.count + 1;
+    }
+
+    fn get(&self) -> i32 {
+        return self.count;
+    }
+}
+
+fn main() {
+    let mut c = Counter::new(0);
+    c.increment();
+    c.increment();
+    println!(\"{}\", c.get());
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_class_methods", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 5: For-of + sum (array + loop + compound assignment)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_for_of_sum() {
+    let source = "\
+function main() {
+  const numbers: Array<i32> = [1, 2, 3, 4, 5];
+  let sum: i32 = 0;
+  for (const n of numbers) {
+    sum += n;
+  }
+  console.log(sum);
+}";
+
+    let expected = "\
+fn main() {
+    let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
+    let mut sum: i32 = 0;
+    for n in &numbers {
+        sum += n;
+    }
+    println!(\"{}\", sum);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_for_of_sum", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 6: Option + null check narrowing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_option_narrowing() {
+    let source = "\
+function findName(found: bool): string | null {
+  if (found) { return \"Alice\"; }
+  return null;
+}
+
+function main() {
+  const name = findName(true);
+  if (name !== null) {
+    console.log(name);
+  }
+}";
+
+    let expected = "\
+fn findName(found: bool) -> Option<String> {
+    if found {
+        return Some(\"Alice\".to_string());
+    }
+    return None;
+}
+
+fn main() {
+    let name = findName(true);
+    if let Some(name) = name {
+        println!(\"{}\", name);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_option_narrowing", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 7: Interface + class implements + template literal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_interface_class() {
+    let source = "\
+interface Greetable {
+  greet(): string;
+}
+
+class Person implements Greetable {
+  public name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  greet(): string {
+    return `Hello from ${this.name}`;
+  }
+}
+
+function main() {
+  const p = new Person(\"Alice\");
+  console.log(p.greet());
+}";
+
+    let expected = "\
+trait Greetable {
+    fn greet(&self) -> String;
+}
+
+struct Person {
+    pub name: String,
+}
+
+impl Person {
+    fn new(name: String) -> Self {
+        Self { name: name }
+    }
+}
+
+impl Greetable for Person {
+    fn greet(&self) -> String {
+        return format!(\"Hello from {}\", self.name);
+    }
+}
+
+fn main() {
+    let p = Person::new(\"Alice\".to_string());
+    println!(\"{}\", p.greet());
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_interface_class", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Integration 8: Destructuring + struct + field access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p1_integration_destructuring() {
+    let source = "\
+type Point = { x: i32, y: i32 }
+
+function main() {
+  const pt: Point = { x: 10, y: 20 };
+  const { x, y } = pt;
+  console.log(x);
+  console.log(y);
+}";
+
+    let expected = "\
+struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+fn main() {
+    let pt = Point { x: 10, y: 20 };
+    let Point { x, y, .. } = pt;
+    println!(\"{}\", x);
+    println!(\"{}\", y);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("p1_integration_destructuring", &actual, expected);
+}
