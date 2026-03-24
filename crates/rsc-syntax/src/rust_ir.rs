@@ -48,11 +48,41 @@ pub struct RustModDecl {
 
 /// A top-level item in a Rust file.
 ///
-/// Phase 0 supports only function declarations.
+/// Phase 0 supports function declarations; Phase 1 adds struct definitions.
 #[derive(Debug, Clone)]
 pub enum RustItem {
     /// A `fn` declaration.
     Function(RustFnDecl),
+    /// A `struct` definition.
+    Struct(RustStructDef),
+}
+
+/// A Rust struct definition.
+///
+/// Produced by lowering a `RustScript` [`TypeDef`](crate::ast::TypeDef).
+#[derive(Debug, Clone)]
+pub struct RustStructDef {
+    /// The struct name.
+    pub name: String,
+    /// The fields of the struct.
+    pub fields: Vec<RustFieldDef>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A field in a Rust struct.
+///
+/// Each field has a name, type, and visibility.
+#[derive(Debug, Clone)]
+pub struct RustFieldDef {
+    /// Whether this field is `pub`.
+    pub public: bool,
+    /// The field name.
+    pub name: String,
+    /// The field type.
+    pub ty: RustType,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A Rust function declaration.
@@ -114,6 +144,8 @@ pub enum RustType {
     String,
     /// Rust unit type `()`.
     Unit,
+    /// A user-defined named type (e.g., `User`, `Point`).
+    Named(String),
 }
 
 impl std::fmt::Display for RustType {
@@ -132,6 +164,7 @@ impl std::fmt::Display for RustType {
             Self::Bool => "bool",
             Self::String => "String",
             Self::Unit => "()",
+            Self::Named(name) => return f.write_str(name),
         };
         f.write_str(s)
     }
@@ -164,6 +197,8 @@ pub enum RustStmt {
     If(RustIfStmt),
     /// A `while` loop.
     While(RustWhileStmt),
+    /// Destructuring let: `let TypeName { field1, field2, .. } = expr;`.
+    Destructure(RustDestructureStmt),
 }
 
 /// A Rust `let` binding.
@@ -221,6 +256,23 @@ pub struct RustWhileStmt {
     pub condition: RustExpr,
     /// The loop body.
     pub body: RustBlock,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust destructuring let statement.
+///
+/// Corresponds to `let TypeName { field1, field2, .. } = expr;`.
+#[derive(Debug, Clone)]
+pub struct RustDestructureStmt {
+    /// The struct type name for the destructuring pattern.
+    pub type_name: String,
+    /// The field names to extract.
+    pub fields: Vec<String>,
+    /// The initializer expression.
+    pub init: RustExpr,
+    /// Whether the bindings are `mut`.
+    pub mutable: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -329,6 +381,20 @@ pub enum RustExprKind {
         op: RustCompoundAssignOp,
         /// The right-hand side value.
         value: Box<RustExpr>,
+    },
+    /// Struct literal construction: `User { name: ..., age: ... }`.
+    StructLit {
+        /// The struct type name.
+        type_name: String,
+        /// The field name-value pairs.
+        fields: Vec<(String, RustExpr)>,
+    },
+    /// Field access: `expr.field`.
+    FieldAccess {
+        /// The object expression.
+        object: Box<RustExpr>,
+        /// The field name.
+        field: String,
     },
 }
 

@@ -80,6 +80,9 @@ impl UseMap {
                     Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
                 }
             }
+            ast::Stmt::Destructure(destr) => {
+                Self::collect_expr_uses(&destr.init, stmt_index, false, is_ref_call, uses);
+            }
         }
     }
 
@@ -163,6 +166,14 @@ impl UseMap {
                 // The target is not a "use" in the ownership sense (it's being written to)
                 // The value side may reference variables
                 Self::collect_expr_uses(&assign.value, stmt_index, false, is_ref_call, uses);
+            }
+            ast::ExprKind::StructLit(slit) => {
+                for field in &slit.fields {
+                    Self::collect_expr_uses(&field.value, stmt_index, false, is_ref_call, uses);
+                }
+            }
+            ast::ExprKind::FieldAccess(fa) => {
+                Self::collect_expr_uses(&fa.object, stmt_index, false, is_ref_call, uses);
             }
             ast::ExprKind::IntLit(_)
             | ast::ExprKind::FloatLit(_)
@@ -252,7 +263,7 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 collect_assignments(inner, reassigned);
             }
         }
-        ast::Stmt::VarDecl(_) | ast::Stmt::Return(_) => {}
+        ast::Stmt::VarDecl(_) | ast::Stmt::Return(_) | ast::Stmt::Destructure(_) => {}
     }
 }
 

@@ -5,9 +5,10 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, ElseClause, Expr, ExprKind, FnDecl, Ident,
-    IfStmt, Item, ItemKind, MethodCallExpr, Module, Param, ReturnStmt, Stmt, TypeAnnotation,
-    TypeKind, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, Expr, ExprKind,
+    FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt, Item, ItemKind, MethodCallExpr,
+    Module, Param, ReturnStmt, Stmt, StructLitExpr, TypeAnnotation, TypeDef, TypeKind, UnaryExpr,
+    UnaryOp, VarBinding, VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -169,6 +170,7 @@ impl Parser {
             TokenKind::Colon => "`:`",
             TokenKind::Semicolon => "`;`",
             TokenKind::Dot => "`.`",
+            TokenKind::Type => "`type`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -189,7 +191,8 @@ impl Parser {
                 | TokenKind::If
                 | TokenKind::While
                 | TokenKind::Return
-                | TokenKind::Function => return,
+                | TokenKind::Function
+                | TokenKind::Type => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -223,28 +226,41 @@ impl Parser {
         }
     }
 
-    /// Parse a top-level item. In Phase 0, the only item is a function declaration.
+    /// Parse a top-level item: function declaration or type definition.
     fn parse_item(&mut self) -> Option<Item> {
-        if self.peek() == &TokenKind::Function {
-            self.parse_function_decl().map(|f| {
+        match self.peek() {
+            TokenKind::Function => self.parse_function_decl().map(|f| {
                 let span = f.span;
                 Item {
                     kind: ItemKind::Function(f),
                     exported: false,
                     span,
                 }
-            })
-        } else {
-            let current = self.current_token().clone();
-            self.diagnostics.push(
-                Diagnostic::error(format!(
-                    "expected function declaration, found {}",
-                    Self::describe_kind(&current.kind)
-                ))
-                .with_label(current.span, self.file_id, "unexpected token"),
-            );
-            self.synchronize();
-            None
+            }),
+            TokenKind::Type => self.parse_type_def().map(|td| {
+                let span = td.span;
+                Item {
+                    kind: ItemKind::TypeDef(td),
+                    exported: false,
+                    span,
+                }
+            }),
+            _ => {
+                let current = self.current_token().clone();
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "expected item, found {}",
+                        Self::describe_kind(&current.kind)
+                    ))
+                    .with_label(
+                        current.span,
+                        self.file_id,
+                        "unexpected token",
+                    ),
+                );
+                self.synchronize();
+                None
+            }
         }
     }
 
@@ -288,6 +304,66 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    // ---------------------------------------------------------------
+    // Type definitions
+    // ---------------------------------------------------------------
+
+    /// Parse a type definition: `type NAME = { field: Type, ... }`.
+    fn parse_type_def(&mut self) -> Option<TypeDef> {
+        let type_token = self.advance(); // consume `type`
+        let start = type_token.span;
+
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let fields = self.parse_field_def_list();
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+
+        Some(TypeDef { name, fields, span })
+    }
+
+    /// Parse a comma-separated list of field definitions: `name: Type, ...`.
+    fn parse_field_def_list(&mut self) -> Vec<FieldDef> {
+        let mut fields = Vec::new();
+
+        if self.check(&TokenKind::RBrace) || self.at_end() {
+            return fields;
+        }
+
+        loop {
+            let field_start = self.current_token().span;
+            let Some(name) = self.parse_ident() else {
+                break;
+            };
+            if self.expect(&TokenKind::Colon).is_none() {
+                break;
+            }
+            let Some(type_ann) = self.parse_type_annotation() else {
+                break;
+            };
+            let field_span = field_start.merge(type_ann.span);
+            fields.push(FieldDef {
+                name,
+                type_ann,
+                span: field_span,
+            });
+
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+
+            // Allow trailing comma
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+        }
+
+        fields
     }
 
     /// Parse a comma-separated parameter list (without the surrounding parens).
@@ -429,7 +505,9 @@ impl Parser {
         }
     }
 
-    /// Parse a variable declaration: `(const | let) IDENT (: type)? = expr ;`.
+    /// Parse a variable declaration or destructuring:
+    /// - `(const | let) IDENT (: type)? = expr ;`
+    /// - `(const | let) { field, ... } = expr ;`
     fn parse_var_decl(&mut self) -> Option<Stmt> {
         let keyword = self.advance();
         let start = keyword.span;
@@ -437,6 +515,11 @@ impl Parser {
             TokenKind::Const => VarBinding::Const,
             _ => VarBinding::Let,
         };
+
+        // Check for destructuring: `const { ... } = expr;`
+        if self.check(&TokenKind::LBrace) {
+            return self.parse_destructure(binding, start);
+        }
 
         let Some(name) = self.parse_ident() else {
             self.synchronize();
@@ -571,6 +654,61 @@ impl Parser {
         }
 
         Some(Stmt::Expr(expr))
+    }
+
+    /// Parse a destructuring statement: `{ field, ... } = expr ;`.
+    ///
+    /// The keyword (`const`/`let`) and binding have already been consumed.
+    fn parse_destructure(&mut self, binding: VarBinding, start: Span) -> Option<Stmt> {
+        self.advance(); // consume `{`
+
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) && !self.at_end() {
+            loop {
+                let Some(field_name) = self.parse_ident() else {
+                    self.synchronize();
+                    return None;
+                };
+                fields.push(field_name);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+            }
+        }
+
+        if self.expect(&TokenKind::RBrace).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        if self.expect(&TokenKind::Eq).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        let Some(init) = self.parse_expr() else {
+            self.synchronize();
+            return None;
+        };
+
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            init.span
+        };
+
+        Some(Stmt::Destructure(DestructureStmt {
+            binding,
+            fields,
+            init,
+            span: start.merge(end),
+        }))
     }
 
     // ---------------------------------------------------------------
@@ -871,7 +1009,12 @@ impl Parser {
         }
     }
 
-    /// Parse call expressions: `primary ( "(" args ")" | "." IDENT "(" args ")" )*`.
+    /// Parse call and member expressions:
+    /// `primary ( "(" args ")" | "." IDENT "(" args ")" | "." IDENT )*`.
+    ///
+    /// Handles function calls, method calls, and field access. Field access
+    /// is distinguished from method calls by the absence of `(` after the
+    /// field name.
     fn parse_call(&mut self) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
 
@@ -893,19 +1036,33 @@ impl Parser {
                 }
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // consume `.`
-                let method = self.parse_ident()?;
-                self.expect(&TokenKind::LParen)?;
-                let args = self.parse_arg_list();
-                let close = self.expect(&TokenKind::RParen)?;
-                let span = expr.span.merge(close.span);
-                expr = Expr {
-                    kind: ExprKind::MethodCall(MethodCallExpr {
-                        object: Box::new(expr),
-                        method,
-                        args,
-                    }),
-                    span,
-                };
+                let member = self.parse_ident()?;
+
+                if self.check(&TokenKind::LParen) {
+                    // Method call: `.method(args)`
+                    self.advance(); // consume `(`
+                    let args = self.parse_arg_list();
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = expr.span.merge(close.span);
+                    expr = Expr {
+                        kind: ExprKind::MethodCall(MethodCallExpr {
+                            object: Box::new(expr),
+                            method: member,
+                            args,
+                        }),
+                        span,
+                    };
+                } else {
+                    // Field access: `.field`
+                    let span = expr.span.merge(member.span);
+                    expr = Expr {
+                        kind: ExprKind::FieldAccess(FieldAccessExpr {
+                            object: Box::new(expr),
+                            field: member,
+                        }),
+                        span,
+                    };
+                }
             } else {
                 break;
             }
@@ -939,6 +1096,78 @@ impl Parser {
 
         args
     }
+
+    // ---------------------------------------------------------------
+    // Struct literals
+    // ---------------------------------------------------------------
+
+    /// Look ahead to determine if `{` starts a struct literal (`{ ident: expr, ... }`).
+    ///
+    /// Returns true if the token after `{` is `ident :`, which disambiguates
+    /// from block expressions.
+    fn is_struct_literal_ahead(&self) -> bool {
+        // Current token is `{`. Check pos+1 and pos+2.
+        let after_brace = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+        let after_ident = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+
+        matches!(
+            (after_brace, after_ident),
+            (Some(TokenKind::Ident(_)), Some(TokenKind::Colon))
+        )
+    }
+
+    /// Parse a struct literal: `{ name: expr, ... }`.
+    ///
+    /// The `type_name` is provided when the struct type is known from context
+    /// (e.g., from a type annotation on the variable declaration).
+    fn parse_struct_literal(&mut self, type_name: Option<Ident>) -> Option<Expr> {
+        let open = self.advance(); // consume `{`
+        let start = type_name.as_ref().map_or(open.span, |n| n.span);
+
+        let mut fields = Vec::new();
+
+        if !self.check(&TokenKind::RBrace) && !self.at_end() {
+            loop {
+                let field_start = self.current_token().span;
+                let Some(name) = self.parse_ident() else {
+                    break;
+                };
+                if self.expect(&TokenKind::Colon).is_none() {
+                    break;
+                }
+                let Some(value) = self.parse_expr() else {
+                    break;
+                };
+                let field_span = field_start.merge(value.span);
+                fields.push(FieldInit {
+                    name,
+                    value,
+                    span: field_span,
+                });
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+
+        Some(Expr {
+            kind: ExprKind::StructLit(StructLitExpr { type_name, fields }),
+            span,
+        })
+    }
+
+    // ---------------------------------------------------------------
+    // Primary expressions
+    // ---------------------------------------------------------------
 
     /// Parse a primary expression: literal, identifier, or parenthesized expression.
     #[allow(clippy::too_many_lines)]
@@ -992,6 +1221,22 @@ impl Parser {
                     kind: ExprKind::Ident(ident),
                     span,
                 })
+            }
+            TokenKind::LBrace => {
+                // Struct literal: `{ name: expr, ... }`
+                // Disambiguate: look ahead for `ident :` pattern
+                if self.is_struct_literal_ahead() {
+                    return self.parse_struct_literal(None);
+                }
+                // Otherwise fall through to error (blocks are not expressions in Phase 1)
+                self.diagnostics.push(
+                    Diagnostic::error("unexpected `{` in expression position").with_label(
+                        token.span,
+                        self.file_id,
+                        "expected expression",
+                    ),
+                );
+                None
             }
             TokenKind::LParen => {
                 let open = self.advance();
@@ -1047,6 +1292,7 @@ mod tests {
         assert_eq!(module.items.len(), 1, "expected exactly one item");
         match &module.items[0].kind {
             ItemKind::Function(f) => f,
+            _ => panic!("expected function item"),
         }
     }
 
@@ -1499,12 +1745,15 @@ mod tests {
         assert_eq!(module.items.len(), 3);
         match &module.items[0].kind {
             ItemKind::Function(f) => assert_eq!(f.name.name, "a"),
+            _ => panic!("expected function"),
         }
         match &module.items[1].kind {
             ItemKind::Function(f) => assert_eq!(f.name.name, "b"),
+            _ => panic!("expected function"),
         }
         match &module.items[2].kind {
             ItemKind::Function(f) => assert_eq!(f.name.name, "c"),
+            _ => panic!("expected function"),
         }
     }
 
@@ -1787,5 +2036,151 @@ mod tests {
             "depth {depth} should not produce diagnostics, got: {diagnostics:?}"
         );
         assert_eq!(module.items.len(), 1);
+    }
+
+    // ---------------------------------------------------------------
+    // Task 014: Type definitions and struct sugar
+    // ---------------------------------------------------------------
+
+    // Test T14-1: Parse `type User = { name: string, age: u32 }` -> TypeDef with 2 fields
+    #[test]
+    fn test_parser_type_def_two_fields() {
+        let source = "type User = { name: string, age: u32 }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "User");
+                assert_eq!(td.fields.len(), 2);
+                assert_eq!(td.fields[0].name.name, "name");
+                assert_eq!(td.fields[1].name.name, "age");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test T14-2: Parse struct literal in variable initializer
+    #[test]
+    fn test_parser_struct_literal_in_var_decl() {
+        let source = r#"function main() { const user: User = { name: "Alice", age: 30 }; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => {
+                assert_eq!(decl.name.name, "user");
+                match &decl.init.kind {
+                    ExprKind::StructLit(slit) => {
+                        assert_eq!(slit.fields.len(), 2);
+                        assert_eq!(slit.fields[0].name.name, "name");
+                        assert_eq!(slit.fields[1].name.name, "age");
+                    }
+                    _ => panic!("expected StructLit expression"),
+                }
+            }
+            _ => panic!("expected VarDecl"),
+        }
+    }
+
+    // Test T14-3: Parse field access `user.name`
+    #[test]
+    fn test_parser_field_access() {
+        let source = "function main() { console.log(user.name); }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        // The statement should contain a method call whose argument is a field access
+        match stmt {
+            Stmt::Expr(expr) => match &expr.kind {
+                ExprKind::MethodCall(mc) => {
+                    assert_eq!(mc.args.len(), 1);
+                    match &mc.args[0].kind {
+                        ExprKind::FieldAccess(fa) => {
+                            assert_eq!(fa.field.name, "name");
+                        }
+                        _ => panic!("expected FieldAccess in arg"),
+                    }
+                }
+                _ => panic!("expected MethodCall"),
+            },
+            _ => panic!("expected Expr statement"),
+        }
+    }
+
+    // Test T14-4: Parse chained field access `user.address.city`
+    #[test]
+    fn test_parser_chained_field_access() {
+        let source = "function main() { console.log(user.address.city); }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Expr(expr) => match &expr.kind {
+                ExprKind::MethodCall(mc) => {
+                    assert_eq!(mc.args.len(), 1);
+                    match &mc.args[0].kind {
+                        ExprKind::FieldAccess(outer) => {
+                            assert_eq!(outer.field.name, "city");
+                            match &outer.object.kind {
+                                ExprKind::FieldAccess(inner) => {
+                                    assert_eq!(inner.field.name, "address");
+                                }
+                                _ => panic!("expected inner FieldAccess"),
+                            }
+                        }
+                        _ => panic!("expected FieldAccess"),
+                    }
+                }
+                _ => panic!("expected MethodCall"),
+            },
+            _ => panic!("expected Expr statement"),
+        }
+    }
+
+    // Test T14-5: Parse destructuring `const { name, age } = user;`
+    #[test]
+    fn test_parser_destructuring() {
+        let source = "function main() { const { name, age } = user; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Destructure(destr) => {
+                assert_eq!(destr.binding, VarBinding::Const);
+                assert_eq!(destr.fields.len(), 2);
+                assert_eq!(destr.fields[0].name, "name");
+                assert_eq!(destr.fields[1].name, "age");
+                match &destr.init.kind {
+                    ExprKind::Ident(ident) => assert_eq!(ident.name, "user"),
+                    _ => panic!("expected Ident init"),
+                }
+            }
+            _ => panic!("expected Destructure statement"),
+        }
+    }
+
+    // Test T14-6: Parse type def with trailing comma
+    #[test]
+    fn test_parser_type_def_trailing_comma() {
+        let source = "type Point = { x: f64, y: f64, }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.fields.len(), 2);
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test T14-7: type keyword is lexed correctly
+    #[test]
+    fn test_parser_type_keyword_in_lexer() {
+        let source = "type Foo = { x: i32 }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => assert_eq!(td.name.name, "Foo"),
+            _ => panic!("expected TypeDef"),
+        }
     }
 }

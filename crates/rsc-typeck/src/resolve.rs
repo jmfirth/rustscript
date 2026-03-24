@@ -66,6 +66,34 @@ pub fn resolve_type_annotation(
     }
 }
 
+/// Resolve a type annotation to a [`Type`], treating unknown names as user-defined
+/// types rather than errors.
+///
+/// Uses the [`crate::registry::TypeRegistry`] to confirm that the type is registered.
+/// Unknown names that are also not in the registry fall back to diagnostics.
+pub fn resolve_type_annotation_with_registry(
+    ann: &ast::TypeAnnotation,
+    registry: &crate::registry::TypeRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    match &ann.kind {
+        ast::TypeKind::Void => Type::Unit,
+        ast::TypeKind::Named(ident) => {
+            // Try primitive/built-in first
+            if let Some(ty) = resolve_type_name(&ident.name) {
+                return ty;
+            }
+            // Try user-defined type from registry
+            if registry.lookup(&ident.name).is_some() {
+                return Type::Named(ident.name.clone());
+            }
+            // Unknown type
+            diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
+            Type::Primitive(PrimitiveType::I64)
+        }
+    }
+}
+
 /// Resolve a type annotation to a `RustType`, emitting diagnostics for unknown types.
 ///
 /// This is a convenience function that resolves through [`Type`] and converts
@@ -273,5 +301,56 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("unknown type"));
         assert!(diags[0].message.contains("Foo"));
+    }
+
+    // Test T14-14: Type registry resolves user-defined types
+    #[test]
+    fn test_resolve_type_annotation_with_registry_known_user_type() {
+        let mut registry = crate::registry::TypeRegistry::new();
+        registry.register(
+            "User".to_owned(),
+            vec![
+                ("name".to_owned(), Type::String),
+                ("age".to_owned(), Type::Primitive(PrimitiveType::U32)),
+            ],
+        );
+
+        let ann = TypeAnnotation {
+            kind: TypeKind::Named(ident("User", 0, 4)),
+            span: span(0, 4),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert_eq!(ty, Type::Named("User".to_owned()));
+        assert!(diags.is_empty());
+    }
+
+    // Test T14-15: Type registry still resolves primitives
+    #[test]
+    fn test_resolve_type_annotation_with_registry_primitive_type() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Named(ident("i32", 0, 3)),
+            span: span(0, 3),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert_eq!(ty, Type::Primitive(PrimitiveType::I32));
+        assert!(diags.is_empty());
+    }
+
+    // Test T14-16: Unknown type with registry emits diagnostic
+    #[test]
+    fn test_resolve_type_annotation_with_registry_unknown_type() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Named(ident("Unknown", 0, 7)),
+            span: span(0, 7),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert_eq!(ty, Type::Primitive(PrimitiveType::I64));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("unknown type"));
     }
 }

@@ -7,40 +7,58 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustElse, RustExpr, RustExprKind, RustFile,
-    RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustParam, RustReturnStmt, RustStmt, RustType,
-    RustUnaryOp, RustWhileStmt,
+    RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustExpr,
+    RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustParam,
+    RustReturnStmt, RustStmt, RustStructDef, RustType, RustUnaryOp, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
 use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
+use rsc_typeck::registry::TypeRegistry;
 use rsc_typeck::resolve;
+use rsc_typeck::types::Type;
 
 /// The AST-to-IR transformer.
 ///
-/// Holds the builtin registry and drives the lowering of an entire module.
+/// Holds the builtin registry and type registry, and drives the lowering of
+/// an entire module.
 pub(crate) struct Transform {
     builtins: BuiltinRegistry,
+    type_registry: TypeRegistry,
 }
 
 impl Transform {
-    /// Create a new transformer with the default builtin registry.
+    /// Create a new transformer with the default builtin registry and an empty
+    /// type registry.
     pub fn new() -> Self {
         Self {
             builtins: BuiltinRegistry::new(),
+            type_registry: TypeRegistry::new(),
         }
     }
 
     /// Lower a complete `RustScript` module to a Rust file.
-    pub fn lower_module(&self, module: &ast::Module) -> (RustFile, Vec<Diagnostic>) {
+    ///
+    /// Performs a pre-pass to register all type definitions, then lowers
+    /// each item.
+    pub fn lower_module(&mut self, module: &ast::Module) -> (RustFile, Vec<Diagnostic>) {
         let mut ctx = LoweringContext::new();
+
+        // Pre-pass: register all type definitions so they can be resolved
+        // during function lowering.
+        for item in &module.items {
+            if let ast::ItemKind::TypeDef(td) = &item.kind {
+                self.register_type_def(td, &mut ctx);
+            }
+        }
 
         let items = module
             .items
             .iter()
             .map(|item| match &item.kind {
                 ast::ItemKind::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
+                ast::ItemKind::TypeDef(td) => RustItem::Struct(self.lower_type_def(td, &mut ctx)),
             })
             .collect();
 
@@ -53,6 +71,58 @@ impl Transform {
             },
             diagnostics,
         )
+    }
+
+    /// Register a type definition in the type registry during the pre-pass.
+    fn register_type_def(&mut self, td: &ast::TypeDef, ctx: &mut LoweringContext) {
+        let mut diags = Vec::new();
+        let fields: Vec<(String, Type)> = td
+            .fields
+            .iter()
+            .map(|f| {
+                let ty = resolve::resolve_type_annotation_with_registry(
+                    &f.type_ann,
+                    &self.type_registry,
+                    &mut diags,
+                );
+                (f.name.name.clone(), ty)
+            })
+            .collect();
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        self.type_registry.register(td.name.name.clone(), fields);
+    }
+
+    /// Lower a type definition to a Rust struct.
+    fn lower_type_def(&self, td: &ast::TypeDef, ctx: &mut LoweringContext) -> RustStructDef {
+        let mut diags = Vec::new();
+        let fields = td
+            .fields
+            .iter()
+            .map(|f| {
+                let ty = resolve::resolve_type_annotation_with_registry(
+                    &f.type_ann,
+                    &self.type_registry,
+                    &mut diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                RustFieldDef {
+                    public: true,
+                    name: f.name.name.clone(),
+                    ty: rust_ty,
+                    span: Some(f.span),
+                }
+            })
+            .collect();
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        RustStructDef {
+            name: td.name.name.clone(),
+            fields,
+            span: Some(td.span),
+        }
     }
 
     /// Lower a function declaration.
@@ -75,8 +145,16 @@ impl Transform {
             .params
             .iter()
             .map(|p| {
-                let ty =
-                    resolve::resolve_type_annotation_to_rust_type(&p.type_ann, &mut Vec::new());
+                let mut diags = Vec::new();
+                let ty_inner = resolve::resolve_type_annotation_with_registry(
+                    &p.type_ann,
+                    &self.type_registry,
+                    &mut diags,
+                );
+                let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
                 ctx.declare_variable(p.name.name.clone(), ty.clone());
                 RustParam {
                     name: p.name.name.clone(),
@@ -87,7 +165,16 @@ impl Transform {
             .collect();
 
         let return_type = f.return_type.as_ref().and_then(|ann| {
-            let ty = resolve::resolve_type_annotation_to_rust_type(ann, &mut Vec::new());
+            let mut diags = Vec::new();
+            let ty_inner = resolve::resolve_type_annotation_with_registry(
+                ann,
+                &self.type_registry,
+                &mut diags,
+            );
+            let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
             if ty == RustType::Unit {
                 return None;
             }
@@ -161,6 +248,9 @@ impl Transform {
             ast::Stmt::While(while_stmt) => {
                 RustStmt::While(self.lower_while(while_stmt, ctx, use_map, stmt_index, reassigned))
             }
+            ast::Stmt::Destructure(destr) => {
+                self.lower_destructure(destr, ctx, use_map, stmt_index)
+            }
         }
     }
 
@@ -176,7 +266,12 @@ impl Transform {
         // Resolve the type from annotation or infer from literal
         let mut diags = Vec::new();
         let ty = if let Some(ann) = &decl.type_ann {
-            resolve::resolve_type_annotation_to_rust_type(ann, &mut diags)
+            let ty_inner = resolve::resolve_type_annotation_with_registry(
+                ann,
+                &self.type_registry,
+                &mut diags,
+            );
+            rsc_typeck::bridge::type_to_rust_type(&ty_inner)
         } else {
             resolve::infer_literal_rust_type(&decl.init).unwrap_or(RustType::I64)
         };
@@ -192,11 +287,26 @@ impl Transform {
 
         ctx.declare_variable(decl.name.name.clone(), ty.clone());
 
+        // Set the struct type context so struct literal lowering can resolve the
+        // type name from the variable's annotation.
+        let struct_type_name = match &ty {
+            RustType::Named(name) => Some(name.clone()),
+            _ => None,
+        };
+        ctx.set_struct_type_name(struct_type_name);
+
         let init = self.lower_expr(&decl.init, ctx, use_map, stmt_index);
+
+        ctx.set_struct_type_name(None);
 
         // Omit the type annotation when it's inferable from the literal initializer
         // and the user didn't write an explicit annotation.
-        let emit_ty = if decl.type_ann.is_some() {
+        // Named types in struct construction don't need the type annotation since
+        // the struct literal provides the type.
+        let emit_ty = if matches!(ty, RustType::Named(_)) {
+            // Struct types: the struct literal provides the type, so omit annotation
+            None
+        } else if decl.type_ann.is_some() {
             // User wrote an explicit type annotation — always include it
             Some(ty)
         } else if is_default_literal_type(&decl.init, &ty) {
@@ -261,6 +371,58 @@ impl Transform {
             body,
             span: Some(while_stmt.span),
         }
+    }
+
+    /// Lower a destructuring statement.
+    ///
+    /// Resolves the type name from the init expression's type in the context,
+    /// then produces a `RustDestructureStmt`.
+    fn lower_destructure(
+        &self,
+        destr: &ast::DestructureStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustStmt {
+        let init = self.lower_expr(&destr.init, ctx, use_map, stmt_index);
+
+        // Try to infer the type name from the init expression. If the init
+        // is an identifier, look up its type in the context.
+        let type_name = match &destr.init.kind {
+            ast::ExprKind::Ident(ident) => ctx
+                .lookup_variable(&ident.name)
+                .and_then(|info| match &info.ty {
+                    RustType::Named(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Unknown".to_owned()),
+            _ => "Unknown".to_owned(),
+        };
+
+        let fields = destr.fields.iter().map(|f| f.name.clone()).collect();
+
+        // Declare the extracted fields as variables in the current scope.
+        // Look up their types from the type registry.
+        if let Some(td) = self.type_registry.lookup(&type_name) {
+            for field_ident in &destr.fields {
+                let field_ty = td
+                    .fields
+                    .iter()
+                    .find(|(name, _)| name == &field_ident.name)
+                    .map_or(RustType::Unit, |(_, ty)| {
+                        rsc_typeck::bridge::type_to_rust_type(ty)
+                    });
+                ctx.declare_variable(field_ident.name.clone(), field_ty);
+            }
+        }
+
+        RustStmt::Destructure(RustDestructureStmt {
+            type_name,
+            fields,
+            init,
+            mutable: destr.binding == ast::VarBinding::Let,
+            span: Some(destr.span),
+        })
     }
 
     /// Lower an expression.
@@ -356,6 +518,19 @@ impl Transform {
                     expr.span,
                 )
             }
+            ast::ExprKind::StructLit(slit) => {
+                self.lower_struct_lit(slit, expr.span, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::FieldAccess(fa) => {
+                let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                RustExpr::new(
+                    RustExprKind::FieldAccess {
+                        object: Box::new(object),
+                        field: fa.field.name.clone(),
+                    },
+                    expr.span,
+                )
+            }
         }
     }
 
@@ -426,6 +601,39 @@ impl Transform {
             },
             span,
         )
+    }
+
+    /// Lower a struct literal expression.
+    ///
+    /// If the struct literal has no explicit type name, attempts to resolve it
+    /// from the surrounding variable declaration context. The lowering pass
+    /// stores the current expected type when processing `VarDecl` with a
+    /// struct literal initializer.
+    fn lower_struct_lit(
+        &self,
+        slit: &ast::StructLitExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let type_name = slit
+            .type_name
+            .as_ref()
+            .map(|n| n.name.clone())
+            .or_else(|| ctx.current_struct_type_name().map(String::from))
+            .unwrap_or_else(|| "Unknown".to_owned());
+
+        let fields = slit
+            .fields
+            .iter()
+            .map(|f| {
+                let value = self.lower_expr(&f.value, ctx, use_map, stmt_index);
+                (f.name.name.clone(), value)
+            })
+            .collect();
+
+        RustExpr::new(RustExprKind::StructLit { type_name, fields }, span)
     }
 }
 
@@ -583,12 +791,14 @@ mod tests {
     fn test_lower_empty_main_function() {
         let f = make_fn("main", vec![], None, vec![]);
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         assert_eq!(file.items.len(), 1);
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.name, "main");
         assert!(func.params.is_empty());
         assert!(func.return_type.is_none());
@@ -609,11 +819,13 @@ mod tests {
             vec![],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.params.len(), 2);
         assert_eq!(func.params[0].name, "a");
         assert_eq!(func.params[0].ty, RustType::I32);
@@ -641,10 +853,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.body.stmts.len(), 1);
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
@@ -681,10 +895,12 @@ mod tests {
             ],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.body.stmts.len(), 2);
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
@@ -721,10 +937,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
                 assert_eq!(
@@ -753,10 +971,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Macro { name, args } => {
@@ -790,10 +1010,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Macro { name, args } => {
@@ -835,10 +1057,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::If(if_stmt) => {
                 assert!(if_stmt.span.is_some());
@@ -871,10 +1095,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Binary { op, .. } => assert_eq!(*op, RustBinaryOp::Rem),
@@ -897,10 +1123,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Return(ret) => {
                 assert!(ret.value.is_none());
@@ -929,7 +1157,7 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (_, diags) = transform.lower_module(&module);
 
         assert_eq!(diags.len(), 1);
@@ -1016,11 +1244,13 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, diags) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.name, "fib");
         assert_eq!(func.params.len(), 1);
         assert_eq!(func.params[0].name, "n");
@@ -1086,10 +1316,12 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         // Both statements should be println! macros with NO clones
         for (i, stmt) in func.body.stmts.iter().enumerate() {
             match stmt {
@@ -1154,10 +1386,12 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.body.stmts.len(), 2);
 
         // stmt 0: greet(name.clone()) — name is in move position and used later
@@ -1248,10 +1482,12 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         assert_eq!(func.body.stmts.len(), 3);
 
         // x is let mut (reassigned)
@@ -1305,10 +1541,12 @@ mod tests {
             ],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[1] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::CompoundAssign { target, op, .. } => {
@@ -1344,10 +1582,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Assign { target, .. } => assert_eq!(target, "x"),
@@ -1374,10 +1614,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Macro { args, .. } => {
@@ -1413,10 +1655,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
                 RustExprKind::Macro { args, .. } => {
@@ -1451,10 +1695,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
                 assert_eq!(
@@ -1486,10 +1732,12 @@ mod tests {
             })],
         );
         let module = make_module(vec![fn_item(f)]);
-        let transform = Transform::new();
+        let mut transform = Transform::new();
         let (file, _) = transform.lower_module(&module);
 
-        let RustItem::Function(func) = &file.items[0];
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
         match &func.body.stmts[0] {
             RustStmt::Let(let_stmt) => {
                 assert_eq!(
@@ -1499,6 +1747,190 @@ mod tests {
                 );
             }
             other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 014: Type definitions and struct sugar lowering
+    // ---------------------------------------------------------------
+
+    // Test T14-6: Lower TypeDef -> RustStructDef with pub fields
+    #[test]
+    fn test_lower_type_def_produces_struct_with_pub_fields() {
+        let td = ast::TypeDef {
+            name: ident("User", 0, 4),
+            fields: vec![
+                ast::FieldDef {
+                    name: ident("name", 0, 4),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("string", 0, 6)),
+                        span: span(0, 6),
+                    },
+                    span: span(0, 10),
+                },
+                ast::FieldDef {
+                    name: ident("age", 0, 3),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("u32", 0, 3)),
+                        span: span(0, 3),
+                    },
+                    span: span(0, 6),
+                },
+            ],
+            span: span(0, 50),
+        };
+        let module = Module {
+            items: vec![Item {
+                kind: ItemKind::TypeDef(td),
+                exported: false,
+                span: span(0, 50),
+            }],
+            span: span(0, 50),
+        };
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        assert_eq!(file.items.len(), 1);
+        let RustItem::Struct(s) = &file.items[0] else {
+            panic!("expected Struct item");
+        };
+        assert_eq!(s.name, "User");
+        assert_eq!(s.fields.len(), 2);
+        assert!(s.fields[0].public);
+        assert_eq!(s.fields[0].name, "name");
+        assert_eq!(s.fields[0].ty, RustType::String);
+        assert!(s.fields[1].public);
+        assert_eq!(s.fields[1].name, "age");
+        assert_eq!(s.fields[1].ty, RustType::U32);
+    }
+
+    // Test T14-7: Lower struct literal -> RustExprKind::StructLit
+    #[test]
+    fn test_lower_struct_literal_produces_struct_lit_expr() {
+        let td = ast::TypeDef {
+            name: ident("Point", 0, 5),
+            fields: vec![
+                ast::FieldDef {
+                    name: ident("x", 0, 1),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("f64", 0, 3)),
+                        span: span(0, 3),
+                    },
+                    span: span(0, 4),
+                },
+                ast::FieldDef {
+                    name: ident("y", 0, 1),
+                    type_ann: TypeAnnotation {
+                        kind: TypeKind::Named(ident("f64", 0, 3)),
+                        span: span(0, 3),
+                    },
+                    span: span(0, 4),
+                },
+            ],
+            span: span(0, 30),
+        };
+        let body = vec![Stmt::VarDecl(VarDecl {
+            binding: VarBinding::Const,
+            name: ident("p", 0, 1),
+            type_ann: Some(TypeAnnotation {
+                kind: TypeKind::Named(ident("Point", 0, 5)),
+                span: span(0, 5),
+            }),
+            init: Expr {
+                kind: ExprKind::StructLit(ast::StructLitExpr {
+                    type_name: None,
+                    fields: vec![
+                        ast::FieldInit {
+                            name: ident("x", 0, 1),
+                            value: Expr {
+                                kind: ExprKind::FloatLit(1.0),
+                                span: span(0, 3),
+                            },
+                            span: span(0, 4),
+                        },
+                        ast::FieldInit {
+                            name: ident("y", 0, 1),
+                            value: Expr {
+                                kind: ExprKind::FloatLit(2.0),
+                                span: span(0, 3),
+                            },
+                            span: span(0, 4),
+                        },
+                    ],
+                }),
+                span: span(0, 20),
+            },
+            span: span(0, 25),
+        })];
+        let module = Module {
+            items: vec![
+                Item {
+                    kind: ItemKind::TypeDef(td),
+                    exported: false,
+                    span: span(0, 30),
+                },
+                fn_item(make_fn("main", vec![], None, body)),
+            ],
+            span: span(0, 100),
+        };
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        // The function is the second item
+        let RustItem::Function(func) = &file.items[1] else {
+            panic!("expected Function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                RustExprKind::StructLit { type_name, fields } => {
+                    assert_eq!(type_name, "Point");
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(fields[0].0, "x");
+                    assert_eq!(fields[1].0, "y");
+                }
+                other => panic!("expected StructLit, got {other:?}"),
+            },
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    // Test T14-8: Lower field access -> RustExprKind::FieldAccess
+    #[test]
+    fn test_lower_field_access_produces_field_access_expr() {
+        let body = vec![
+            Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("x", 0, 1),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                init: int_expr(42, 0, 2),
+                span: span(0, 10),
+            }),
+            Stmt::Expr(Expr {
+                kind: ExprKind::FieldAccess(ast::FieldAccessExpr {
+                    object: Box::new(ident_expr("obj", 0, 3)),
+                    field: ident("name", 4, 8),
+                }),
+                span: span(0, 8),
+            }),
+        ];
+        let module = make_module(vec![fn_item(make_fn("main", vec![], None, body))]);
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected Function item");
+        };
+        // Second stmt should be the field access
+        match &func.body.stmts[1] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::FieldAccess { object: _, field } => {
+                    assert_eq!(field, "name");
+                }
+                other => panic!("expected FieldAccess, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
         }
     }
 }

@@ -20,9 +20,9 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
     match ty {
         Type::Primitive(prim) => primitive_to_rust_type(*prim),
         Type::String => RustType::String,
+        Type::Named(name) => RustType::Named(name.clone()),
         // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
         Type::Unit
-        | Type::Named(_)
         | Type::Generic(_, _)
         | Type::Option(_)
         | Type::Result(_, _)
@@ -112,11 +112,15 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_unrepresented_types_produce_unit() {
+    fn test_bridge_named_type_produces_named() {
         assert_eq!(
             type_to_rust_type(&Type::Named("Foo".to_owned())),
-            RustType::Unit
+            RustType::Named("Foo".to_owned())
         );
+    }
+
+    #[test]
+    fn test_bridge_unrepresented_types_produce_unit() {
         assert_eq!(
             type_to_rust_type(&Type::Generic("Vec".to_owned(), vec![Type::Unit])),
             RustType::Unit

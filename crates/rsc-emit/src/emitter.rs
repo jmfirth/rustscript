@@ -4,7 +4,7 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfStmt, RustItem,
-    RustStmt,
+    RustStmt, RustStructDef,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -94,7 +94,32 @@ impl Emitter {
     fn emit_item(&mut self, item: &RustItem) {
         match item {
             RustItem::Function(f) => self.emit_fn(f),
+            RustItem::Struct(s) => self.emit_struct(s),
         }
+    }
+
+    /// Emit a struct definition.
+    fn emit_struct(&mut self, s: &RustStructDef) {
+        self.write_indent();
+        self.write("struct ");
+        self.write(&s.name);
+        self.writeln(" {");
+        self.push_indent();
+
+        for field in &s.fields {
+            self.write_indent();
+            if field.public {
+                self.write("pub ");
+            }
+            self.write(&field.name);
+            self.write(": ");
+            self.write(&field.ty.to_string());
+            self.writeln(",");
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
     }
 
     /// Emit a function declaration.
@@ -196,6 +221,25 @@ impl Emitter {
                 self.write(" ");
                 self.emit_block(&while_stmt.body);
                 self.newline();
+            }
+            RustStmt::Destructure(destr) => {
+                self.write_indent();
+                if destr.mutable {
+                    self.write("let mut ");
+                } else {
+                    self.write("let ");
+                }
+                self.write(&destr.type_name);
+                self.write(" { ");
+                for (i, field) in destr.fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(field);
+                }
+                self.write(", .. } = ");
+                self.emit_expr(&destr.init);
+                self.writeln(";");
             }
         }
     }
@@ -338,6 +382,24 @@ impl Emitter {
                 self.write(" ");
                 self.emit_expr(value);
             }
+            RustExprKind::StructLit { type_name, fields } => {
+                self.write(type_name);
+                self.write(" { ");
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(name);
+                    self.write(": ");
+                    self.emit_expr(value);
+                }
+                self.write(" }");
+            }
+            RustExprKind::FieldAccess { object, field } => {
+                self.emit_expr(object);
+                self.write(".");
+                self.write(field);
+            }
         }
     }
 }
@@ -352,9 +414,10 @@ pub fn emit(file: &RustFile) -> String {
 #[cfg(test)]
 mod tests {
     use rsc_syntax::rust_ir::{
-        RustBinaryOp, RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl,
-        RustIfStmt, RustItem, RustLetStmt, RustModDecl, RustParam, RustReturnStmt, RustStmt,
-        RustType, RustUnaryOp, RustUseDecl, RustWhileStmt,
+        RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustExpr, RustExprKind,
+        RustFieldDef, RustFile, RustFnDecl, RustIfStmt, RustItem, RustLetStmt, RustModDecl,
+        RustParam, RustReturnStmt, RustStmt, RustStructDef, RustType, RustUnaryOp, RustUseDecl,
+        RustWhileStmt,
     };
 
     use super::emit;
@@ -1228,5 +1291,110 @@ fn main() {
                 "expected `{expected}` in output for {op:?}, got: {output}"
             );
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 014: Struct emission
+    // ---------------------------------------------------------------
+
+    // Test T14-10: Emit struct definition
+    #[test]
+    fn test_emit_struct_definition_matches_snapshot() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Struct(RustStructDef {
+                name: "User".to_owned(),
+                fields: vec![
+                    RustFieldDef {
+                        public: true,
+                        name: "name".to_owned(),
+                        ty: RustType::String,
+                        span: None,
+                    },
+                    RustFieldDef {
+                        public: true,
+                        name: "age".to_owned(),
+                        ty: RustType::U32,
+                        span: None,
+                    },
+                ],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(output.contains("struct User {"), "output: {output}");
+        assert!(output.contains("pub name: String,"), "output: {output}");
+        assert!(output.contains("pub age: u32,"), "output: {output}");
+    }
+
+    // Test T14-11: Emit struct literal
+    #[test]
+    fn test_emit_struct_literal_expression() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "p".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::StructLit {
+                    type_name: "Point".to_owned(),
+                    fields: vec![
+                        ("x".to_owned(), syn(RustExprKind::FloatLit(1.0))),
+                        ("y".to_owned(), syn(RustExprKind::FloatLit(2.0))),
+                    ],
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("Point { x: 1.0, y: 2.0 }"),
+            "output: {output}"
+        );
+    }
+
+    // Test T14-12: Emit field access
+    #[test]
+    fn test_emit_field_access_expression() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::FieldAccess {
+                object: Box::new(ident("user")),
+                field: "name".to_owned(),
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(output.contains("user.name"), "output: {output}");
+    }
+
+    // Test T14-13: Emit destructuring
+    #[test]
+    fn test_emit_destructuring_let() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Destructure(RustDestructureStmt {
+                type_name: "User".to_owned(),
+                fields: vec!["name".to_owned(), "age".to_owned()],
+                init: ident("user"),
+                mutable: false,
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("let User { name, age, .. } = user;"),
+            "output: {output}"
+        );
+    }
+
+    // Test T14-14: Emit RustType::Named
+    #[test]
+    fn test_emit_named_type_display() {
+        assert_eq!(RustType::Named("User".to_owned()).to_string(), "User");
+        assert_eq!(RustType::Named("Point".to_owned()).to_string(), "Point");
     }
 }
