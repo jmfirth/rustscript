@@ -196,6 +196,8 @@ pub enum RustType {
     TypeParam(String),
     /// `Option<T>` — from `T | null`.
     Option(Box<RustType>),
+    /// `Result<T, E>` — from `T throws E`.
+    Result(Box<RustType>, Box<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -226,6 +228,7 @@ impl std::fmt::Display for RustType {
                 return write!(f, ">");
             }
             Self::Option(inner) => return write!(f, "Option<{inner}>"),
+            Self::Result(ok, err) => return write!(f, "Result<{ok}, {err}>"),
         };
         f.write_str(s)
     }
@@ -265,6 +268,9 @@ pub enum RustStmt {
     /// An `if let Some(name) = expr { then } [else { else }]` statement.
     /// Produced by lowering null check narrowing (`if (x !== null)`).
     IfLet(RustIfLetStmt),
+    /// `match expr { Ok(val) => { ... }, Err(e) => { ... } }`.
+    /// Produced by lowering `try/catch` blocks.
+    MatchResult(RustMatchResultStmt),
 }
 
 /// A Rust `let` binding.
@@ -378,6 +384,25 @@ pub struct RustIfLetStmt {
     pub then_block: RustBlock,
     /// The else block (value is `None`).
     pub else_block: Option<RustBlock>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A `match` on `Result<T, E>` with `Ok`/`Err` arms.
+///
+/// Produced by lowering `try/catch` blocks.
+#[derive(Debug, Clone)]
+pub struct RustMatchResultStmt {
+    /// The expression being matched (must be `Result<T, E>`).
+    pub expr: RustExpr,
+    /// The binding name for the `Ok` arm.
+    pub ok_binding: String,
+    /// The block for the `Ok` arm.
+    pub ok_block: RustBlock,
+    /// The binding name for the `Err` arm.
+    pub err_binding: String,
+    /// The block for the `Err` arm.
+    pub err_block: RustBlock,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -551,6 +576,21 @@ pub enum RustExprKind {
         expr: Box<RustExpr>,
         /// The default value.
         default: Box<RustExpr>,
+    },
+    /// The `?` operator: `expr?`.
+    /// Produced by lowering calls to `throws` functions within a `throws` context.
+    QuestionMark(Box<RustExpr>),
+    /// `Ok(expr)` — wrapping a success value in `Result`.
+    Ok(Box<RustExpr>),
+    /// `Err(expr)` — wrapping an error value in `Result`.
+    Err(Box<RustExpr>),
+    /// An immediately-invoked closure: `(|| -> ReturnType { body })()`.
+    /// Used for lowering multi-statement `try` blocks.
+    ClosureCall {
+        /// The closure body.
+        body: RustBlock,
+        /// The return type of the closure.
+        return_type: RustType,
     },
     /// Optional chaining: `expr.as_ref().map(|v| v.field)`.
     /// Produced by lowering `expr?.field`.

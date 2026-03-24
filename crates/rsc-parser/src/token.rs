@@ -60,6 +60,14 @@ pub(crate) enum TokenKind {
     New,
     /// `null`
     Null,
+    /// `throw`
+    Throw,
+    /// `throws`
+    Throws,
+    /// `try`
+    Try,
+    /// `catch`
+    Catch,
 
     // Operators
     /// `+`

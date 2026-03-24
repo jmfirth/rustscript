@@ -4,7 +4,8 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustIfLetStmt,
-    RustIfStmt, RustItem, RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTypeParam,
+    RustIfStmt, RustItem, RustMatchResultStmt, RustMatchStmt, RustPattern, RustStmt, RustStructDef,
+    RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -361,6 +362,11 @@ impl Emitter {
                 self.emit_if_let(if_let);
                 self.newline();
             }
+            RustStmt::MatchResult(match_result) => {
+                self.write_indent();
+                self.emit_match_result(match_result);
+                self.newline();
+            }
         }
     }
 
@@ -398,6 +404,34 @@ impl Emitter {
             self.write(" else ");
             self.emit_block(else_block);
         }
+    }
+
+    /// Emit a `match` on `Result` for try/catch lowering.
+    fn emit_match_result(&mut self, m: &RustMatchResultStmt) {
+        self.write("match ");
+        self.emit_expr(&m.expr);
+        self.writeln(" {");
+        self.push_indent();
+
+        // Ok arm
+        self.write_indent();
+        self.write("Ok(");
+        self.write(&m.ok_binding);
+        self.write(") => ");
+        self.emit_block(&m.ok_block);
+        self.newline();
+
+        // Err arm
+        self.write_indent();
+        self.write("Err(");
+        self.write(&m.err_binding);
+        self.write(") => ");
+        self.emit_block(&m.err_block);
+        self.newline();
+
+        self.pop_indent();
+        self.write_indent();
+        self.write("}");
     }
 
     /// Emit an expression.
@@ -590,6 +624,27 @@ impl Emitter {
                 self.emit_expr(default);
                 self.write(")");
             }
+            RustExprKind::QuestionMark(inner) => {
+                self.emit_expr(inner);
+                self.write("?");
+            }
+            RustExprKind::Ok(inner) => {
+                self.write("Ok(");
+                self.emit_expr(inner);
+                self.write(")");
+            }
+            RustExprKind::Err(inner) => {
+                self.write("Err(");
+                self.emit_expr(inner);
+                self.write(")");
+            }
+            RustExprKind::ClosureCall { body, return_type } => {
+                self.write("(|| -> ");
+                self.write(&return_type.to_string());
+                self.write(" ");
+                self.emit_block(body);
+                self.write(")()");
+            }
             RustExprKind::OptionMap {
                 expr,
                 closure_param,
@@ -618,9 +673,9 @@ mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
         RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt,
-        RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustModDecl, RustParam, RustPattern,
-        RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
-        RustWhileStmt,
+        RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustModDecl,
+        RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam,
+        RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -2121,6 +2176,133 @@ fn main() {
         assert!(
             output.contains("if let Some(name) = value"),
             "expected 'if let Some(name) = value' in output:\n{output}"
+        );
+    }
+
+    // --- Task 021: Result, ?, Ok, Err, MatchResult ---
+
+    // Emit Result<T, E> in function return type
+    #[test]
+    fn test_emit_result_return_type_produces_result_syntax() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "fetch".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Some(RustType::Result(
+                    Box::new(RustType::I32),
+                    Box::new(RustType::String),
+                )),
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("-> Result<i32, String>"),
+            "expected Result<i32, String> in output:\n{output}"
+        );
+    }
+
+    // Emit expr?
+    #[test]
+    fn test_emit_question_mark_produces_question_mark_syntax() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Semi(syn(RustExprKind::QuestionMark(Box::new(
+                syn(RustExprKind::Call {
+                    func: "fetch".to_owned(),
+                    args: vec![],
+                }),
+            ))))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("fetch()?"),
+            "expected 'fetch()?' in output:\n{output}"
+        );
+    }
+
+    // Emit Ok(expr)
+    #[test]
+    fn test_emit_ok_produces_ok_syntax() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Return(RustReturnStmt {
+                value: Some(syn(RustExprKind::Ok(Box::new(int_lit(42))))),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("return Ok(42)"),
+            "expected 'return Ok(42)' in output:\n{output}"
+        );
+    }
+
+    // Emit Err(expr)
+    #[test]
+    fn test_emit_err_produces_err_syntax() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Return(RustReturnStmt {
+                value: Some(syn(RustExprKind::Err(Box::new(syn(
+                    RustExprKind::StringLit("oops".to_owned()),
+                ))))),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("return Err(\"oops\")"),
+            "expected 'return Err(\"oops\")' in output:\n{output}"
+        );
+    }
+
+    // Emit match Result for try/catch
+    #[test]
+    fn test_emit_match_result_produces_match_ok_err() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::MatchResult(RustMatchResultStmt {
+                expr: syn(RustExprKind::Call {
+                    func: "fetch".to_owned(),
+                    args: vec![],
+                }),
+                ok_binding: "val".to_owned(),
+                ok_block: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                err_binding: "err".to_owned(),
+                err_block: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("match fetch()"),
+            "expected 'match fetch()' in output:\n{output}"
+        );
+        assert!(
+            output.contains("Ok(val) =>"),
+            "expected 'Ok(val) =>' in output:\n{output}"
+        );
+        assert!(
+            output.contains("Err(err) =>"),
+            "expected 'Err(err) =>' in output:\n{output}"
         );
     }
 }

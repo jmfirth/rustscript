@@ -21,6 +21,9 @@ pub(crate) struct LoweringContext {
     /// The current function's return type, if it's `Option<T>`.
     /// Set during function lowering when the return type is `T | null`.
     current_return_type: Option<RustType>,
+    /// Whether the current function is a `throws` function.
+    /// Used to determine whether to wrap returns in `Ok()` and insert `?`.
+    current_fn_throws: bool,
 }
 
 /// A single scope level containing variable declarations.
@@ -44,6 +47,7 @@ impl LoweringContext {
             diagnostics: Vec::new(),
             current_struct_type: None,
             current_return_type: None,
+            current_fn_throws: false,
         }
     }
 
@@ -94,6 +98,16 @@ impl LoweringContext {
     /// Get the current function's return type, if set.
     pub fn current_return_type(&self) -> Option<&RustType> {
         self.current_return_type.as_ref()
+    }
+
+    /// Set whether the current function is a `throws` function.
+    pub fn set_fn_throws(&mut self, throws: bool) {
+        self.current_fn_throws = throws;
+    }
+
+    /// Check whether the current function is a `throws` function.
+    pub fn is_fn_throws(&self) -> bool {
+        self.current_fn_throws
     }
 
     /// Add a diagnostic to the accumulated list.
