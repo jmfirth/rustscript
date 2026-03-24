@@ -322,6 +322,13 @@ pub enum RustStmt {
     /// `match expr { Ok(val) => { ... }, Err(e) => { ... } }`.
     /// Produced by lowering `try/catch` blocks.
     MatchResult(RustMatchResultStmt),
+    /// A `for x in iter { ... }` loop.
+    /// Produced by lowering `for (const x of items) { ... }`.
+    ForIn(RustForInStmt),
+    /// A `break;` statement.
+    Break(Option<Span>),
+    /// A `continue;` statement.
+    Continue(Option<Span>),
 }
 
 /// A Rust `let` binding.
@@ -377,6 +384,21 @@ pub enum RustElse {
 pub struct RustWhileStmt {
     /// The loop condition expression.
     pub condition: RustExpr,
+    /// The loop body.
+    pub body: RustBlock,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust `for x in iter { ... }` loop.
+///
+/// Produced by lowering a `RustScript` [`ForOfStmt`](crate::ast::ForOfStmt).
+#[derive(Debug, Clone)]
+pub struct RustForInStmt {
+    /// The loop variable name.
+    pub variable: String,
+    /// The iterable expression (typically a `&collection` reference).
+    pub iterable: RustExpr,
     /// The loop body.
     pub body: RustBlock,
     /// The source span, if derived from source.

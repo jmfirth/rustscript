@@ -99,6 +99,16 @@ impl UseMap {
                     Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
                 }
             }
+            ast::Stmt::For(for_of) => {
+                // The iterable is borrowed, not moved — mark as non-move position
+                Self::collect_expr_uses(&for_of.iterable, stmt_index, false, is_ref_call, uses);
+                for inner_stmt in &for_of.body.stmts {
+                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                }
+            }
+            ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {
+                // No variable uses in break/continue
+            }
         }
     }
 
@@ -328,7 +338,16 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 collect_assignments(inner, reassigned);
             }
         }
-        ast::Stmt::VarDecl(_) | ast::Stmt::Return(_) | ast::Stmt::Destructure(_) => {}
+        ast::Stmt::VarDecl(_)
+        | ast::Stmt::Return(_)
+        | ast::Stmt::Destructure(_)
+        | ast::Stmt::Break(_)
+        | ast::Stmt::Continue(_) => {}
+        ast::Stmt::For(for_of) => {
+            for inner in &for_of.body.stmts {
+                collect_assignments(inner, reassigned);
+            }
+        }
         ast::Stmt::Switch(switch) => {
             for case in &switch.cases {
                 for inner in &case.body {
@@ -631,6 +650,72 @@ mod tests {
         );
         // Vec is non-Copy, used in move position with later use → needs clone
         assert!(needs_clone("v", 0, &use_map, &vec_type));
+    }
+
+    // T018-11: Iterable in for-of is not a move position (no clone on collection)
+    #[test]
+    fn test_for_of_iterable_not_move_position() {
+        let block = Block {
+            stmts: vec![
+                Stmt::For(ForOfStmt {
+                    binding: VarBinding::Const,
+                    variable: ident("x", 0, 1),
+                    iterable: ident_expr("items", 5, 10),
+                    body: Block {
+                        stmts: vec![],
+                        span: span(12, 14),
+                    },
+                    span: span(0, 14),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("process", 20, 27),
+                        args: vec![ident_expr("items", 28, 33)],
+                    }),
+                    span: span(20, 34),
+                }),
+            ],
+            span: span(0, 34),
+        };
+
+        let use_map = UseMap::analyze(&block, no_ref_call);
+        let items_uses = use_map.get_uses("items").unwrap();
+        // The for-of iterable should not be a move position
+        assert_eq!(items_uses.len(), 2);
+        assert!(
+            !items_uses[0].is_move_position,
+            "for-of iterable should NOT be a move position"
+        );
+    }
+
+    // T018-12: Variables assigned inside for-of body are detected
+    #[test]
+    fn test_find_reassigned_variables_inside_for_of() {
+        let block = Block {
+            stmts: vec![Stmt::For(ForOfStmt {
+                binding: VarBinding::Const,
+                variable: ident("x", 0, 1),
+                iterable: ident_expr("items", 5, 10),
+                body: Block {
+                    stmts: vec![Stmt::Expr(Expr {
+                        kind: ExprKind::Assign(AssignExpr {
+                            target: ident("total", 12, 17),
+                            value: Box::new(int_expr(1, 20, 21)),
+                        }),
+                        span: span(12, 22),
+                    })],
+                    span: span(11, 23),
+                },
+                span: span(0, 23),
+            })],
+            span: span(0, 23),
+        };
+
+        let reassigned = find_reassigned_variables(&block);
+        assert!(
+            reassigned.contains("total"),
+            "expected `total` to be in reassigned set"
+        );
     }
 
     // Test 10: find_reassigned_variables with x = 10

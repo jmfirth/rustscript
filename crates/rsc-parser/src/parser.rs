@@ -5,10 +5,11 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, ClosureBody, ClosureExpr, DestructureStmt,
-    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl,
-    Ident, IfStmt, IndexExpr, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr,
-    Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
+    AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr, ClosureBody, ClosureExpr,
+    ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
+    FieldAccessExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, IndexExpr,
+    InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
+    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReturnStmt,
     ReturnTypeAnnotation, Stmt, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
     TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
     UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
@@ -137,6 +138,20 @@ impl Parser {
         }
     }
 
+    /// Consume the current token if it is an identifier matching the given name.
+    ///
+    /// Used for contextual keywords like `of` that should remain valid identifiers
+    /// in other contexts.
+    fn eat_contextual_keyword(&mut self, name: &str) -> bool {
+        if let TokenKind::Ident(ident_name) = self.peek()
+            && ident_name == name
+        {
+            self.advance();
+            return true;
+        }
+        false
+    }
+
     /// The span of the previously consumed token.
     fn previous_span(&self) -> Span {
         if self.pos == 0 {
@@ -202,6 +217,9 @@ impl Parser {
             TokenKind::Catch => "`catch`",
             TokenKind::Move => "`move`",
             TokenKind::Interface => "`interface`",
+            TokenKind::For => "`for`",
+            TokenKind::Break => "`break`",
+            TokenKind::Continue => "`continue`",
             TokenKind::FatArrow => "`=>`",
             TokenKind::Ampersand => "`&`",
             TokenKind::Pipe => "`|`",
@@ -1022,6 +1040,9 @@ impl Parser {
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
             TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
             TokenKind::Try => self.parse_try_catch_stmt().map(Stmt::TryCatch),
+            TokenKind::For => self.parse_for_of_stmt().map(Stmt::For),
+            TokenKind::Break => Some(Stmt::Break(self.parse_break_stmt())),
+            TokenKind::Continue => Some(Stmt::Continue(self.parse_continue_stmt())),
             _ => self.parse_expr_stmt(),
         }
     }
@@ -1138,6 +1159,101 @@ impl Parser {
             body,
             span: start.merge(body_span),
         })
+    }
+
+    /// Parse a for-of statement: `for (const/let IDENT of EXPR) BLOCK`.
+    fn parse_for_of_stmt(&mut self) -> Option<ForOfStmt> {
+        let for_token = self.advance(); // consume `for`
+        let start = for_token.span;
+
+        self.expect(&TokenKind::LParen)?;
+
+        // Parse binding kind: `const` or `let`
+        let binding_token = self.current_token().clone();
+        let binding = match &binding_token.kind {
+            TokenKind::Const => {
+                self.advance();
+                VarBinding::Const
+            }
+            TokenKind::Let => {
+                self.advance();
+                VarBinding::Let
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error("expected `const` or `let` in for-of loop").with_label(
+                        binding_token.span,
+                        self.file_id,
+                        "expected `const` or `let`",
+                    ),
+                );
+                return None;
+            }
+        };
+
+        let Some(variable) = self.parse_ident() else {
+            self.synchronize();
+            return None;
+        };
+
+        // Expect contextual keyword `of`
+        if !self.eat_contextual_keyword("of") {
+            let current = self.current_token().clone();
+            self.diagnostics.push(
+                Diagnostic::error("expected `of` in for-of loop").with_label(
+                    current.span,
+                    self.file_id,
+                    "expected `of`",
+                ),
+            );
+            return None;
+        }
+
+        let Some(iterable) = self.parse_expr() else {
+            self.synchronize();
+            return None;
+        };
+
+        self.expect(&TokenKind::RParen)?;
+
+        let body = self.parse_block()?;
+        let body_span = body.span;
+
+        Some(ForOfStmt {
+            binding,
+            variable,
+            iterable,
+            body,
+            span: start.merge(body_span),
+        })
+    }
+
+    /// Parse a `break;` statement.
+    fn parse_break_stmt(&mut self) -> BreakStmt {
+        let break_token = self.advance(); // consume `break`
+        let start = break_token.span;
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            start
+        };
+        BreakStmt {
+            span: start.merge(end),
+        }
+    }
+
+    /// Parse a `continue;` statement.
+    fn parse_continue_stmt(&mut self) -> ContinueStmt {
+        let continue_token = self.advance(); // consume `continue`
+        let start = continue_token.span;
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            start
+        };
+        ContinueStmt {
+            span: start.merge(end),
+        }
     }
 
     /// Parse a switch statement: `switch (expr) { case "v": stmts; ... }`.
@@ -4280,6 +4396,101 @@ function fail() throws string {
                 }
             }
             other => panic!("expected Intersection, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 018: For-of loops, break, continue
+    // ---------------------------------------------------------------
+
+    // T018-1: Parse `for (const x of items) { console.log(x); }` → ForOfStmt
+    #[test]
+    fn test_parser_for_of_const_produces_for_of_stmt() {
+        let source = r#"function main() {
+  for (const x of items) {
+    console.log(x);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::For(for_of) => {
+                assert_eq!(for_of.binding, VarBinding::Const);
+                assert_eq!(for_of.variable.name, "x");
+                match &for_of.iterable.kind {
+                    ExprKind::Ident(ident) => assert_eq!(ident.name, "items"),
+                    other => panic!("expected Ident iterable, got {other:?}"),
+                }
+                assert!(!for_of.body.stmts.is_empty());
+            }
+            other => panic!("expected For statement, got {other:?}"),
+        }
+    }
+
+    // T018-2: Parse `for (let x of items) { ... }` → ForOfStmt with Let binding
+    #[test]
+    fn test_parser_for_of_let_produces_for_of_stmt() {
+        let source = r#"function main() {
+  for (let x of items) {
+    console.log(x);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::For(for_of) => {
+                assert_eq!(for_of.binding, VarBinding::Let);
+                assert_eq!(for_of.variable.name, "x");
+            }
+            other => panic!("expected For statement, got {other:?}"),
+        }
+    }
+
+    // T018-3: Parse `break;` → BreakStmt
+    #[test]
+    fn test_parser_break_produces_break_stmt() {
+        let source = r#"function main() {
+  while (true) {
+    break;
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::While(while_stmt) => {
+                assert!(!while_stmt.body.stmts.is_empty());
+                match &while_stmt.body.stmts[0] {
+                    Stmt::Break(_) => {}
+                    other => panic!("expected Break statement, got {other:?}"),
+                }
+            }
+            other => panic!("expected While statement, got {other:?}"),
+        }
+    }
+
+    // T018-4: Parse `continue;` → ContinueStmt
+    #[test]
+    fn test_parser_continue_produces_continue_stmt() {
+        let source = r#"function main() {
+  while (true) {
+    continue;
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::While(while_stmt) => {
+                assert!(!while_stmt.body.stmts.is_empty());
+                match &while_stmt.body.stmts[0] {
+                    Stmt::Continue(_) => {}
+                    other => panic!("expected Continue statement, got {other:?}"),
+                }
+            }
+            other => panic!("expected While statement, got {other:?}"),
         }
     }
 }

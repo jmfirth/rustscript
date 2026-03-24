@@ -72,6 +72,12 @@ pub(crate) enum TokenKind {
     Move,
     /// `interface`
     Interface,
+    /// `for`
+    For,
+    /// `break`
+    Break,
+    /// `continue`
+    Continue,
 
     // Operators
     /// `+`

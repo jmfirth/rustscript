@@ -303,6 +303,13 @@ pub enum Stmt {
     /// A `try { ... } catch (name: Type) { ... }` statement.
     /// Lowers to a Rust `match` on `Result`.
     TryCatch(TryCatchStmt),
+    /// A `for (const/let x of items) { ... }` loop.
+    /// Lowers to Rust `for x in &items { ... }`.
+    For(ForOfStmt),
+    /// A `break;` statement.
+    Break(BreakStmt),
+    /// A `continue;` statement.
+    Continue(ContinueStmt),
 }
 
 /// A variable declaration with an initializer.
@@ -438,6 +445,42 @@ pub struct TryCatchStmt {
     /// The catch block executed when an error occurs.
     pub catch_block: Block,
     /// The span covering the entire try/catch statement.
+    pub span: Span,
+}
+
+/// A for-of loop: `for (const x of items) { ... }`.
+///
+/// Corresponds to `RustScript` `for (const/let IDENT of EXPR) { body }`.
+/// Lowers to Rust `for x in &items { body }`.
+#[derive(Debug, Clone)]
+pub struct ForOfStmt {
+    /// The binding kind (`const` or `let`).
+    pub binding: VarBinding,
+    /// The loop variable name.
+    pub variable: Ident,
+    /// The iterable expression.
+    pub iterable: Expr,
+    /// The loop body.
+    pub body: Block,
+    /// The span covering the entire for-of statement.
+    pub span: Span,
+}
+
+/// A `break` statement.
+///
+/// Terminates the innermost loop. No labeled breaks are supported.
+#[derive(Debug, Clone)]
+pub struct BreakStmt {
+    /// The span covering the `break;` keyword and semicolon.
+    pub span: Span,
+}
+
+/// A `continue` statement.
+///
+/// Skips to the next iteration of the innermost loop. No labeled continues are supported.
+#[derive(Debug, Clone)]
+pub struct ContinueStmt {
+    /// The span covering the `continue;` keyword and semicolon.
     pub span: Span,
 }
 
