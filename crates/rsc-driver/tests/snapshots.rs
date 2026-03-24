@@ -894,3 +894,76 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("enum_construction", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 017: Array literal snapshot (correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_array_literal_generates_vec_macro() {
+    let source = "\
+function main() {
+  const numbers: Array<i32> = [1, 2, 3];
+  console.log(numbers[0]);
+  console.log(numbers[1]);
+  console.log(numbers[2]);
+}";
+
+    let expected = "\
+fn main() {
+    let numbers: Vec<i32> = vec![1, 2, 3];
+    println!(\"{}\", numbers[0]);
+    println!(\"{}\", numbers[1]);
+    println!(\"{}\", numbers[2]);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("array_literal", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 017: Map construction snapshot (correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_map_construction_generates_hashmap_new() {
+    let source = "\
+function main() {
+  const lookup: Map<string, i32> = new Map();
+}";
+
+    let expected = "\
+use std::collections::HashMap;
+
+fn main() {
+    let lookup: HashMap<String, i32> = HashMap::new();
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("map_construction", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 017: Set construction snapshot (correctness scenario 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_set_construction_generates_hashset_new() {
+    let source = "\
+function main() {
+  const unique: Set<string> = new Set();
+}";
+
+    let expected = "\
+use std::collections::HashSet;
+
+fn main() {
+    let unique: HashSet<String> = HashSet::new();
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("set_construction", &actual, expected);
+}

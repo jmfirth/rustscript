@@ -325,3 +325,22 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "hello world");
 }
+
+// ---------------------------------------------------------------------------
+// 16. Array literal e2e (Task 017 correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_array_literal_prints_elements() {
+    let source = "\
+function main() {
+  const numbers: Array<i32> = [1, 2, 3];
+  console.log(numbers[0]);
+  console.log(numbers[1]);
+  console.log(numbers[2]);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "1\n2\n3");
+}

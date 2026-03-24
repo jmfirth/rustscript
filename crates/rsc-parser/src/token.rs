@@ -56,6 +56,8 @@ pub(crate) enum TokenKind {
     Switch,
     /// `case`
     Case,
+    /// `new`
+    New,
 
     // Operators
     /// `+`
@@ -118,6 +120,10 @@ pub(crate) enum TokenKind {
     Semicolon,
     /// `.`
     Dot,
+    /// `[`
+    LBracket,
+    /// `]`
+    RBracket,
 
     // Template literals
     /// The start of a template literal: `` `text${ `` — the string before the first interpolation.

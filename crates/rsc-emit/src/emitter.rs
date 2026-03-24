@@ -523,6 +523,39 @@ impl Emitter {
                 self.write("::");
                 self.write(variant_name);
             }
+            RustExprKind::VecLit(elements) => {
+                self.write("vec![");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(elem);
+                }
+                self.write("]");
+            }
+            RustExprKind::StaticCall {
+                type_name,
+                method,
+                args,
+            } => {
+                self.write(type_name);
+                self.write("::");
+                self.write(method);
+                self.write("(");
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(arg);
+                }
+                self.write(")");
+            }
+            RustExprKind::Index { object, index } => {
+                self.emit_expr(object);
+                self.write("[");
+                self.emit_expr(index);
+                self.write("]");
+            }
         }
     }
 }
@@ -1860,5 +1893,96 @@ fn main() {
         );
         let output = emit(&file);
         assert!(output.contains("let dir = Direction::North;"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 017: Collection emission
+    // ---------------------------------------------------------------
+
+    // Test T17-11: Emit `vec![1, 2, 3]`
+    #[test]
+    fn test_emit_vec_lit_three_elements() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "nums".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::VecLit(vec![
+                    int_lit(1),
+                    int_lit(2),
+                    int_lit(3),
+                ])),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(output.contains("vec![1, 2, 3]"), "output: {output}");
+    }
+
+    // Test T17-12: Emit `HashMap::new()`
+    #[test]
+    fn test_emit_hashmap_new_static_call() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "lookup".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::StaticCall {
+                    type_name: "HashMap".to_owned(),
+                    method: "new".to_owned(),
+                    args: vec![],
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(output.contains("HashMap::new()"), "output: {output}");
+    }
+
+    // Test T17-13: Emit `expr[0]`
+    #[test]
+    fn test_emit_index_access() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::Index {
+                object: Box::new(ident("arr")),
+                index: Box::new(int_lit(0)),
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(output.contains("arr[0]"), "output: {output}");
+    }
+
+    // Test T17-14: Emit `use std::collections::HashMap;`
+    #[test]
+    fn test_emit_use_declaration() {
+        let file = RustFile {
+            uses: vec![RustUseDecl {
+                path: "std::collections::HashMap".to_owned(),
+                span: None,
+            }],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "main".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("use std::collections::HashMap;"),
+            "output: {output}"
+        );
     }
 }

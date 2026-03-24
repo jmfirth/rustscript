@@ -10,7 +10,7 @@ use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef,
     RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfStmt,
     RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
-    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustWhileStmt,
+    RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -56,7 +56,7 @@ impl Transform {
             }
         }
 
-        let items = module
+        let items: Vec<RustItem> = module
             .items
             .iter()
             .map(|item| match &item.kind {
@@ -66,10 +66,13 @@ impl Transform {
             })
             .collect();
 
+        // Collect use declarations by scanning generated items for HashMap/HashSet usage
+        let uses = collect_use_declarations(&items);
+
         let diagnostics = ctx.into_diagnostics();
         (
             RustFile {
-                uses: Vec::new(),
+                uses,
                 mod_decls: Vec::new(),
                 items,
             },
@@ -868,6 +871,8 @@ impl Transform {
     }
 
     /// Lower an expression.
+    #[allow(clippy::too_many_lines)]
+    // Expression lowering covers all AST expression kinds; splitting would obscure the match
     fn lower_expr(
         &self,
         expr: &ast::Expr,
@@ -975,6 +980,27 @@ impl Transform {
             }
             ast::ExprKind::TemplateLit(tpl) => {
                 self.lower_template_lit(tpl, expr.span, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::ArrayLit(elements) => {
+                let lowered: Vec<RustExpr> = elements
+                    .iter()
+                    .map(|e| self.lower_expr(e, ctx, use_map, stmt_index))
+                    .collect();
+                RustExpr::new(RustExprKind::VecLit(lowered), expr.span)
+            }
+            ast::ExprKind::New(new_expr) => {
+                self.lower_new_expr(new_expr, expr.span, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::Index(index_expr) => {
+                let object = self.lower_expr(&index_expr.object, ctx, use_map, stmt_index);
+                let index = self.lower_expr(&index_expr.index, ctx, use_map, stmt_index);
+                RustExpr::new(
+                    RustExprKind::Index {
+                        object: Box::new(object),
+                        index: Box::new(index),
+                    },
+                    expr.span,
+                )
             }
         }
     }
@@ -1133,6 +1159,254 @@ impl Transform {
             },
             span,
         )
+    }
+
+    /// Lower a `new` expression to a Rust static method call or vec literal.
+    ///
+    /// `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`,
+    /// `new Array()` → `vec![]` (empty vec).
+    fn lower_new_expr(
+        &self,
+        new_expr: &ast::NewExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let rust_type_name =
+            rsc_typeck::resolve::map_collection_type_name(&new_expr.type_name.name);
+
+        let args: Vec<RustExpr> = new_expr
+            .args
+            .iter()
+            .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+            .collect();
+
+        match rust_type_name.as_str() {
+            "Vec" => {
+                // `new Array()` → `vec![]` (empty vec literal)
+                RustExpr::new(RustExprKind::VecLit(args), span)
+            }
+            _ => {
+                // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`
+                RustExpr::new(
+                    RustExprKind::StaticCall {
+                        type_name: rust_type_name,
+                        method: "new".to_owned(),
+                        args,
+                    },
+                    span,
+                )
+            }
+        }
+    }
+}
+
+/// Scan generated items for usage of `HashMap` or `HashSet` types and produce
+/// the corresponding `use std::collections::...` declarations.
+fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
+    let mut needs_hashmap = false;
+    let mut needs_hashset = false;
+
+    for item in items {
+        scan_item_for_collections(item, &mut needs_hashmap, &mut needs_hashset);
+    }
+
+    let mut uses = Vec::new();
+    if needs_hashmap {
+        uses.push(RustUseDecl {
+            path: "std::collections::HashMap".to_owned(),
+            span: None,
+        });
+    }
+    if needs_hashset {
+        uses.push(RustUseDecl {
+            path: "std::collections::HashSet".to_owned(),
+            span: None,
+        });
+    }
+    uses
+}
+
+/// Scan a single item for references to `HashMap` or `HashSet`.
+fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
+    match item {
+        RustItem::Function(f) => {
+            for p in &f.params {
+                scan_type_for_collections(&p.ty, needs_hashmap, needs_hashset);
+            }
+            if let Some(ret) = &f.return_type {
+                scan_type_for_collections(ret, needs_hashmap, needs_hashset);
+            }
+            scan_block_for_collections(&f.body, needs_hashmap, needs_hashset);
+        }
+        RustItem::Struct(s) => {
+            for field in &s.fields {
+                scan_type_for_collections(&field.ty, needs_hashmap, needs_hashset);
+            }
+        }
+        RustItem::Enum(e) => {
+            for variant in &e.variants {
+                for field in &variant.fields {
+                    scan_type_for_collections(&field.ty, needs_hashmap, needs_hashset);
+                }
+            }
+        }
+    }
+}
+
+/// Scan a type for `HashMap` or `HashSet` references.
+fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
+    match ty {
+        RustType::Named(name) => {
+            if name == "HashMap" {
+                *needs_hashmap = true;
+            } else if name == "HashSet" {
+                *needs_hashset = true;
+            }
+        }
+        RustType::Generic(base, args) => {
+            scan_type_for_collections(base, needs_hashmap, needs_hashset);
+            for arg in args {
+                scan_type_for_collections(arg, needs_hashmap, needs_hashset);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block for `HashMap` or `HashSet` usage in expressions and statements.
+fn scan_block_for_collections(
+    block: &RustBlock,
+    needs_hashmap: &mut bool,
+    needs_hashset: &mut bool,
+) {
+    for stmt in &block.stmts {
+        scan_stmt_for_collections(stmt, needs_hashmap, needs_hashset);
+    }
+    if let Some(expr) = &block.expr {
+        scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+    }
+}
+
+/// Scan a statement for `HashMap` or `HashSet` usage.
+fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
+    match stmt {
+        RustStmt::Let(let_stmt) => {
+            if let Some(ty) = &let_stmt.ty {
+                scan_type_for_collections(ty, needs_hashmap, needs_hashset);
+            }
+            scan_expr_for_collections(&let_stmt.init, needs_hashmap, needs_hashset);
+        }
+        RustStmt::Expr(expr) | RustStmt::Semi(expr) => {
+            scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+        }
+        RustStmt::Return(ret) => {
+            if let Some(val) = &ret.value {
+                scan_expr_for_collections(val, needs_hashmap, needs_hashset);
+            }
+        }
+        RustStmt::If(if_stmt) => {
+            scan_expr_for_collections(&if_stmt.condition, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&if_stmt.then_block, needs_hashmap, needs_hashset);
+            if let Some(else_clause) = &if_stmt.else_clause {
+                match else_clause {
+                    RustElse::Block(block) => {
+                        scan_block_for_collections(block, needs_hashmap, needs_hashset);
+                    }
+                    RustElse::ElseIf(nested_if) => {
+                        scan_expr_for_collections(
+                            &nested_if.condition,
+                            needs_hashmap,
+                            needs_hashset,
+                        );
+                        scan_block_for_collections(
+                            &nested_if.then_block,
+                            needs_hashmap,
+                            needs_hashset,
+                        );
+                    }
+                }
+            }
+        }
+        RustStmt::While(while_stmt) => {
+            scan_expr_for_collections(&while_stmt.condition, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&while_stmt.body, needs_hashmap, needs_hashset);
+        }
+        RustStmt::Destructure(destr) => {
+            scan_expr_for_collections(&destr.init, needs_hashmap, needs_hashset);
+        }
+        RustStmt::Match(match_stmt) => {
+            scan_expr_for_collections(&match_stmt.scrutinee, needs_hashmap, needs_hashset);
+            for arm in &match_stmt.arms {
+                scan_block_for_collections(&arm.body, needs_hashmap, needs_hashset);
+            }
+        }
+    }
+}
+
+/// Scan an expression for `HashMap` or `HashSet` usage.
+fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
+    match &expr.kind {
+        RustExprKind::StaticCall {
+            type_name, args, ..
+        } => {
+            if type_name == "HashMap" {
+                *needs_hashmap = true;
+            } else if type_name == "HashSet" {
+                *needs_hashset = true;
+            }
+            for arg in args {
+                scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::VecLit(elems) => {
+            for elem in elems {
+                scan_expr_for_collections(elem, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::Index { object, index } => {
+            scan_expr_for_collections(object, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(index, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::Binary { left, right, .. } => {
+            scan_expr_for_collections(left, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(right, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::Unary { operand, .. } => {
+            scan_expr_for_collections(operand, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::Call { args, .. } | RustExprKind::Macro { args, .. } => {
+            for arg in args {
+                scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::MethodCall { receiver, args, .. } => {
+            scan_expr_for_collections(receiver, needs_hashmap, needs_hashset);
+            for arg in args {
+                scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::Paren(inner) | RustExprKind::Clone(inner) | RustExprKind::ToString(inner) => {
+            scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::Assign { value, .. } | RustExprKind::CompoundAssign { value, .. } => {
+            scan_expr_for_collections(value, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::StructLit { fields, .. } => {
+            for (_, val) in fields {
+                scan_expr_for_collections(val, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::FieldAccess { object, .. } => {
+            scan_expr_for_collections(object, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::IntLit(_)
+        | RustExprKind::FloatLit(_)
+        | RustExprKind::StringLit(_)
+        | RustExprKind::BoolLit(_)
+        | RustExprKind::Ident(_)
+        | RustExprKind::EnumVariant { .. } => {}
     }
 }
 
@@ -2947,5 +3221,228 @@ mod tests {
             }
             _ => panic!("expected Enum item"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 017: Collection lowering
+    // ---------------------------------------------------------------
+
+    // Test T17-7: Lower array literal → RustExprKind::VecLit
+    #[test]
+    fn test_lower_array_literal_produces_vec_lit() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("nums", 0, 4),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::ArrayLit(vec![
+                        int_expr(1, 0, 1),
+                        int_expr(2, 3, 4),
+                        int_expr(3, 6, 7),
+                    ]),
+                    span: span(0, 8),
+                },
+                span: span(0, 10),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        assert!(matches!(let_stmt.init.kind, RustExprKind::VecLit(_)));
+        if let RustExprKind::VecLit(elems) = &let_stmt.init.kind {
+            assert_eq!(elems.len(), 3);
+        }
+    }
+
+    // Test T17-8: Lower `new Map()` → StaticCall { type_name: "HashMap", method: "new" }
+    #[test]
+    fn test_lower_new_map_produces_static_call_hashmap() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("lookup", 0, 6),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Generic(
+                        ident("Map", 0, 3),
+                        vec![
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("string", 0, 6)),
+                                span: span(0, 6),
+                            },
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("i32", 0, 3)),
+                                span: span(0, 3),
+                            },
+                        ],
+                    ),
+                    span: span(0, 20),
+                }),
+                init: Expr {
+                    kind: ExprKind::New(ast::NewExpr {
+                        type_name: ident("Map", 0, 3),
+                        type_args: vec![],
+                        args: vec![],
+                    }),
+                    span: span(0, 10),
+                },
+                span: span(0, 30),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        match &let_stmt.init.kind {
+            RustExprKind::StaticCall {
+                type_name, method, ..
+            } => {
+                assert_eq!(type_name, "HashMap");
+                assert_eq!(method, "new");
+            }
+            _ => panic!("expected StaticCall, got {:?}", let_stmt.init.kind),
+        }
+    }
+
+    // Test T17-9: Lower index access → RustExprKind::Index
+    #[test]
+    fn test_lower_index_access_produces_index() {
+        let f = make_fn(
+            "main",
+            vec![make_param("arr", "i32")],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::Index(ast::IndexExpr {
+                    object: Box::new(ident_expr("arr", 0, 3)),
+                    index: Box::new(int_expr(0, 4, 5)),
+                }),
+                span: span(0, 6),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Semi(expr) = &func.body.stmts[0] else {
+            panic!("expected Semi");
+        };
+        assert!(matches!(expr.kind, RustExprKind::Index { .. }));
+    }
+
+    // Test T17-10: Lower `Array<string>` type → Vec<String> in Rust type
+    #[test]
+    fn test_lower_array_string_type_to_vec_string() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("names", 0, 5),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Generic(
+                        ident("Array", 0, 5),
+                        vec![TypeAnnotation {
+                            kind: TypeKind::Named(ident("string", 0, 6)),
+                            span: span(0, 6),
+                        }],
+                    ),
+                    span: span(0, 13),
+                }),
+                init: Expr {
+                    kind: ExprKind::ArrayLit(vec![]),
+                    span: span(0, 2),
+                },
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, diags) = transform.lower_module(&module);
+        assert!(diags.is_empty());
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        // Type should be Vec<String>
+        let expected_ty = RustType::Generic(
+            Box::new(RustType::Named("Vec".to_owned())),
+            vec![RustType::String],
+        );
+        assert_eq!(let_stmt.ty, Some(expected_ty));
+    }
+
+    // Test T17-14: use declarations generated for HashMap
+    #[test]
+    fn test_lower_map_generates_use_hashmap() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("lookup", 0, 6),
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Generic(
+                        ident("Map", 0, 3),
+                        vec![
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("string", 0, 6)),
+                                span: span(0, 6),
+                            },
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("i32", 0, 3)),
+                                span: span(0, 3),
+                            },
+                        ],
+                    ),
+                    span: span(0, 20),
+                }),
+                init: Expr {
+                    kind: ExprKind::New(ast::NewExpr {
+                        type_name: ident("Map", 0, 3),
+                        type_args: vec![],
+                        args: vec![],
+                    }),
+                    span: span(0, 10),
+                },
+                span: span(0, 30),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new();
+        let (file, _diags) = transform.lower_module(&module);
+
+        assert!(!file.uses.is_empty(), "expected use declarations");
+        assert!(
+            file.uses
+                .iter()
+                .any(|u| u.path == "std::collections::HashMap"),
+            "expected use std::collections::HashMap"
+        );
     }
 }
