@@ -255,7 +255,13 @@ impl Transform {
             ast::ExprKind::IntLit(v) => RustExpr::new(RustExprKind::IntLit(*v), expr.span),
             ast::ExprKind::FloatLit(v) => RustExpr::new(RustExprKind::FloatLit(*v), expr.span),
             ast::ExprKind::StringLit(s) => {
-                RustExpr::new(RustExprKind::StringLit(s.clone()), expr.span)
+                // In Rust, string literals are &str. RustScript's `string` type is
+                // String (owned). Wrap in .to_string() so the expression produces
+                // an owned String. The exception is when this literal ends up inside
+                // a println! format position — but that's handled by the builtin
+                // registry which constructs its own StringLit for the format string.
+                let lit = RustExpr::new(RustExprKind::StringLit(s.clone()), expr.span);
+                RustExpr::synthetic(RustExprKind::ToString(Box::new(lit)))
             }
             ast::ExprKind::BoolLit(v) => RustExpr::new(RustExprKind::BoolLit(*v), expr.span),
             ast::ExprKind::Ident(ident) => {

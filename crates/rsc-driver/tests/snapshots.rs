@@ -32,7 +32,7 @@ function main() {
 
     let expected = "\
 fn main() {
-    println!(\"{}\", \"Hello, World!\");
+    println!(\"{}\", \"Hello, World!\".to_string());
 }
 ";
 
@@ -136,11 +136,11 @@ fn main() {
     let mut i: i64 = 1;
     while i <= 15 {
         if i % 15 == 0 {
-            println!(\"{}\", \"FizzBuzz\");
+            println!(\"{}\", \"FizzBuzz\".to_string());
         } else if i % 3 == 0 {
-            println!(\"{}\", \"Fizz\");
+            println!(\"{}\", \"Fizz\".to_string());
         } else if i % 5 == 0 {
-            println!(\"{}\", \"Buzz\");
+            println!(\"{}\", \"Buzz\".to_string());
         } else {
             println!(\"{}\", i);
         }
@@ -176,7 +176,7 @@ fn greet(name: String) {
 }
 
 fn main() {
-    let name: String = \"Alice\";
+    let name: String = \"Alice\".to_string();
     greet(name.clone());
     println!(\"{}\", name);
 }

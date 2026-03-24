@@ -117,22 +117,9 @@ FizzBuzz";
 // 5. Strings and clone behavior
 // ---------------------------------------------------------------------------
 
-// BUG: The compiler emits `let name: String = "Alice"` which is a type mismatch
-// in Rust (`&str` assigned to `String`). The emitter needs to produce
-// `"Alice".to_string()` or `String::from("Alice")` for string literal bindings
-// with type `String`. This is a compiler bug in rsc-emit/rsc-lower, not a test
-// issue. Tracked for a future fix.
-//
-// This test validates the bug exists: RustScript compilation succeeds but
-// the generated Rust fails to compile. When the compiler bug is fixed, this
-// test will fail (cargo will succeed) — that's the signal to convert it back
-// to a normal e2e test using `compile_and_run`.
 #[test]
 #[ignore]
-fn test_e2e_strings_known_bug_string_literal_assignment() {
-    use std::fs;
-    use std::process::Command;
-
+fn test_e2e_strings_clone_behavior() {
     let source = "\
 function greet(name: string): void {
   console.log(name);
@@ -144,44 +131,8 @@ function main() {
   console.log(name);
 }";
 
-    // RustScript compilation should succeed (the bug is in codegen, not parsing/lowering).
-    let rust_source = test_utils::compile_to_rust(source);
-    assert!(
-        rust_source.contains("fn greet"),
-        "expected fn greet in output"
-    );
-
-    // The generated Rust should NOT compile due to the `String = "literal"` bug.
-    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
-    let src_dir = tmp_dir.path().join("src");
-    fs::create_dir_all(&src_dir).expect("failed to create src dir");
-
-    let cargo_toml =
-        "[package]\nname = \"rsc-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n";
-    fs::write(tmp_dir.path().join("Cargo.toml"), cargo_toml).expect("failed to write Cargo.toml");
-    fs::write(src_dir.join("main.rs"), &rust_source).expect("failed to write main.rs");
-
-    let output = Command::new("cargo")
-        .arg("build")
-        .arg("--quiet")
-        .current_dir(tmp_dir.path())
-        .output()
-        .expect("failed to run cargo");
-
-    // This assertion documents the known bug. When the compiler is fixed,
-    // cargo build will succeed and this test will fail — convert it back
-    // to a normal `compile_and_run` e2e test at that point.
-    assert!(
-        !output.status.success(),
-        "cargo build unexpectedly succeeded — the string literal bug may be fixed! \
-         Convert this test back to: compile_and_run(source) == \"Alice\\nAlice\""
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("expected `String`, found `&str`"),
-        "expected the known type mismatch error, got: {stderr}"
-    );
+    let stdout = test_utils::compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice\nAlice");
 }
 
 // ---------------------------------------------------------------------------
