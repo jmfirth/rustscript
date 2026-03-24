@@ -80,6 +80,16 @@ pub(crate) enum TokenKind {
     Bang,
     /// `=`
     Eq,
+    /// `+=`
+    PlusEq,
+    /// `-=`
+    MinusEq,
+    /// `*=`
+    StarEq,
+    /// `/=`
+    SlashEq,
+    /// `%=`
+    PercentEq,
 
     // Delimiters
     /// `(`

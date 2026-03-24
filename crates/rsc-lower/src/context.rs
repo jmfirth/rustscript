@@ -26,12 +26,6 @@ pub(crate) struct Scope {
 pub(crate) struct VarInfo {
     /// The resolved Rust type of the variable.
     pub ty: RustType,
-    /// Whether the variable is mutable (`let mut` vs `let`).
-    ///
-    /// Currently read only in tests; will be used by later phases
-    /// for scope-aware mutability queries.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub mutable: bool,
 }
 
 impl LoweringContext {
@@ -58,9 +52,9 @@ impl LoweringContext {
     }
 
     /// Declare a variable in the current (innermost) scope.
-    pub fn declare_variable(&mut self, name: String, ty: RustType, mutable: bool) {
+    pub fn declare_variable(&mut self, name: String, ty: RustType) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.variables.insert(name, VarInfo { ty, mutable });
+            scope.variables.insert(name, VarInfo { ty });
         }
     }
 
@@ -72,20 +66,6 @@ impl LoweringContext {
             }
         }
         None
-    }
-
-    /// Mark a variable as mutable in whatever scope it was declared in.
-    ///
-    /// Currently used only in tests; will be needed by later phases
-    /// for scope-aware mutability updates.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn mark_mutable(&mut self, name: &str) {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(info) = scope.variables.get_mut(name) {
-                info.mutable = true;
-                return;
-            }
-        }
     }
 
     /// Add a diagnostic to the accumulated list.
@@ -106,12 +86,11 @@ mod tests {
     #[test]
     fn test_context_declare_and_lookup_variable() {
         let mut ctx = LoweringContext::new();
-        ctx.declare_variable("x".to_owned(), RustType::I32, false);
+        ctx.declare_variable("x".to_owned(), RustType::I32);
         let info = ctx.lookup_variable("x");
         assert!(info.is_some());
         let info = info.unwrap();
         assert_eq!(info.ty, RustType::I32);
-        assert!(!info.mutable);
     }
 
     #[test]
@@ -123,25 +102,14 @@ mod tests {
     #[test]
     fn test_context_nested_scope_shadows_outer() {
         let mut ctx = LoweringContext::new();
-        ctx.declare_variable("x".to_owned(), RustType::I32, false);
+        ctx.declare_variable("x".to_owned(), RustType::I32);
         ctx.push_scope();
-        ctx.declare_variable("x".to_owned(), RustType::String, true);
+        ctx.declare_variable("x".to_owned(), RustType::String);
         let info = ctx.lookup_variable("x").unwrap();
         assert_eq!(info.ty, RustType::String);
-        assert!(info.mutable);
         ctx.pop_scope();
         let info = ctx.lookup_variable("x").unwrap();
         assert_eq!(info.ty, RustType::I32);
-        assert!(!info.mutable);
-    }
-
-    #[test]
-    fn test_context_mark_mutable() {
-        let mut ctx = LoweringContext::new();
-        ctx.declare_variable("x".to_owned(), RustType::I64, false);
-        assert!(!ctx.lookup_variable("x").unwrap().mutable);
-        ctx.mark_mutable("x");
-        assert!(ctx.lookup_variable("x").unwrap().mutable);
     }
 
     #[test]

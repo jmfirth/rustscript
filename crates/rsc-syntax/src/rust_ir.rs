@@ -321,6 +321,43 @@ pub enum RustExprKind {
     Clone(Box<RustExpr>),
     /// A `.to_string()` conversion.
     ToString(Box<RustExpr>),
+    /// A compound assignment expression (e.g., `x += 1`).
+    CompoundAssign {
+        /// The assignment target.
+        target: String,
+        /// The compound assignment operator.
+        op: RustCompoundAssignOp,
+        /// The right-hand side value.
+        value: Box<RustExpr>,
+    },
+}
+
+/// A compound assignment operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustCompoundAssignOp {
+    /// Addition assignment (`+=`).
+    AddAssign,
+    /// Subtraction assignment (`-=`).
+    SubAssign,
+    /// Multiplication assignment (`*=`).
+    MulAssign,
+    /// Division assignment (`/=`).
+    DivAssign,
+    /// Remainder assignment (`%=`).
+    RemAssign,
+}
+
+impl std::fmt::Display for RustCompoundAssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::AddAssign => "+=",
+            Self::SubAssign => "-=",
+            Self::MulAssign => "*=",
+            Self::DivAssign => "/=",
+            Self::RemAssign => "%=",
+        };
+        f.write_str(s)
+    }
 }
 
 /// Rust binary operators.
