@@ -178,3 +178,39 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "55");
 }
+
+// ---------------------------------------------------------------------------
+// 8. U32 arithmetic (Task 013 correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_u32_arithmetic_prints_30() {
+    let source = "\
+function main() {
+  const x: u32 = 10;
+  const y: u32 = 20;
+  console.log(x + y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "30");
+}
+
+// ---------------------------------------------------------------------------
+// 9. F32 floating point (Task 013 correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_f32_floating_point_prints_4() {
+    let source = "\
+function main() {
+  const x: f32 = 1.5;
+  const y: f32 = 2.5;
+  console.log(x + y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "4");
+}
