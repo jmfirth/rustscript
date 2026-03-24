@@ -4,8 +4,8 @@
 
 use rsc_syntax::rust_ir::{
     RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
-    RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustMatchResultStmt, RustMatchStmt,
-    RustPattern, RustStmt, RustStructDef, RustTraitDef, RustTypeParam,
+    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustItem, RustMatchResultStmt,
+    RustMatchStmt, RustPattern, RustStmt, RustStructDef, RustTraitDef, RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -415,6 +415,19 @@ impl Emitter {
                 self.emit_match_result(match_result);
                 self.newline();
             }
+            RustStmt::ForIn(for_in) => {
+                self.write_indent();
+                self.emit_for_in(for_in);
+                self.newline();
+            }
+            RustStmt::Break(_) => {
+                self.write_indent();
+                self.writeln("break;");
+            }
+            RustStmt::Continue(_) => {
+                self.write_indent();
+                self.writeln("continue;");
+            }
         }
     }
 
@@ -480,6 +493,16 @@ impl Emitter {
         self.pop_indent();
         self.write_indent();
         self.write("}");
+    }
+
+    /// Emit a for-in loop: `for variable in &iterable { body }`.
+    fn emit_for_in(&mut self, for_in: &RustForInStmt) {
+        self.write("for ");
+        self.write(&for_in.variable);
+        self.write(" in &");
+        self.emit_expr(&for_in.iterable);
+        self.write(" ");
+        self.emit_block(&for_in.body);
     }
 
     /// Emit an expression.
@@ -756,9 +779,9 @@ pub fn emit(file: &RustFile) -> String {
 mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
-        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt,
-        RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustModDecl,
-        RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustTraitDef,
+        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
+        RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
+        RustModDecl, RustParam, RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustTraitDef,
         RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
@@ -2614,6 +2637,58 @@ fn main() {
         assert!(
             output.contains("fn clone(&self) -> Self;"),
             "expected Self return type in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 018: For-of loops, break, continue emission
+    // ---------------------------------------------------------------
+
+    // T018-8: Emit `for x in &items { ... }`
+    #[test]
+    fn test_emit_for_in_with_borrow() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::ForIn(RustForInStmt {
+                variable: "x".to_owned(),
+                iterable: ident("items"),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Semi(syn(RustExprKind::Macro {
+                        name: "println".to_owned(),
+                        args: vec![ident("x")],
+                    }))],
+                    expr: None,
+                },
+                span: None,
+            })],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("for x in &items"),
+            "expected `for x in &items` in output:\n{output}"
+        );
+    }
+
+    // T018-9: Emit `break;`
+    #[test]
+    fn test_emit_break_statement() {
+        let file = simple_fn("main", vec![RustStmt::Break(None)], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("break;"),
+            "expected `break;` in output:\n{output}"
+        );
+    }
+
+    // T018-10: Emit `continue;`
+    #[test]
+    fn test_emit_continue_statement() {
+        let file = simple_fn("main", vec![RustStmt::Continue(None)], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("continue;"),
+            "expected `continue;` in output:\n{output}"
         );
     }
 }

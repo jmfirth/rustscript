@@ -422,6 +422,92 @@ function process(input: Serializable & Printable): string {
         );
     }
 
+    // ---- Task 018: For-of loops, break, continue correctness scenarios ----
+
+    // Correctness scenario 1: For-of array iteration e2e
+    #[test]
+    fn test_compile_source_for_of_array_iteration() {
+        let source = r#"function main() {
+  const numbers: Array<i32> = [1, 2, 3, 4, 5];
+  for (const n of numbers) {
+    console.log(n);
+  }
+}"#;
+        let result = compile_source(source, "for_of.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("for n in &numbers"),
+            "expected `for n in &numbers` in output, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("let numbers: Vec<i32>"),
+            "expected `let numbers: Vec<i32>` in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 2: Break in while loop e2e
+    #[test]
+    fn test_compile_source_break_in_while_loop() {
+        let source = r#"function main() {
+  let i = 0;
+  while (true) {
+    if (i >= 3) { break; }
+    console.log(i);
+    i += 1;
+  }
+}"#;
+        let result = compile_source(source, "break_while.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("break;"),
+            "expected `break;` in output, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("while true"),
+            "expected `while true` in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness scenario 3: Continue in for-of e2e
+    #[test]
+    fn test_compile_source_continue_in_for_of() {
+        let source = r#"function main() {
+  const numbers: Array<i32> = [1, 2, 3, 4, 5];
+  for (const n of numbers) {
+    if (n == 3) { continue; }
+    console.log(n);
+  }
+}"#;
+        let result = compile_source(source, "continue_for.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("continue;"),
+            "expected `continue;` in output, got:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("for n in &numbers"),
+            "expected `for n in &numbers` in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
     // Correctness scenario 3: Interface with Self type
     #[test]
     fn test_compile_source_interface_self_type_e2e() {

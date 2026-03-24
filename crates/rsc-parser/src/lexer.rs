@@ -672,6 +672,9 @@ impl<'a> Lexer<'a> {
             "catch" => TokenKind::Catch,
             "move" => TokenKind::Move,
             "interface" => TokenKind::Interface,
+            "for" => TokenKind::For,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -1300,5 +1303,41 @@ mod tests {
         assert_eq!(tokens.len(), 3); // Eq, Gt, Eof
         assert_eq!(tokens[0].kind, TokenKind::Eq);
         assert_eq!(tokens[1].kind, TokenKind::Gt);
+    }
+
+    // ---------------------------------------------------------------
+    // Task 018: For-of loops, break, continue tokens
+    // ---------------------------------------------------------------
+
+    // 43. `for` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_for_keyword_produces_for_token() {
+        let tokens = tokenize("for");
+        assert_eq!(tokens.len(), 2); // For + Eof
+        assert_eq!(tokens[0].kind, TokenKind::For);
+    }
+
+    // 44. `of` is a contextual keyword — lexed as an identifier
+    #[test]
+    fn test_lexer_of_is_identifier_not_keyword() {
+        let tokens = tokenize("of");
+        assert_eq!(tokens.len(), 2); // Ident + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Ident("of".to_owned()));
+    }
+
+    // 45. `break` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_break_keyword_produces_break_token() {
+        let tokens = tokenize("break");
+        assert_eq!(tokens.len(), 2); // Break + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Break);
+    }
+
+    // 46. `continue` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_continue_keyword_produces_continue_token() {
+        let tokens = tokenize("continue");
+        assert_eq!(tokens.len(), 2); // Continue + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Continue);
     }
 }

@@ -9,10 +9,10 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustCompoundAssignOp,
     RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
-    RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt, RustIfStmt, RustItem, RustLetStmt,
-    RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam, RustPattern, RustReturnStmt,
-    RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
-    RustUseDecl, RustWhileStmt,
+    RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustItem,
+    RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam, RustPattern,
+    RustReturnStmt, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType,
+    RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -621,6 +621,11 @@ impl Transform {
             ast::Stmt::TryCatch(tc) => {
                 self.lower_try_catch(tc, ctx, use_map, stmt_index, reassigned)
             }
+            ast::Stmt::For(for_of) => {
+                RustStmt::ForIn(self.lower_for_of(for_of, ctx, use_map, stmt_index, reassigned))
+            }
+            ast::Stmt::Break(brk) => RustStmt::Break(Some(brk.span)),
+            ast::Stmt::Continue(cont) => RustStmt::Continue(Some(cont.span)),
         }
     }
 
@@ -934,6 +939,29 @@ impl Transform {
             condition,
             body,
             span: Some(while_stmt.span),
+        }
+    }
+
+    /// Lower a for-of statement to a Rust for-in loop.
+    ///
+    /// `for (const x of items) { body }` → `for x in &items { body }`.
+    /// The iterable is always borrowed (`&items`) in Tier 1.
+    fn lower_for_of(
+        &self,
+        for_of: &ast::ForOfStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustForInStmt {
+        let iterable = self.lower_expr(&for_of.iterable, ctx, use_map, stmt_index);
+        let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
+
+        RustForInStmt {
+            variable: for_of.variable.name.clone(),
+            iterable,
+            body,
+            span: Some(for_of.span),
         }
     }
 
@@ -2082,6 +2110,11 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
             scan_block_for_collections(&match_result.ok_block, needs_hashmap, needs_hashset);
             scan_block_for_collections(&match_result.err_block, needs_hashmap, needs_hashset);
         }
+        RustStmt::ForIn(for_in) => {
+            scan_expr_for_collections(&for_in.iterable, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&for_in.body, needs_hashmap, needs_hashset);
+        }
+        RustStmt::Break(_) | RustStmt::Continue(_) => {}
     }
 }
 
@@ -5028,5 +5061,55 @@ mod tests {
         assert!(func.type_params[0].bounds.contains(&"Printable".to_owned()));
         // Parameter should use the type parameter
         assert_eq!(func.params[0].ty, RustType::TypeParam("T".to_owned()));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 018: For-of loops, break, continue lowering
+    // ---------------------------------------------------------------
+
+    // T018-5: Lower for-of → RustForInStmt with iterable
+    #[test]
+    fn test_lower_for_of_produces_for_in_stmt() {
+        let source = r#"function main() {
+  const items: Array<i32> = [1, 2, 3];
+  for (const x of items) {
+    console.log(x);
+  }
+}"#;
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("for x in &items"),
+            "expected `for x in &items` in output, got:\n{output}"
+        );
+    }
+
+    // T018-6: Lower break → RustStmt::Break
+    #[test]
+    fn test_lower_break_produces_break_stmt() {
+        let source = r#"function main() {
+  while (true) {
+    break;
+  }
+}"#;
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("break;"),
+            "expected `break;` in output, got:\n{output}"
+        );
+    }
+
+    // T018-7: Lower continue → RustStmt::Continue
+    #[test]
+    fn test_lower_continue_produces_continue_stmt() {
+        let source = r#"function main() {
+  while (true) {
+    continue;
+  }
+}"#;
+        let output = compile_and_emit(source);
+        assert!(
+            output.contains("continue;"),
+            "expected `continue;` in output, got:\n{output}"
+        );
     }
 }
