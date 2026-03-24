@@ -675,6 +675,9 @@ impl<'a> Lexer<'a> {
             "for" => TokenKind::For,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "import" => TokenKind::Import,
+            "export" => TokenKind::Export,
+            "from" => TokenKind::From,
             _ => TokenKind::Ident(text.to_owned()),
         };
 

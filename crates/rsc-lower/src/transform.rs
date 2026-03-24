@@ -71,7 +71,9 @@ impl Transform {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
                 ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
                 ast::ItemKind::Interface(iface) => self.register_interface_def(iface, &mut ctx),
-                ast::ItemKind::Function(_) => {}
+                ast::ItemKind::Function(_)
+                | ast::ItemKind::Import(_)
+                | ast::ItemKind::ReExport(_) => {}
             }
         }
 
@@ -82,21 +84,60 @@ impl Transform {
             }
         }
 
-        let items: Vec<RustItem> = module
-            .items
-            .iter()
-            .map(|item| match &item.kind {
-                ast::ItemKind::Function(f) => RustItem::Function(self.lower_fn(f, &mut ctx)),
-                ast::ItemKind::TypeDef(td) => RustItem::Struct(self.lower_type_def(td, &mut ctx)),
-                ast::ItemKind::EnumDef(ed) => RustItem::Enum(self.lower_enum_def(ed, &mut ctx)),
-                ast::ItemKind::Interface(iface) => {
-                    RustItem::Trait(self.lower_interface_def(iface, &mut ctx))
+        let mut items: Vec<RustItem> = Vec::new();
+        let mut import_uses: Vec<RustUseDecl> = Vec::new();
+
+        for item in &module.items {
+            let exported = item.exported;
+            match &item.kind {
+                ast::ItemKind::Function(f) => {
+                    let mut lowered = self.lower_fn(f, &mut ctx);
+                    lowered.public = exported;
+                    items.push(RustItem::Function(lowered));
                 }
-            })
-            .collect();
+                ast::ItemKind::TypeDef(td) => {
+                    let mut lowered = self.lower_type_def(td, &mut ctx);
+                    lowered.public = exported;
+                    items.push(RustItem::Struct(lowered));
+                }
+                ast::ItemKind::EnumDef(ed) => {
+                    let mut lowered = self.lower_enum_def(ed, &mut ctx);
+                    lowered.public = exported;
+                    items.push(RustItem::Enum(lowered));
+                }
+                ast::ItemKind::Interface(iface) => {
+                    let mut lowered = self.lower_interface_def(iface, &mut ctx);
+                    lowered.public = exported;
+                    items.push(RustItem::Trait(lowered));
+                }
+                ast::ItemKind::Import(import) => {
+                    let module_path = resolve_import_path(&import.source.value);
+                    for name in &import.names {
+                        import_uses.push(RustUseDecl {
+                            path: format!("{}::{}", module_path, name.name),
+                            public: false,
+                            span: Some(import.span),
+                        });
+                    }
+                }
+                ast::ItemKind::ReExport(reexport) => {
+                    let module_path = resolve_import_path(&reexport.source.value);
+                    for name in &reexport.names {
+                        import_uses.push(RustUseDecl {
+                            path: format!("{}::{}", module_path, name.name),
+                            public: true,
+                            span: Some(reexport.span),
+                        });
+                    }
+                }
+            }
+        }
 
         // Collect use declarations by scanning generated items for HashMap/HashSet usage
-        let uses = collect_use_declarations(&items);
+        let mut uses = collect_use_declarations(&items);
+        // Prepend import-derived use declarations
+        import_uses.append(&mut uses);
+        let uses = import_uses;
 
         let diagnostics = ctx.into_diagnostics();
         (
@@ -160,6 +201,7 @@ impl Transform {
             ctx.emit_diagnostic(d);
         }
         RustStructDef {
+            public: false,
             name: td.name.name.clone(),
             type_params,
             fields,
@@ -329,6 +371,7 @@ impl Transform {
         }
 
         RustTraitDef {
+            public: false,
             name: iface.name.name.clone(),
             type_params,
             methods,
@@ -381,6 +424,7 @@ impl Transform {
             ctx.emit_diagnostic(d);
         }
         RustEnumDef {
+            public: false,
             name: ed.name.name.clone(),
             variants,
             span: Some(ed.span),
@@ -551,6 +595,7 @@ impl Transform {
         ctx.pop_scope();
 
         RustFnDecl {
+            public: false,
             name: f.name.name.clone(),
             type_params,
             params,
@@ -1941,6 +1986,15 @@ impl Transform {
     }
 }
 
+/// Resolve a `RustScript` import path to a Rust module path.
+///
+/// Maps `"./models"` to `crate::models`, `"./utils/helpers"` to `crate::utils::helpers`.
+fn resolve_import_path(source: &str) -> String {
+    let stripped = source.strip_prefix("./").unwrap_or(source);
+    let module_path = stripped.replace('/', "::");
+    format!("crate::{module_path}")
+}
+
 /// Scan generated items for usage of `HashMap` or `HashSet` types and produce
 /// the corresponding `use std::collections::...` declarations.
 fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
@@ -1955,12 +2009,14 @@ fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     if needs_hashmap {
         uses.push(RustUseDecl {
             path: "std::collections::HashMap".to_owned(),
+            public: false,
             span: None,
         });
     }
     if needs_hashset {
         uses.push(RustUseDecl {
             path: "std::collections::HashSet".to_owned(),
+            public: false,
             span: None,
         });
     }
@@ -5110,6 +5166,100 @@ mod tests {
         assert!(
             output.contains("continue;"),
             "expected `continue;` in output, got:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 024: import/export lowering
+    // ---------------------------------------------------------------
+
+    // Test 5: Lower import → RustUseDecl with correct path
+    #[test]
+    fn test_lower_import_produces_use_decl() {
+        let source = r#"import { User } from "./models";
+function main() {}"#;
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        let (ir, _) = crate::lower(&module);
+        let use_paths: Vec<&str> = ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"crate::models::User"),
+            "expected use crate::models::User in uses, got: {use_paths:?}"
+        );
+    }
+
+    // Test 6: Lower exported function → RustFnDecl with public: true
+    #[test]
+    fn test_lower_exported_function_is_public() {
+        let source = "export function greet(): void { return; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        let (ir, _) = crate::lower(&module);
+        assert_eq!(ir.items.len(), 1);
+        match &ir.items[0] {
+            RustItem::Function(f) => {
+                assert!(f.public, "exported function should be public");
+                assert_eq!(f.name, "greet");
+            }
+            other => panic!("expected Function item, got {other:?}"),
+        }
+    }
+
+    // Test 7: Lower non-exported function → RustFnDecl with public: false
+    #[test]
+    fn test_lower_non_exported_function_is_not_public() {
+        let source = "function helper(): i32 { return 42; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        let (ir, _) = crate::lower(&module);
+        assert_eq!(ir.items.len(), 1);
+        match &ir.items[0] {
+            RustItem::Function(f) => {
+                assert!(!f.public, "non-exported function should not be public");
+            }
+            other => panic!("expected Function item, got {other:?}"),
+        }
+    }
+
+    // Test 8: Lower re-export → pub use
+    #[test]
+    fn test_lower_re_export_produces_pub_use() {
+        let source = "export { User } from \"./models\";";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        let (ir, _) = crate::lower(&module);
+        let pub_uses: Vec<&RustUseDecl> = ir.uses.iter().filter(|u| u.public).collect();
+        assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
+        assert_eq!(pub_uses[0].path, "crate::models::User");
+    }
+
+    // Test: Lower exported type → public struct
+    #[test]
+    fn test_lower_exported_type_is_public() {
+        let source = "export type User = { name: string, age: u32 }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        let (ir, _) = crate::lower(&module);
+        match &ir.items[0] {
+            RustItem::Struct(s) => {
+                assert!(s.public, "exported type should be public");
+                assert_eq!(s.name, "User");
+            }
+            other => panic!("expected Struct item, got {other:?}"),
+        }
+    }
+
+    // Test: resolve_import_path
+    #[test]
+    fn test_resolve_import_path_simple() {
+        assert_eq!(resolve_import_path("./models"), "crate::models");
+    }
+
+    #[test]
+    fn test_resolve_import_path_nested() {
+        assert_eq!(
+            resolve_import_path("./utils/helpers"),
+            "crate::utils::helpers"
         );
     }
 }

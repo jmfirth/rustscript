@@ -9,8 +9,10 @@ use std::process::Command;
 
 use rsc_syntax::diagnostic::{Severity, render_diagnostics};
 
+use rsc_syntax::rust_ir::RustModDecl;
+
 use crate::error::{DriverError, Result};
-use crate::pipeline::{CompileResult, compile_source};
+use crate::pipeline::{CompileResult, compile_source, compile_source_with_mods};
 
 /// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
 const PROJECT_MANIFEST: &str = "cargo.toml";
@@ -94,9 +96,37 @@ impl Project {
         Err(DriverError::MainSourceNotFound)
     }
 
+    /// Discover all `.rts` source files in the `src/` directory (non-recursive for Phase 1).
+    ///
+    /// Returns a list of paths to `.rts` files, excluding the main entry point.
+    fn discover_modules(&self) -> Result<Vec<PathBuf>> {
+        let src_dir = self.root.join("src");
+        let main_source = self.main_source()?;
+        let mut modules = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&src_dir) {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().is_some_and(|ext| ext == "rts")
+                    && path != main_source
+                {
+                    modules.push(path);
+                }
+            }
+        }
+
+        // Sort for deterministic output
+        modules.sort();
+        Ok(modules)
+    }
+
     /// Compile the project: read `.rts` source, run pipeline, write `.rs` output.
     ///
-    /// Returns the [`CompileResult`] and the path to the build directory.
+    /// Discovers all `.rts` files in `src/`, compiles each independently, generates
+    /// `mod` declarations for the main file, and writes all output to `.rsc-build/src/`.
+    ///
+    /// Returns the [`CompileResult`] for the main file and the path to the build directory.
     ///
     /// # Errors
     ///
@@ -105,12 +135,7 @@ impl Project {
     pub fn compile(&self) -> Result<(CompileResult, PathBuf)> {
         let source_path = self.main_source()?;
         let source = fs::read_to_string(&source_path)?;
-
-        let file_name = source_path
-            .file_name()
-            .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
-
-        let result = compile_source(&source, file_name);
+        let module_files = self.discover_modules()?;
 
         let build_dir = self.root.join(BUILD_DIR);
         let src_dir = build_dir.join("src");
@@ -126,8 +151,67 @@ impl Project {
         );
         fs::write(build_dir.join("Cargo.toml"), cargo_toml)?;
 
+        // Compile each module file and collect mod declarations
+        let mut mod_decls = Vec::new();
+        let mut has_module_errors = false;
+
+        for module_path in &module_files {
+            let module_source = fs::read_to_string(module_path)?;
+            let module_file_name = module_path
+                .file_name()
+                .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
+
+            let module_result = compile_source(&module_source, module_file_name);
+
+            if module_result.has_errors {
+                has_module_errors = true;
+                render_errors(&module_result);
+                continue;
+            }
+
+            // Derive module name from filename: "utils.rts" → "utils"
+            let module_name = module_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_owned();
+
+            // Write the module's .rs file
+            fs::write(
+                src_dir.join(format!("{module_name}.rs")),
+                &module_result.rust_source,
+            )?;
+
+            mod_decls.push(RustModDecl {
+                name: module_name,
+                public: false,
+                span: None,
+            });
+        }
+
+        // Compile the main file with mod declarations for discovered modules
+        let file_name = source_path
+            .file_name()
+            .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
+
+        let result = if mod_decls.is_empty() {
+            compile_source(&source, file_name)
+        } else {
+            compile_source_with_mods(&source, file_name, mod_decls)
+        };
+
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
+
+        // If any module had errors, propagate that
+        let result = if has_module_errors && !result.has_errors {
+            CompileResult {
+                has_errors: true,
+                ..result
+            }
+        } else {
+            result
+        };
 
         Ok((result, build_dir))
     }
@@ -524,6 +608,87 @@ mod tests {
         assert!(
             build_dir.join("Cargo.lock").is_file(),
             "Cargo.lock should be preserved across recompilations"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 024: Multi-file compilation
+    // ---------------------------------------------------------------
+
+    // Test 13: Driver compiles a two-file project (main + one module)
+    #[test]
+    fn test_project_compile_two_file_project() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("multi-file");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Write cargo.toml
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"multi-file\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        // Write main file with import
+        fs::write(
+            src_dir.join("index.rts"),
+            "import { greet } from \"./utils\";\n\nfunction main() {\n  greet(\"World\");\n}\n",
+        )
+        .unwrap();
+
+        // Write module file with export
+        fs::write(
+            src_dir.join("utils.rts"),
+            "export function greet(name: string): void {\n  console.log(name);\n}\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, build_dir) = project.compile().unwrap();
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+
+        // Check main.rs was generated with mod and use declarations
+        let main_rs = fs::read_to_string(build_dir.join("src/main.rs")).unwrap();
+        assert!(
+            main_rs.contains("mod utils;"),
+            "expected `mod utils;` in main.rs:\n{main_rs}"
+        );
+        assert!(
+            main_rs.contains("use crate::utils::greet;"),
+            "expected `use crate::utils::greet;` in main.rs:\n{main_rs}"
+        );
+        assert!(
+            main_rs.contains("fn main()"),
+            "expected `fn main()` in main.rs:\n{main_rs}"
+        );
+
+        // Check utils.rs was generated with pub fn
+        let utils_rs = fs::read_to_string(build_dir.join("src/utils.rs")).unwrap();
+        assert!(
+            utils_rs.contains("pub fn greet(name: String)"),
+            "expected `pub fn greet(name: String)` in utils.rs:\n{utils_rs}"
+        );
+    }
+
+    // Test: Single-file projects still work (regression)
+    #[test]
+    fn test_project_compile_single_file_still_works() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("single-file", tmp.path()).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, _) = project.compile().unwrap();
+
+        assert!(
+            !result.has_errors,
+            "expected no errors for single-file project, got: {:?}",
+            result.diagnostics
         );
     }
 }

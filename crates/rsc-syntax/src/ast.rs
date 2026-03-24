@@ -37,7 +37,7 @@ pub struct Item {
 /// The kinds of top-level items in a `RustScript` module.
 ///
 /// Phase 0 supports function declarations; Phase 1 adds type definitions,
-/// enum definitions, and interface definitions.
+/// enum definitions, interface definitions, imports, and re-exports.
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
@@ -51,6 +51,47 @@ pub enum ItemKind {
     /// An interface definition (`interface Name { method(): Type; ... }`).
     /// Lowers to a Rust `trait`.
     Interface(InterfaceDef),
+    /// An import declaration (`import { Name } from "./module"`).
+    /// Lowers to a Rust `use` declaration.
+    Import(ImportDecl),
+    /// A re-export declaration (`export { Name } from "./module"`).
+    /// Lowers to a Rust `pub use` declaration.
+    ReExport(ReExportDecl),
+}
+
+/// An import declaration: `import { User, Post } from "./models"`.
+///
+/// Lowers to `use crate::models::{User, Post};` in Rust.
+#[derive(Debug, Clone)]
+pub struct ImportDecl {
+    /// The names being imported.
+    pub names: Vec<Ident>,
+    /// The module path as a string literal (e.g., `"./models"`).
+    pub source: StringLiteral,
+    /// The span covering the entire import declaration.
+    pub span: Span,
+}
+
+/// A string literal used in import/export source paths.
+#[derive(Debug, Clone)]
+pub struct StringLiteral {
+    /// The string value (without quotes).
+    pub value: String,
+    /// The span covering the string literal including quotes.
+    pub span: Span,
+}
+
+/// A re-export declaration: `export { Name1, Name2 } from "./module"`.
+///
+/// Lowers to `pub use crate::module::{Name1, Name2};` in Rust.
+#[derive(Debug, Clone)]
+pub struct ReExportDecl {
+    /// The names being re-exported.
+    pub names: Vec<Ident>,
+    /// The module path as a string literal.
+    pub source: StringLiteral,
+    /// The span covering the entire re-export declaration.
+    pub span: Span,
 }
 
 /// A generic type parameter: `T` or `T extends Constraint`.
