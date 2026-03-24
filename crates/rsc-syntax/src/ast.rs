@@ -73,6 +73,20 @@ pub struct TypeParams {
     pub span: Span,
 }
 
+/// A function return type with optional throws annotation.
+///
+/// Corresponds to `: ReturnType throws ErrorType` in a function declaration.
+/// When `throws` is present, the function lowers to `-> Result<T, E>`.
+#[derive(Debug, Clone)]
+pub struct ReturnTypeAnnotation {
+    /// The success return type, if present. `None` means `void` (unit).
+    pub type_ann: Option<TypeAnnotation>,
+    /// The error type for `throws`. Present when the function is fallible.
+    pub throws: Option<TypeAnnotation>,
+    /// The span covering the return type annotation.
+    pub span: Span,
+}
+
 /// A function declaration.
 ///
 /// Corresponds to `RustScript` `function name<T>(params): ReturnType { body }`.
@@ -86,7 +100,7 @@ pub struct FnDecl {
     /// The parameter list.
     pub params: Vec<Param>,
     /// The return type annotation, if present. Absent means `void`.
-    pub return_type: Option<TypeAnnotation>,
+    pub return_type: Option<ReturnTypeAnnotation>,
     /// The function body.
     pub body: Block,
     /// The span covering the entire function declaration.
@@ -244,6 +258,9 @@ pub enum Stmt {
     /// A `switch` statement for pattern matching over enums.
     /// Lowers to a Rust `match` expression.
     Switch(SwitchStmt),
+    /// A `try { ... } catch (name: Type) { ... }` statement.
+    /// Lowers to a Rust `match` on `Result`.
+    TryCatch(TryCatchStmt),
 }
 
 /// A variable declaration with an initializer.
@@ -364,6 +381,24 @@ pub struct SwitchCase {
     pub span: Span,
 }
 
+/// A `try/catch` statement for catching `Result` errors.
+///
+/// Corresponds to `try { ... } catch (name: ErrorType) { ... }`.
+/// Lowers to a Rust `match` on `Ok`/`Err`.
+#[derive(Debug, Clone)]
+pub struct TryCatchStmt {
+    /// The try block containing fallible operations.
+    pub try_block: Block,
+    /// The catch binding name.
+    pub catch_binding: Ident,
+    /// The optional error type annotation.
+    pub catch_type: Option<TypeAnnotation>,
+    /// The catch block executed when an error occurs.
+    pub catch_block: Block,
+    /// The span covering the entire try/catch statement.
+    pub span: Span,
+}
+
 /// An expression with its source span.
 ///
 /// Wraps an [`ExprKind`] variant with the span of source text it was parsed from.
@@ -426,6 +461,9 @@ pub enum ExprKind {
     /// Nullish coalescing: `expr ?? default`.
     /// Lowers to `expr.unwrap_or(default)`.
     NullishCoalescing(NullishCoalescingExpr),
+    /// A `throw` expression: `throw expr`.
+    /// In a `throws` function, lowers to `return Err(expr)`.
+    Throw(Box<Expr>),
 }
 
 /// A binary expression with an operator and two operands.
@@ -711,8 +749,12 @@ mod tests {
                     span: span(12, 18),
                 },
             ],
-            return_type: Some(TypeAnnotation {
-                kind: TypeKind::Named(ident("i32", 21, 24)),
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 21, 24)),
+                    span: span(21, 24),
+                }),
+                throws: None,
                 span: span(21, 24),
             }),
             body: Block {

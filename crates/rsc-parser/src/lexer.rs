@@ -666,6 +666,10 @@ impl<'a> Lexer<'a> {
             "case" => TokenKind::Case,
             "new" => TokenKind::New,
             "null" => TokenKind::Null,
+            "throw" => TokenKind::Throw,
+            "throws" => TokenKind::Throws,
+            "try" => TokenKind::Try,
+            "catch" => TokenKind::Catch,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -1220,5 +1224,39 @@ mod tests {
     fn test_lexer_bang_eq_eq_produces_bang_eq_eq_token() {
         let tokens = tokenize("x !== y");
         assert_eq!(tokens[1].kind, TokenKind::BangEqEq);
+    }
+
+    // --- Task 021: throw, throws, try, catch tokens ---
+
+    // 35. `throw` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_throw_keyword_produces_throw_token() {
+        let tokens = tokenize("throw");
+        assert_eq!(tokens.len(), 2); // Throw + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Throw);
+    }
+
+    // 36. `throws` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_throws_keyword_produces_throws_token() {
+        let tokens = tokenize("throws");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Throws);
+    }
+
+    // 37. `try` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_try_keyword_produces_try_token() {
+        let tokens = tokenize("try");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Try);
+    }
+
+    // 38. `catch` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_catch_keyword_produces_catch_token() {
+        let tokens = tokenize("catch");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Catch);
     }
 }

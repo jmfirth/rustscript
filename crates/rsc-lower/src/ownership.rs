@@ -91,6 +91,14 @@ impl UseMap {
                     }
                 }
             }
+            ast::Stmt::TryCatch(tc) => {
+                for inner_stmt in &tc.try_block.stmts {
+                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                }
+                for inner_stmt in &tc.catch_block.stmts {
+                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                }
+            }
         }
     }
 
@@ -224,6 +232,9 @@ impl UseMap {
                 Self::collect_expr_uses(&nc.left, stmt_index, false, is_ref_call, uses);
                 Self::collect_expr_uses(&nc.right, stmt_index, false, is_ref_call, uses);
             }
+            ast::ExprKind::Throw(inner) => {
+                Self::collect_expr_uses(inner, stmt_index, false, is_ref_call, uses);
+            }
         }
     }
 }
@@ -317,6 +328,14 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 for inner in &case.body {
                     collect_assignments(inner, reassigned);
                 }
+            }
+        }
+        ast::Stmt::TryCatch(tc) => {
+            for inner in &tc.try_block.stmts {
+                collect_assignments(inner, reassigned);
+            }
+            for inner in &tc.catch_block.stmts {
+                collect_assignments(inner, reassigned);
             }
         }
     }

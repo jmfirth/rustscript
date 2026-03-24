@@ -8,9 +8,10 @@ use rsc_syntax::ast::{
     AssignExpr, BinaryExpr, BinaryOp, Block, CallExpr, DestructureStmt, ElseClause, EnumDef,
     EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldDef, FieldInit, FnDecl, Ident, IfStmt,
     IndexExpr, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReturnStmt, Stmt, StructLitExpr, SwitchCase,
-    SwitchStmt, TemplateLitExpr, TemplatePart, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, WhileStmt,
+    OptionalAccess, OptionalChainExpr, Param, ReturnStmt, ReturnTypeAnnotation, Stmt,
+    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt,
+    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
+    VarDecl, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -194,6 +195,10 @@ impl Parser {
             TokenKind::Case => "`case`",
             TokenKind::New => "`new`",
             TokenKind::Null => "`null`",
+            TokenKind::Throw => "`throw`",
+            TokenKind::Throws => "`throws`",
+            TokenKind::Try => "`try`",
+            TokenKind::Catch => "`catch`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -226,7 +231,9 @@ impl Parser {
                 | TokenKind::Return
                 | TokenKind::Function
                 | TokenKind::Type
-                | TokenKind::Switch => return,
+                | TokenKind::Switch
+                | TokenKind::Try
+                | TokenKind::Throw => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -320,12 +327,11 @@ impl Parser {
             }
         }
 
-        // Optional return type
-        let return_type = if self.eat(&TokenKind::Colon) {
-            Some(self.parse_type_annotation()?)
-        } else {
-            None
-        };
+        // Optional return type with throws
+        let return_type = self.parse_return_type_annotation();
+        // If parse_return_type_annotation started consuming tokens (colon/throws)
+        // but failed to parse the type, propagate the error.
+        // (Check handled inside the method via diagnostics.)
 
         // Body
         let body = self.parse_block()?;
@@ -339,6 +345,57 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    /// Parse an optional return type annotation with optional throws.
+    ///
+    /// Handles:
+    /// - No annotation: `function foo() { ... }` → `None`
+    /// - Type only: `: ReturnType` → `Some(ReturnTypeAnnotation { type_ann: Some(..), throws: None })`
+    /// - Type + throws: `: ReturnType throws ErrorType`
+    /// - Throws only: `throws ErrorType` (no colon, no return type — void success)
+    ///
+    /// Returns `None` when no annotation is present.
+    fn parse_return_type_annotation(&mut self) -> Option<ReturnTypeAnnotation> {
+        let has_colon = self.eat(&TokenKind::Colon);
+
+        if has_colon {
+            let type_ann = self.parse_type_annotation()?;
+            let start_span = type_ann.span;
+
+            // Check for `throws ErrorType`
+            if self.check(&TokenKind::Throws) {
+                self.advance(); // consume `throws`
+                let throws_type = self.parse_type_annotation()?;
+                let end_span = throws_type.span;
+                return Some(ReturnTypeAnnotation {
+                    type_ann: Some(type_ann),
+                    throws: Some(throws_type),
+                    span: start_span.merge(end_span),
+                });
+            }
+
+            return Some(ReturnTypeAnnotation {
+                type_ann: Some(type_ann.clone()),
+                throws: None,
+                span: type_ann.span,
+            });
+        }
+
+        // Check for `throws ErrorType` without return type (void + throws)
+        if self.check(&TokenKind::Throws) {
+            let throws_token = self.advance(); // consume `throws`
+            let start_span = throws_token.span;
+            let throws_type = self.parse_type_annotation()?;
+            let end_span = throws_type.span;
+            return Some(ReturnTypeAnnotation {
+                type_ann: None,
+                throws: Some(throws_type),
+                span: start_span.merge(end_span),
+            });
+        }
+
+        None
     }
 
     // ---------------------------------------------------------------
@@ -822,6 +879,7 @@ impl Parser {
             TokenKind::While => self.parse_while_stmt().map(Stmt::While),
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
             TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
+            TokenKind::Try => self.parse_try_catch_stmt().map(Stmt::TryCatch),
             _ => self.parse_expr_stmt(),
         }
     }
@@ -996,6 +1054,37 @@ impl Parser {
             scrutinee,
             cases,
             span: start.merge(close.span),
+        })
+    }
+
+    /// Parse a try/catch statement: `try { ... } catch (name: Type) { ... }`.
+    fn parse_try_catch_stmt(&mut self) -> Option<TryCatchStmt> {
+        let try_token = self.advance(); // consume `try`
+        let start = try_token.span;
+
+        let try_block = self.parse_block()?;
+
+        self.expect(&TokenKind::Catch)?;
+        self.expect(&TokenKind::LParen)?;
+        let catch_binding = self.parse_ident()?;
+
+        // Optional type annotation on catch binding
+        let catch_type = if self.eat(&TokenKind::Colon) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::RParen)?;
+        let catch_block = self.parse_block()?;
+        let end = catch_block.span;
+
+        Some(TryCatchStmt {
+            try_block,
+            catch_binding,
+            catch_type,
+            catch_block,
+            span: start.merge(end),
         })
     }
 
@@ -1380,7 +1469,7 @@ impl Parser {
         Some(left)
     }
 
-    /// Parse unary: `("-" | "!") unary | call`.
+    /// Parse unary: `("-" | "!") unary | "throw" expr | call`.
     fn parse_unary(&mut self) -> Option<Expr> {
         match self.peek() {
             TokenKind::Minus => {
@@ -1404,6 +1493,15 @@ impl Parser {
                         op: UnaryOp::Not,
                         operand: Box::new(operand),
                     }),
+                    span,
+                })
+            }
+            TokenKind::Throw => {
+                let throw_token = self.advance();
+                let value = self.parse_unary()?;
+                let span = throw_token.span.merge(value.span);
+                Some(Expr {
+                    kind: ExprKind::Throw(Box::new(value)),
                     span,
                 })
             }
@@ -1959,7 +2057,12 @@ mod tests {
         assert_eq!(f.params[1].name.name, "b");
         // Check return type
         let ret = f.return_type.as_ref().expect("expected return type");
-        match &ret.kind {
+        assert!(ret.throws.is_none());
+        let type_ann = ret
+            .type_ann
+            .as_ref()
+            .expect("expected return type annotation");
+        match &type_ann.kind {
             TypeKind::Named(ident) => assert_eq!(ident.name, "i32"),
             TypeKind::Void => panic!("expected Named, got Void"),
             TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
@@ -2455,7 +2558,11 @@ mod tests {
 
         // Return type: i32
         let ret = f.return_type.as_ref().expect("expected return type");
-        match &ret.kind {
+        let type_ann = ret
+            .type_ann
+            .as_ref()
+            .expect("expected return type annotation");
+        match &type_ann.kind {
             TypeKind::Named(id) => assert_eq!(id.name, "i32"),
             other => panic!("expected Named(i32), got {other:?}"),
         }
@@ -2511,7 +2618,11 @@ mod tests {
 
         // Return type: void
         let ret = f.return_type.as_ref().expect("expected return type");
-        assert!(matches!(ret.kind, TypeKind::Void));
+        let type_ann = ret
+            .type_ann
+            .as_ref()
+            .expect("expected return type annotation");
+        assert!(matches!(type_ann.kind, TypeKind::Void));
 
         // Body: let count = n; while (...) { ... }
         assert_eq!(f.body.stmts.len(), 2);
@@ -3424,6 +3535,82 @@ function test(dir: Direction): Direction {
                 _ => panic!("expected Binary"),
             },
             _ => panic!("expected If"),
+        }
+    }
+
+    // --- Task 021: throws, try/catch, throw ---
+
+    // Parse `function fetch(): User throws ApiError { }`
+    #[test]
+    fn test_parser_throws_return_type_produces_return_type_annotation() {
+        let source = "function fetch(): string throws string { }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "fetch");
+
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected success type");
+        assert!(matches!(&type_ann.kind, TypeKind::Named(id) if id.name == "string"));
+        let throws = ret.throws.as_ref().expect("expected throws type");
+        assert!(matches!(&throws.kind, TypeKind::Named(id) if id.name == "string"));
+    }
+
+    // Parse `function fail() throws MyError { }`
+    #[test]
+    fn test_parser_void_throws_produces_return_type_with_no_success_type() {
+        let source = "function fail() throws string { }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "fail");
+
+        let ret = f.return_type.as_ref().expect("expected return type");
+        assert!(ret.type_ann.is_none());
+        let throws = ret.throws.as_ref().expect("expected throws type");
+        assert!(matches!(&throws.kind, TypeKind::Named(id) if id.name == "string"));
+    }
+
+    // Parse try/catch block
+    #[test]
+    fn test_parser_try_catch_produces_try_catch_stmt() {
+        let source = "\
+function main() {
+  try {
+    const x = 1;
+  } catch (err: string) {
+    const y = 2;
+  }
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::TryCatch(tc) => {
+                assert_eq!(tc.try_block.stmts.len(), 1);
+                assert_eq!(tc.catch_binding.name, "err");
+                let catch_type = tc.catch_type.as_ref().expect("expected catch type");
+                assert!(matches!(&catch_type.kind, TypeKind::Named(id) if id.name == "string"));
+                assert_eq!(tc.catch_block.stmts.len(), 1);
+            }
+            _ => panic!("expected TryCatch"),
+        }
+    }
+
+    // Parse throw expression
+    #[test]
+    fn test_parser_throw_expression_produces_throw_expr() {
+        let source = "\
+function fail() throws string {
+  throw \"error\";
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::Expr(expr) => match &expr.kind {
+                ExprKind::Throw(inner) => {
+                    assert!(matches!(&inner.kind, ExprKind::StringLit(s) if s == "error"));
+                }
+                _ => panic!("expected Throw expression"),
+            },
+            _ => panic!("expected Expr statement"),
         }
     }
 }

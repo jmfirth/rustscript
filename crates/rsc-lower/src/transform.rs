@@ -9,9 +9,9 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBinaryOp, RustBlock, RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef,
     RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustIfLetStmt,
-    RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchStmt, RustParam, RustPattern,
-    RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
-    RustWhileStmt,
+    RustIfStmt, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt, RustParam,
+    RustPattern, RustReturnStmt, RustStmt, RustStructDef, RustType, RustTypeParam, RustUnaryOp,
+    RustUseDecl, RustWhileStmt,
 };
 
 use crate::builtins::BuiltinRegistry;
@@ -21,6 +21,19 @@ use rsc_typeck::registry::TypeRegistry;
 use rsc_typeck::resolve;
 use rsc_typeck::types::Type;
 
+/// Information about a function's throws signature.
+///
+/// Collected in a pre-pass before lowering bodies, so that call-site lowering
+/// can determine whether to insert `?`.
+#[derive(Debug, Clone)]
+struct FnSignature {
+    /// Whether this function has a `throws` annotation.
+    throws: bool,
+}
+
+/// Map from function name to its throws signature.
+type FunctionSignatureMap = std::collections::HashMap<String, FnSignature>;
+
 /// The AST-to-IR transformer.
 ///
 /// Holds the builtin registry and type registry, and drives the lowering of
@@ -28,6 +41,8 @@ use rsc_typeck::types::Type;
 pub(crate) struct Transform {
     builtins: BuiltinRegistry,
     type_registry: TypeRegistry,
+    /// Function signature map for `throws` detection during lowering.
+    fn_signatures: FunctionSignatureMap,
 }
 
 impl Transform {
@@ -37,6 +52,7 @@ impl Transform {
         Self {
             builtins: BuiltinRegistry::new(),
             type_registry: TypeRegistry::new(),
+            fn_signatures: FunctionSignatureMap::new(),
         }
     }
 
@@ -54,6 +70,13 @@ impl Transform {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
                 ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
                 ast::ItemKind::Function(_) => {}
+            }
+        }
+
+        // Pre-pass: collect function signatures for throws detection
+        for item in &module.items {
+            if let ast::ItemKind::Function(f) = &item.kind {
+                self.register_fn_signature(f, &mut ctx);
             }
         }
 
@@ -241,6 +264,18 @@ impl Transform {
         }
     }
 
+    /// Register a function signature in the pre-pass for throws detection.
+    fn register_fn_signature(&mut self, f: &ast::FnDecl, _ctx: &mut LoweringContext) {
+        let throws = f
+            .return_type
+            .as_ref()
+            .and_then(|rt| rt.throws.as_ref())
+            .is_some();
+
+        self.fn_signatures
+            .insert(f.name.name.clone(), FnSignature { throws });
+    }
+
     /// Lower a function declaration.
     ///
     /// Performs two-pass analysis: first finds reassigned variables and builds
@@ -284,31 +319,71 @@ impl Transform {
             })
             .collect();
 
-        let return_type = f.return_type.as_ref().and_then(|ann| {
-            let mut diags = Vec::new();
-            let ty_inner = resolve::resolve_type_annotation_with_generics(
-                ann,
-                &self.type_registry,
-                &generic_names,
-                &mut diags,
-            );
-            let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
-            for d in diags {
-                ctx.emit_diagnostic(d);
-            }
-            if ty == RustType::Unit {
-                return None;
-            }
-            Some(ty)
+        // Determine if this is a throws function
+        let is_throws = f
+            .return_type
+            .as_ref()
+            .and_then(|rt| rt.throws.as_ref())
+            .is_some();
+
+        // Resolve the base return type (success type)
+        let base_return_type = f.return_type.as_ref().and_then(|rt| {
+            rt.type_ann.as_ref().and_then(|ann| {
+                let mut diags = Vec::new();
+                let ty_inner = resolve::resolve_type_annotation_with_generics(
+                    ann,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                );
+                let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
+                if ty == RustType::Unit {
+                    return None;
+                }
+                Some(ty)
+            })
         });
 
+        // Build the actual return type (Result<T, E> for throws, T otherwise)
+        let return_type = if is_throws {
+            let ok_ty = base_return_type.clone().unwrap_or(RustType::Unit);
+            let err_ty = f
+                .return_type
+                .as_ref()
+                .and_then(|rt| {
+                    rt.throws.as_ref().map(|throws_ann| {
+                        let mut diags = Vec::new();
+                        let ty_inner = resolve::resolve_type_annotation_with_generics(
+                            throws_ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+                        for d in diags {
+                            ctx.emit_diagnostic(d);
+                        }
+                        ty
+                    })
+                })
+                .unwrap_or(RustType::Unit);
+            Some(RustType::Result(Box::new(ok_ty), Box::new(err_ty)))
+        } else {
+            base_return_type.clone()
+        };
+
         // Set return type context for Option wrapping in return statements
-        ctx.set_return_type(return_type.clone());
+        ctx.set_return_type(base_return_type);
+        ctx.set_fn_throws(is_throws);
 
         // Lower the body
         let body = self.lower_block(&f.body, ctx, &use_map, 0, &reassigned);
 
         ctx.set_return_type(None);
+        ctx.set_fn_throws(false);
         ctx.pop_scope();
 
         RustFnDecl {
@@ -355,6 +430,14 @@ impl Transform {
                 self.lower_var_decl(decl, ctx, use_map, stmt_index, reassigned)
             }
             ast::Stmt::Expr(expr) => {
+                // `throw expr;` → `return Err(expr);`
+                if let ast::ExprKind::Throw(_) = &expr.kind {
+                    let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                    return RustStmt::Return(RustReturnStmt {
+                        value: Some(lowered),
+                        span: Some(expr.span),
+                    });
+                }
                 let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
                 RustStmt::Semi(lowered)
             }
@@ -371,6 +454,9 @@ impl Transform {
             ast::Stmt::Switch(switch) => {
                 self.lower_switch(switch, ctx, use_map, stmt_index, reassigned)
             }
+            ast::Stmt::TryCatch(tc) => {
+                self.lower_try_catch(tc, ctx, use_map, stmt_index, reassigned)
+            }
         }
     }
 
@@ -385,6 +471,7 @@ impl Transform {
     ) -> RustStmt {
         // Resolve the type from annotation or infer from literal
         let mut diags = Vec::new();
+        let has_explicit_annotation = decl.type_ann.is_some();
         let ty = if let Some(ann) = &decl.type_ann {
             let ty_inner = resolve::resolve_type_annotation_with_registry(
                 ann,
@@ -395,6 +482,10 @@ impl Transform {
         } else {
             resolve::infer_literal_rust_type(&decl.init).unwrap_or(RustType::I64)
         };
+        // Track whether the type was actually inferred from the init expression.
+        // If no annotation and the init is not a literal, we should let Rust infer.
+        let type_inferred_from_literal =
+            !has_explicit_annotation && resolve::infer_literal_rust_type(&decl.init).is_some();
 
         for d in diags {
             ctx.emit_diagnostic(d);
@@ -453,11 +544,14 @@ impl Transform {
         let emit_ty = if matches!(ty, RustType::Named(_)) {
             // Struct types: the struct literal provides the type, so omit annotation
             None
-        } else if decl.type_ann.is_some() {
+        } else if has_explicit_annotation {
             // User wrote an explicit type annotation — always include it
             Some(ty)
         } else if is_default_literal_type(&decl.init, &ty) {
             // Type matches the literal's default — omit for cleaner output
+            None
+        } else if !type_inferred_from_literal {
+            // Init is not a literal (e.g., a function call) — let Rust infer the type
             None
         } else {
             Some(ty)
@@ -472,10 +566,11 @@ impl Transform {
         })
     }
 
-    /// Lower a return statement, wrapping in `Some()` if the function returns `Option<T>`.
+    /// Lower a return statement, wrapping in `Some()` or `Ok()` as needed.
     ///
     /// - `return null;` in an `Option` function → `return None;`
     /// - `return value;` in an `Option` function → `return Some(value);`
+    /// - `return value;` in a `throws` function → `return Ok(value);`
     /// - Other returns pass through unchanged.
     fn lower_return(
         &self,
@@ -487,8 +582,13 @@ impl Transform {
         let is_option_return = ctx
             .current_return_type()
             .is_some_and(|ty| matches!(ty, RustType::Option(_)));
+        let is_throws = ctx.is_fn_throws();
 
         let value = ret.value.as_ref().map(|v| {
+            if is_throws {
+                let lowered = self.lower_expr(v, ctx, use_map, stmt_index);
+                return RustExpr::synthetic(RustExprKind::Ok(Box::new(lowered)));
+            }
             if is_option_return {
                 // Check for `return null;`
                 if matches!(v.kind, ast::ExprKind::NullLit) {
@@ -502,8 +602,13 @@ impl Transform {
             }
         });
 
+        // Bare `return;` in throws context → `return Ok(());`
         // Bare `return;` in Option context → `return None;`
-        let value = if value.is_none() && is_option_return {
+        let value = if value.is_none() && is_throws {
+            Some(RustExpr::synthetic(RustExprKind::Ok(Box::new(
+                RustExpr::synthetic(RustExprKind::Ident("()".to_owned())),
+            ))))
+        } else if value.is_none() && is_option_return {
             Some(RustExpr::new(RustExprKind::None, ret.span))
         } else {
             value
@@ -1014,6 +1119,156 @@ impl Transform {
         }
     }
 
+    /// Lower a `try/catch` statement to a `match` on `Result`.
+    ///
+    /// For a single-call try block, lowers to a direct `match` on the call result.
+    /// For multi-statement try blocks, uses an immediately-invoked closure pattern.
+    fn lower_try_catch(
+        &self,
+        tc: &ast::TryCatchStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        // Detect single-statement try block with a var decl calling a throws function.
+        // This enables the simpler direct match pattern.
+        if let Some(simple_match) =
+            self.try_lower_simple_try_catch(tc, ctx, use_map, stmt_index, reassigned)
+        {
+            return simple_match;
+        }
+
+        // General case: immediately-invoked closure
+        // match (|| -> Result<(), E> { body; Ok(()) })() { Ok(_) => {}, Err(e) => { catch } }
+        let try_body = self.lower_block(&tc.try_block, ctx, use_map, stmt_index, reassigned);
+        let catch_body = self.lower_block(&tc.catch_block, ctx, use_map, stmt_index, reassigned);
+
+        // Determine the error type from the catch annotation or default to String
+        let err_ty = tc.catch_type.as_ref().map_or(RustType::String, |ann| {
+            let mut diags = Vec::new();
+            let ty = resolve::resolve_type_annotation_with_registry(
+                ann,
+                &self.type_registry,
+                &mut diags,
+            );
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
+            rsc_typeck::bridge::type_to_rust_type(&ty)
+        });
+
+        // Build: match (|| -> Result<(), ErrType> { <try_body>; Ok(()) })()
+        // For the try body, we need to wrap it in a closure that returns Ok(())
+        let mut closure_stmts = try_body.stmts;
+        closure_stmts.push(RustStmt::Expr(RustExpr::synthetic(RustExprKind::Ok(
+            Box::new(RustExpr::synthetic(RustExprKind::Ident("()".to_owned()))),
+        ))));
+
+        // The closure call expression will be emitted by the MatchResult handler
+        let closure_body = RustBlock {
+            stmts: closure_stmts,
+            expr: None,
+        };
+
+        // For now, represent as a MatchResult on a synthetic closure call.
+        // We need to create a special expression that emits as the closure IIFE.
+        // Use a Call expression with a special name as a placeholder, then handle
+        // in the emitter. Actually, let's use a simpler approach: emit the MatchResult
+        // directly with the try block as-is.
+        RustStmt::MatchResult(RustMatchResultStmt {
+            expr: RustExpr::synthetic(RustExprKind::ClosureCall {
+                body: closure_body,
+                return_type: RustType::Result(Box::new(RustType::Unit), Box::new(err_ty)),
+            }),
+            ok_binding: "_".to_owned(),
+            ok_block: RustBlock {
+                stmts: vec![],
+                expr: None,
+            },
+            err_binding: tc.catch_binding.name.clone(),
+            err_block: catch_body,
+            span: Some(tc.span),
+        })
+    }
+
+    /// Try to lower a try/catch as a simple direct match when the try block
+    /// has a single var decl calling a throws function followed by uses of that binding.
+    fn try_lower_simple_try_catch(
+        &self,
+        tc: &ast::TryCatchStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> Option<RustStmt> {
+        // Check if the first statement is a var decl with a call to a throws function
+        if tc.try_block.stmts.is_empty() {
+            return None;
+        }
+
+        let first = &tc.try_block.stmts[0];
+        let (binding_name, call_expr) = match first {
+            ast::Stmt::VarDecl(decl) => {
+                if let ast::ExprKind::Call(call) = &decl.init.kind {
+                    let callee_throws = self
+                        .fn_signatures
+                        .get(&call.callee.name)
+                        .is_some_and(|sig| sig.throws);
+                    if callee_throws {
+                        Some((decl.name.name.clone(), &decl.init))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Lower the call expression WITHOUT the ? operator
+        let lowered_call = match &call_expr.kind {
+            ast::ExprKind::Call(call) => {
+                let args: Vec<RustExpr> = call
+                    .args
+                    .iter()
+                    .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                    .collect();
+                RustExpr::new(
+                    RustExprKind::Call {
+                        func: call.callee.name.clone(),
+                        args,
+                    },
+                    call_expr.span,
+                )
+            }
+            _ => return None,
+        };
+
+        // Build the Ok arm body: the remaining statements after the var decl
+        let mut ok_stmts: Vec<RustStmt> = Vec::new();
+        for s in tc.try_block.stmts.iter().skip(1) {
+            ok_stmts.push(self.lower_stmt(s, ctx, use_map, stmt_index, reassigned));
+        }
+
+        let ok_block = RustBlock {
+            stmts: ok_stmts,
+            expr: None,
+        };
+
+        let catch_body = self.lower_block(&tc.catch_block, ctx, use_map, stmt_index, reassigned);
+
+        Some(RustStmt::MatchResult(RustMatchResultStmt {
+            expr: lowered_call,
+            ok_binding: binding_name,
+            ok_block,
+            err_binding: tc.catch_binding.name.clone(),
+            err_block: catch_body,
+            span: Some(tc.span),
+        }))
+    }
+
     /// Lower an expression.
     #[allow(clippy::too_many_lines)]
     // Expression lowering covers all AST expression kinds; splitting would obscure the match
@@ -1070,13 +1325,24 @@ impl Transform {
                     .iter()
                     .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                     .collect();
-                RustExpr::new(
+                let call_expr = RustExpr::new(
                     RustExprKind::Call {
                         func: call.callee.name.clone(),
                         args,
                     },
                     expr.span,
-                )
+                );
+                // If the callee is a throws function and we're inside a throws function,
+                // wrap with `?` operator.
+                let callee_throws = self
+                    .fn_signatures
+                    .get(&call.callee.name)
+                    .is_some_and(|sig| sig.throws);
+                if callee_throws && ctx.is_fn_throws() {
+                    RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), expr.span)
+                } else {
+                    call_expr
+                }
             }
             ast::ExprKind::MethodCall(mc) => {
                 self.lower_method_call(mc, expr.span, ctx, use_map, stmt_index)
@@ -1199,6 +1465,10 @@ impl Transform {
                     },
                     expr.span,
                 )
+            }
+            ast::ExprKind::Throw(value) => {
+                let lowered = self.lower_expr(value, ctx, use_map, stmt_index);
+                RustExpr::synthetic(RustExprKind::Err(Box::new(lowered)))
             }
         }
     }
@@ -1472,6 +1742,10 @@ fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hash
         RustType::Option(inner) => {
             scan_type_for_collections(inner, needs_hashmap, needs_hashset);
         }
+        RustType::Result(ok, err) => {
+            scan_type_for_collections(ok, needs_hashmap, needs_hashset);
+            scan_type_for_collections(err, needs_hashmap, needs_hashset);
+        }
         _ => {}
     }
 }
@@ -1550,6 +1824,11 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(else_block, needs_hashmap, needs_hashset);
             }
         }
+        RustStmt::MatchResult(match_result) => {
+            scan_expr_for_collections(&match_result.expr, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&match_result.ok_block, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&match_result.err_block, needs_hashmap, needs_hashset);
+        }
     }
 }
 
@@ -1598,7 +1877,10 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         RustExprKind::Paren(inner)
         | RustExprKind::Clone(inner)
         | RustExprKind::ToString(inner)
-        | RustExprKind::Some(inner) => {
+        | RustExprKind::Some(inner)
+        | RustExprKind::QuestionMark(inner)
+        | RustExprKind::Ok(inner)
+        | RustExprKind::Err(inner) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustExprKind::Assign { value, .. } | RustExprKind::CompoundAssign { value, .. } => {
@@ -1628,6 +1910,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         } => {
             scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             scan_expr_for_collections(closure_body, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::ClosureCall { body, .. } => {
+            scan_block_for_collections(body, needs_hashmap, needs_hashset);
         }
     }
 }
@@ -1785,10 +2070,27 @@ mod tests {
         }
     }
 
+    fn float_expr(value: f64, start: u32, end: u32) -> Expr {
+        Expr {
+            kind: ExprKind::FloatLit(value),
+            span: span(start, end),
+        }
+    }
+
     fn string_expr(s: &str, start: u32, end: u32) -> Expr {
         Expr {
             kind: ExprKind::StringLit(s.to_owned()),
             span: span(start, end),
+        }
+    }
+
+    /// Wrap a `TypeAnnotation` in a `ReturnTypeAnnotation` with no throws.
+    fn ret_type(ann: TypeAnnotation) -> ReturnTypeAnnotation {
+        let s = ann.span;
+        ReturnTypeAnnotation {
+            type_ann: Some(ann),
+            throws: None,
+            span: s,
         }
     }
 
@@ -1818,7 +2120,7 @@ mod tests {
             name: ident(name, 0, name.len() as u32),
             type_params: None,
             params,
-            return_type,
+            return_type: return_type.map(|ann| ret_type(ann)),
             body: Block {
                 stmts: body,
                 span: span(0, 100),
@@ -2228,10 +2530,10 @@ mod tests {
             name: ident("fib", 0, 3),
             type_params: None,
             params: vec![make_param("n", "i32")],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Named(ident("i32", 0, 3)),
                 span: span(0, 3),
-            }),
+            })),
             body: Block {
                 stmts: vec![
                     Stmt::If(IfStmt {
@@ -2341,10 +2643,10 @@ mod tests {
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Void,
                 span: span(0, 4),
-            }),
+            })),
             body: Block {
                 stmts: vec![
                     Stmt::Expr(Expr {
@@ -2413,10 +2715,10 @@ mod tests {
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Void,
                 span: span(0, 4),
-            }),
+            })),
             body: Block {
                 stmts: vec![
                     Stmt::Expr(Expr {
@@ -2497,10 +2799,10 @@ mod tests {
             name: ident("counter", 0, 7),
             type_params: None,
             params: vec![],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Void,
                 span: span(0, 4),
-            }),
+            })),
             body: Block {
                 stmts: vec![
                     Stmt::VarDecl(VarDecl {
@@ -3015,10 +3317,10 @@ mod tests {
                 },
                 span: span(0, 3),
             }],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Named(ident("T", 0, 1)),
                 span: span(0, 1),
-            }),
+            })),
             body: Block {
                 stmts: vec![Stmt::Return(ReturnStmt {
                     value: Some(ident_expr("x", 0, 1)),
@@ -3077,10 +3379,10 @@ mod tests {
                     span: span(0, 3),
                 },
             ],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Named(ident("T", 0, 1)),
                 span: span(0, 1),
-            }),
+            })),
             body: Block {
                 stmts: vec![Stmt::Return(ReturnStmt {
                     value: Some(ident_expr("a", 0, 1)),
@@ -3678,7 +3980,7 @@ mod tests {
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Union(vec![
                     TypeAnnotation {
                         kind: TypeKind::Named(ident("string", 0, 6)),
@@ -3690,7 +3992,7 @@ mod tests {
                     },
                 ]),
                 span: span(0, 13),
-            }),
+            })),
             body: Block {
                 stmts: vec![Stmt::Return(ReturnStmt {
                     value: Some(Expr {
@@ -3756,7 +4058,7 @@ mod tests {
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
-            return_type: Some(TypeAnnotation {
+            return_type: Some(ret_type(TypeAnnotation {
                 kind: TypeKind::Union(vec![
                     TypeAnnotation {
                         kind: TypeKind::Named(ident("string", 0, 6)),
@@ -3768,7 +4070,7 @@ mod tests {
                     },
                 ]),
                 span: span(0, 13),
-            }),
+            })),
             body: Block {
                 stmts: vec![Stmt::Return(ReturnStmt {
                     value: Some(string_expr("hello", 20, 27)),
@@ -3923,5 +4225,240 @@ mod tests {
             }
             _ => panic!("expected Let"),
         }
+    }
+
+    // --- Task 021: throws → Result with try/catch ---
+
+    // Lower throws function return type to Result<T, E>
+    #[test]
+    fn test_lower_throws_function_produces_result_return_type() {
+        let f = FnDecl {
+            name: ident("divide", 0, 6),
+            type_params: None,
+            params: vec![make_param("a", "f64"), make_param("b", "f64")],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("f64", 0, 3)),
+                    span: span(0, 3),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 20),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(float_expr(1.0, 0, 3)),
+                    span: span(0, 10),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+
+        let module = make_module(vec![fn_item(f)]);
+        let (file, _) = crate::lower(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+
+        assert_eq!(
+            func.return_type,
+            Some(RustType::Result(
+                Box::new(RustType::F64),
+                Box::new(RustType::String)
+            ))
+        );
+    }
+
+    // Lower return in throws function to Ok(value)
+    #[test]
+    fn test_lower_return_in_throws_function_wraps_in_ok() {
+        let f = FnDecl {
+            name: ident("get", 0, 3),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 20),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(int_expr(42, 0, 2)),
+                    span: span(0, 10),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+
+        let module = make_module(vec![fn_item(f)]);
+        let (file, _) = crate::lower(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+
+        // The return value should be wrapped in Ok(...)
+        match &func.body.stmts[0] {
+            RustStmt::Return(ret) => {
+                let value = ret.value.as_ref().expect("expected return value");
+                assert!(
+                    matches!(&value.kind, RustExprKind::Ok(_)),
+                    "expected Ok(...), got {:?}",
+                    value.kind
+                );
+            }
+            _ => panic!("expected Return"),
+        }
+    }
+
+    // Lower throw expression to Err
+    #[test]
+    fn test_lower_throw_expression_produces_return_err() {
+        let f = FnDecl {
+            name: ident("fail", 0, 4),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 20),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Expr(Expr {
+                    kind: ExprKind::Throw(Box::new(string_expr("oops", 0, 6))),
+                    span: span(0, 12),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+
+        let module = make_module(vec![fn_item(f)]);
+        let (file, _) = crate::lower(&module);
+        let func = match &file.items[0] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+
+        // throw "oops" → return Err("oops".to_string())
+        match &func.body.stmts[0] {
+            RustStmt::Return(ret) => {
+                let value = ret.value.as_ref().expect("expected return value");
+                assert!(
+                    matches!(&value.kind, RustExprKind::Err(_)),
+                    "expected Err(...), got {:?}",
+                    value.kind
+                );
+            }
+            _ => panic!("expected Return, got {:?}", func.body.stmts[0]),
+        }
+    }
+
+    // Lower call to throws function inside throws function inserts ?
+    #[test]
+    fn test_lower_call_to_throws_function_inserts_question_mark() {
+        let inner_fn = FnDecl {
+            name: ident("inner", 0, 5),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 20),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Return(ReturnStmt {
+                    value: Some(int_expr(1, 0, 1)),
+                    span: span(0, 5),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+
+        let outer_fn = FnDecl {
+            name: ident("outer", 0, 5),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 20),
+            }),
+            body: Block {
+                stmts: vec![Stmt::VarDecl(VarDecl {
+                    binding: VarBinding::Const,
+                    name: ident("x", 0, 1),
+                    type_ann: None,
+                    init: Expr {
+                        kind: ExprKind::Call(CallExpr {
+                            callee: ident("inner", 0, 5),
+                            args: vec![],
+                        }),
+                        span: span(0, 7),
+                    },
+                    span: span(0, 10),
+                })],
+                span: span(0, 20),
+            },
+            span: span(0, 50),
+        };
+
+        let module = make_module(vec![fn_item(inner_fn), fn_item(outer_fn)]);
+        let (file, _) = crate::lower(&module);
+
+        // Check outer function
+        let func = match &file.items[1] {
+            RustItem::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+
+        // The var decl init should have ? applied
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(
+                    matches!(&let_stmt.init.kind, RustExprKind::QuestionMark(_)),
+                    "expected QuestionMark, got {:?}",
+                    let_stmt.init.kind
+                );
+            }
+            _ => panic!("expected Let"),
+        }
+    }
+
+    // Emit Result<T, E> type display
+    #[test]
+    fn test_rust_type_result_display() {
+        let ty = RustType::Result(Box::new(RustType::I32), Box::new(RustType::String));
+        assert_eq!(ty.to_string(), "Result<i32, String>");
     }
 }

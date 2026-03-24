@@ -967,3 +967,121 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("set_construction", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 021: throws → Result with try/catch
+// ---------------------------------------------------------------------------
+
+// Correctness scenario 1: Simple throws function
+#[test]
+fn test_snapshot_simple_throws_function_generates_result() {
+    let source = "\
+function divide(a: f64, b: f64): f64 throws string {
+  if (b == 0.0) {
+    throw \"division by zero\";
+  }
+  return a / b;
+}";
+
+    let expected = "\
+fn divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 {
+        return Err(\"division by zero\".to_string());
+    }
+    return Ok(a / b);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("simple_throws", &actual, expected);
+}
+
+// Correctness scenario 2: Error propagation with ?
+#[test]
+fn test_snapshot_error_propagation_inserts_question_mark() {
+    let source = "\
+function safeDivide(a: f64, b: f64): f64 throws string {
+  if (b == 0.0) { throw \"division by zero\"; }
+  return a / b;
+}
+function compute(x: f64): f64 throws string {
+  const result = safeDivide(x, 2.0);
+  return result;
+}";
+
+    let expected = "\
+fn safeDivide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 {
+        return Err(\"division by zero\".to_string());
+    }
+    return Ok(a / b);
+}
+
+fn compute(x: f64) -> Result<f64, String> {
+    let result = safeDivide(x, 2.0)?;
+    return Ok(result);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("error_propagation", &actual, expected);
+}
+
+// Correctness scenario 3: Try/catch
+#[test]
+fn test_snapshot_try_catch_generates_match_on_result() {
+    let source = "\
+function riskyOp(): i32 throws string {
+  throw \"oops\";
+}
+function main() {
+  try {
+    const val = riskyOp();
+    console.log(val);
+  } catch (err: string) {
+    console.log(err);
+  }
+}";
+
+    let expected = "\
+fn riskyOp() -> Result<i32, String> {
+    return Err(\"oops\".to_string());
+}
+
+fn main() {
+    match riskyOp() {
+        Ok(val) => {
+            println!(\"{}\", val);
+        }
+        Err(err) => {
+            println!(\"{}\", err);
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("try_catch", &actual, expected);
+}
+
+// Void + throws function
+#[test]
+fn test_snapshot_void_throws_function_generates_result_unit() {
+    let source = "\
+function validate(x: i32) throws string {
+  if (x < 0) {
+    throw \"negative\";
+  }
+}";
+
+    let expected = "\
+fn validate(x: i32) -> Result<(), String> {
+    if x < 0 {
+        return Err(\"negative\".to_string());
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("void_throws", &actual, expected);
+}
