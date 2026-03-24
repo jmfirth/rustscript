@@ -1,0 +1,142 @@
+//! Bridging between the typeck [`Type`] and the IR [`RustType`].
+//!
+//! Converts the canonical type representation to the Rust IR type used
+//! by the lowering pass and emitter. This bridge exists because the IR
+//! predates the full type system and will be extended as Phase 1 tasks
+//! add new IR node types.
+
+use rsc_syntax::rust_ir::RustType;
+
+use crate::types::{PrimitiveType, Type};
+
+/// Convert a typeck [`Type`] to a [`RustType`] for the IR.
+///
+/// This bridges the new type system with the existing Phase 0 IR.
+/// Phase 1 tasks that add new IR node types will extend `RustType` as needed.
+/// Types that don't yet have IR representations produce `RustType::Unit` as
+/// a placeholder.
+#[must_use]
+pub fn type_to_rust_type(ty: &Type) -> RustType {
+    match ty {
+        Type::Primitive(prim) => primitive_to_rust_type(*prim),
+        Type::String => RustType::String,
+        // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
+        Type::Unit
+        | Type::Named(_)
+        | Type::Generic(_, _)
+        | Type::Option(_)
+        | Type::Result(_, _)
+        | Type::Function(_, _)
+        | Type::TypeVar(_)
+        | Type::Error => RustType::Unit,
+    }
+}
+
+/// Convert a primitive type to the corresponding `RustType`.
+fn primitive_to_rust_type(prim: PrimitiveType) -> RustType {
+    match prim {
+        PrimitiveType::I8 => RustType::I8,
+        PrimitiveType::I16 => RustType::I16,
+        PrimitiveType::I32 => RustType::I32,
+        PrimitiveType::I64 => RustType::I64,
+        PrimitiveType::U8 => RustType::U8,
+        PrimitiveType::U16 => RustType::U16,
+        PrimitiveType::U32 => RustType::U32,
+        PrimitiveType::U64 => RustType::U64,
+        PrimitiveType::F32 => RustType::F32,
+        PrimitiveType::F64 => RustType::F64,
+        PrimitiveType::Bool => RustType::Bool,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bridge_all_primitives() {
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::I8)),
+            RustType::I8
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::I16)),
+            RustType::I16
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::I32)),
+            RustType::I32
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::I64)),
+            RustType::I64
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::U8)),
+            RustType::U8
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::U16)),
+            RustType::U16
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::U32)),
+            RustType::U32
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::U64)),
+            RustType::U64
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::F32)),
+            RustType::F32
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::F64)),
+            RustType::F64
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Primitive(PrimitiveType::Bool)),
+            RustType::Bool
+        );
+    }
+
+    #[test]
+    fn test_bridge_string() {
+        assert_eq!(type_to_rust_type(&Type::String), RustType::String);
+    }
+
+    #[test]
+    fn test_bridge_unit() {
+        assert_eq!(type_to_rust_type(&Type::Unit), RustType::Unit);
+    }
+
+    #[test]
+    fn test_bridge_unrepresented_types_produce_unit() {
+        assert_eq!(
+            type_to_rust_type(&Type::Named("Foo".to_owned())),
+            RustType::Unit
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Generic("Vec".to_owned(), vec![Type::Unit])),
+            RustType::Unit
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Option(Box::new(Type::String))),
+            RustType::Unit
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Result(Box::new(Type::String), Box::new(Type::Unit))),
+            RustType::Unit
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::Function(vec![], Box::new(Type::Unit))),
+            RustType::Unit
+        );
+        assert_eq!(
+            type_to_rust_type(&Type::TypeVar("T".to_owned())),
+            RustType::Unit
+        );
+        assert_eq!(type_to_rust_type(&Type::Error), RustType::Unit);
+    }
+}

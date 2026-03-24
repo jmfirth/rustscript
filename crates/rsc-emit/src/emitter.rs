@@ -59,6 +59,29 @@ impl Emitter {
 
     /// Emit an entire Rust source file.
     fn emit_file(&mut self, file: &RustFile) {
+        // Emit use declarations first
+        for use_decl in &file.uses {
+            self.write("use ");
+            self.write(&use_decl.path);
+            self.writeln(";");
+        }
+
+        // Emit mod declarations
+        for mod_decl in &file.mod_decls {
+            if mod_decl.public {
+                self.write("pub mod ");
+            } else {
+                self.write("mod ");
+            }
+            self.write(&mod_decl.name);
+            self.writeln(";");
+        }
+
+        // Blank line between declarations and items if any declarations exist
+        if !file.uses.is_empty() || !file.mod_decls.is_empty() {
+            self.newline();
+        }
+
         for (i, item) in file.items.iter().enumerate() {
             if i > 0 {
                 self.newline();
@@ -323,8 +346,8 @@ pub fn emit(file: &RustFile) -> String {
 mod tests {
     use rsc_syntax::rust_ir::{
         RustBinaryOp, RustBlock, RustElse, RustExpr, RustExprKind, RustFile, RustFnDecl,
-        RustIfStmt, RustItem, RustLetStmt, RustParam, RustReturnStmt, RustStmt, RustType,
-        RustUnaryOp, RustWhileStmt,
+        RustIfStmt, RustItem, RustLetStmt, RustModDecl, RustParam, RustReturnStmt, RustStmt,
+        RustType, RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -347,6 +370,8 @@ mod tests {
     /// Helper: construct a function with no params, no return type, and given body.
     fn simple_fn(name: &str, stmts: Vec<RustStmt>, expr: Option<RustExpr>) -> RustFile {
         RustFile {
+            uses: vec![],
+            mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: name.to_owned(),
                 params: vec![],
@@ -372,6 +397,8 @@ mod tests {
     #[test]
     fn test_emit_fn_with_params_and_return_type() {
         let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "add".to_owned(),
                 params: vec![
@@ -810,6 +837,8 @@ fn main() {
     #[test]
     fn test_emit_multiple_functions_blank_line_separator() {
         let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
             items: vec![
                 RustItem::Function(RustFnDecl {
                     name: "foo".to_owned(),
@@ -842,6 +871,8 @@ fn main() {
     #[test]
     fn test_emit_block_trailing_expression_no_semicolon() {
         let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "answer".to_owned(),
                 params: vec![],
@@ -872,6 +903,8 @@ fn answer() -> i32 {
         //     return fibonacci(n - 1) + fibonacci(n - 2);
         // }
         let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
                 name: "fibonacci".to_owned(),
                 params: vec![RustParam {
@@ -1049,5 +1082,95 @@ fn complex() {
 }
 ";
         assert_eq!(output, expected);
+    }
+
+    // ---- Test 25: Emit use declarations before items ----
+    #[test]
+    fn test_emit_use_decls_before_items() {
+        let file = RustFile {
+            uses: vec![RustUseDecl {
+                path: "std::collections::HashMap".to_owned(),
+                span: None,
+            }],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "main".to_owned(),
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        let expected = "\
+use std::collections::HashMap;
+
+fn main() {
+}
+";
+        assert_eq!(output, expected);
+    }
+
+    // ---- Test 26: Emit mod declarations ----
+    #[test]
+    fn test_emit_mod_decls_before_items() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![
+                RustModDecl {
+                    name: "utils".to_owned(),
+                    public: false,
+                    span: None,
+                },
+                RustModDecl {
+                    name: "api".to_owned(),
+                    public: true,
+                    span: None,
+                },
+            ],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "main".to_owned(),
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        let expected = "\
+mod utils;
+pub mod api;
+
+fn main() {
+}
+";
+        assert_eq!(output, expected);
+    }
+
+    // ---- Test 27: Empty uses/mod_decls produce no extra blank line ----
+    #[test]
+    fn test_emit_empty_uses_and_mods_no_extra_blank_line() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                name: "main".to_owned(),
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert_eq!(output, "fn main() {\n}\n");
     }
 }
