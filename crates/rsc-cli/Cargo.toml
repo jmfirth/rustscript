@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 rsc-driver = { path = "../rsc-driver" }
 rsc-fmt = { path = "../rsc-fmt" }
+rsc-lsp = { path = "../rsc-lsp" }
 rsc-syntax = { path = "../rsc-syntax" }
 clap = { workspace = true }
 anyhow = { workspace = true }

@@ -65,6 +65,8 @@ enum Command {
         /// Specific files to format (default: all .rts in src/)
         files: Vec<PathBuf>,
     },
+    /// Start the LSP server (for editor integration)
+    Lsp,
 }
 
 fn main() {
@@ -90,6 +92,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Test { release, args } => cmd_test(release, &args),
         Command::Check => cmd_check(),
         Command::Fmt { check, files } => cmd_fmt(check, &files),
+        Command::Lsp => cmd_lsp(),
     }
 }
 
@@ -224,6 +227,14 @@ fn cmd_fmt(check: bool, files: &[PathBuf]) -> Result<i32> {
     } else {
         Ok(0)
     }
+}
+
+/// Start the LSP server for editor integration.
+///
+/// The server communicates over stdin/stdout using the Language Server Protocol.
+fn cmd_lsp() -> Result<i32> {
+    rsc_lsp::run_server().map_err(|e| anyhow::anyhow!("LSP server failed: {e}"))?;
+    Ok(0)
 }
 
 /// Discover all `.rts` files in the project's `src/` directory.
