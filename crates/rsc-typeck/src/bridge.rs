@@ -33,8 +33,11 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             let rust_ret = type_to_rust_type(ret);
             RustType::ImplFn(rust_params, Box::new(rust_ret))
         }
-        // Types not yet represented in the IR — placeholder until Phase 1 tasks extend RustType
-        Type::Unit | Type::Result(_, _) | Type::Error => RustType::Unit,
+        Type::Result(ok, err) => RustType::Result(
+            Box::new(type_to_rust_type(ok)),
+            Box::new(type_to_rust_type(err)),
+        ),
+        Type::Unit | Type::Error => RustType::Unit,
     }
 }
 
@@ -153,11 +156,15 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_unrepresented_types_produce_unit() {
+    fn test_bridge_result_type_produces_result() {
         assert_eq!(
             type_to_rust_type(&Type::Result(Box::new(Type::String), Box::new(Type::Unit))),
-            RustType::Unit
+            RustType::Result(Box::new(RustType::String), Box::new(RustType::Unit))
         );
+    }
+
+    #[test]
+    fn test_bridge_error_type_produces_unit() {
         assert_eq!(type_to_rust_type(&Type::Error), RustType::Unit);
     }
 
