@@ -17,8 +17,8 @@ use rsc_syntax::rust_ir::{
     RustCompoundAssignOp, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr,
     RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
     RustItem, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustParam, RustReturnStmt,
-    RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
-    RustUseDecl, RustWhileStmt,
+    RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustTupleDestructureStmt, RustType,
+    RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
 };
 
 use rsc_syntax::span::Span;
@@ -103,7 +103,7 @@ impl Transform {
         let mut items: Vec<RustItem> = Vec::new();
         let mut import_uses: Vec<RustUseDecl> = Vec::new();
         let mut crate_deps: HashSet<CrateDependency> = HashSet::new();
-        let mut needs_async_runtime = false;
+        let mut needs_async_runtime = module_needs_async_runtime(module);
 
         for item in &module.items {
             let exported = item.exported;
@@ -731,6 +731,9 @@ impl Transform {
             ast::Stmt::For(for_of) => {
                 RustStmt::ForIn(self.lower_for_of(for_of, ctx, use_map, stmt_index, reassigned))
             }
+            ast::Stmt::ArrayDestructure(adestr) => {
+                self.lower_array_destructure(adestr, ctx, use_map, stmt_index)
+            }
             ast::Stmt::Break(brk) => RustStmt::Break(Some(brk.span)),
             ast::Stmt::Continue(cont) => RustStmt::Continue(Some(cont.span)),
         }
@@ -1177,6 +1180,34 @@ impl Transform {
         })
     }
 
+    /// Lower an array destructuring statement.
+    ///
+    /// `const [a, b] = expr;` → `let (a, b) = expr;`
+    /// Typically used with `Promise.all` results.
+    fn lower_array_destructure(
+        &self,
+        adestr: &ast::ArrayDestructureStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustStmt {
+        let init = self.lower_expr(&adestr.init, ctx, use_map, stmt_index);
+        let bindings = adestr.elements.iter().map(|e| e.name.clone()).collect();
+
+        // Declare the extracted variables in the current scope with inferred types.
+        // We use Unit as a placeholder — the actual types are inferred by Rust.
+        for elem in &adestr.elements {
+            ctx.declare_variable(elem.name.clone(), RustType::Unit);
+        }
+
+        RustStmt::TupleDestructure(RustTupleDestructureStmt {
+            bindings,
+            init,
+            mutable: adestr.binding == ast::VarBinding::Let,
+            span: Some(adestr.span),
+        })
+    }
+
     /// Lower a `try/catch` statement to a `match` on `Result`.
     ///
     /// For a single-call try block, lowers to a direct `match` on the call result.
@@ -1378,6 +1409,17 @@ impl Transform {
                 )
             }
             ast::ExprKind::Call(call) => {
+                // Check for builtin free functions (e.g., `spawn`)
+                if let Some(lowering_fn) = self.builtins.lookup_function(&call.callee.name).copied()
+                {
+                    let lowered_args: Vec<RustExpr> = call
+                        .args
+                        .iter()
+                        .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                        .collect();
+                    return lowering_fn(lowered_args, expr.span);
+                }
+
                 let sig = self.fn_signatures.get(&call.callee.name);
                 let args: Vec<RustExpr> = call
                     .args
@@ -1577,6 +1619,22 @@ impl Transform {
                 self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Await(inner) => {
+                // Check for `await Promise.all([...])` pattern.
+                // Lowers to `tokio::join!(expr1, expr2, ...)` without a separate `.await`.
+                if let ast::ExprKind::MethodCall(mc) = &inner.kind
+                    && let ast::ExprKind::Ident(obj) = &mc.object.kind
+                    && obj.name == "Promise"
+                    && mc.method.name == "all"
+                    && mc.args.len() == 1
+                    && let ast::ExprKind::ArrayLit(elements) = &mc.args[0].kind
+                {
+                    let lowered_elements: Vec<RustExpr> = elements
+                        .iter()
+                        .map(|e| self.lower_expr(e, ctx, use_map, stmt_index))
+                        .collect();
+                    return RustExpr::new(RustExprKind::TokioJoin(lowered_elements), expr.span);
+                }
+
                 let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
                 RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span)
             }
@@ -1942,6 +2000,85 @@ fn resolve_import_path(source: &str) -> String {
     let stripped = source.strip_prefix("./").unwrap_or(source);
     let module_path = stripped.replace('/', "::");
     format!("crate::{module_path}")
+}
+
+/// Check if a module contains `spawn()` calls or `Promise.all()` usage
+/// that requires the async runtime, beyond just `async function` declarations.
+fn module_needs_async_runtime(module: &ast::Module) -> bool {
+    for item in &module.items {
+        if let ast::ItemKind::Function(f) = &item.kind
+            && block_needs_async_runtime(&f.body)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Recursively scan a block for `spawn()` calls or `Promise.all()` usage.
+fn block_needs_async_runtime(block: &ast::Block) -> bool {
+    for stmt in &block.stmts {
+        if stmt_needs_async_runtime(stmt) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a statement contains async runtime patterns.
+fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Expr(expr)
+        | ast::Stmt::Return(ast::ReturnStmt {
+            value: Some(expr), ..
+        }) => expr_needs_async_runtime(expr),
+        ast::Stmt::VarDecl(decl) => expr_needs_async_runtime(&decl.init),
+        ast::Stmt::ArrayDestructure(adestr) => expr_needs_async_runtime(&adestr.init),
+        ast::Stmt::If(if_stmt) => {
+            expr_needs_async_runtime(&if_stmt.condition)
+                || block_needs_async_runtime(&if_stmt.then_block)
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::Block(b)) if block_needs_async_runtime(b))
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::ElseIf(elif)) if stmt_needs_async_runtime(&ast::Stmt::If(*elif.clone())))
+        }
+        ast::Stmt::While(w) => {
+            expr_needs_async_runtime(&w.condition) || block_needs_async_runtime(&w.body)
+        }
+        ast::Stmt::For(f) => {
+            expr_needs_async_runtime(&f.iterable) || block_needs_async_runtime(&f.body)
+        }
+        ast::Stmt::TryCatch(tc) => {
+            block_needs_async_runtime(&tc.try_block) || block_needs_async_runtime(&tc.catch_block)
+        }
+        _ => false,
+    }
+}
+
+/// Check if an expression contains `spawn(...)` or `Promise.all(...)`.
+fn expr_needs_async_runtime(expr: &ast::Expr) -> bool {
+    match &expr.kind {
+        ast::ExprKind::Call(call) if call.callee.name == "spawn" => true,
+        ast::ExprKind::Await(inner) => {
+            // Check for Promise.all pattern
+            if let ast::ExprKind::MethodCall(mc) = &inner.kind
+                && let ast::ExprKind::Ident(obj) = &mc.object.kind
+                && obj.name == "Promise"
+                && mc.method.name == "all"
+            {
+                return true;
+            }
+            expr_needs_async_runtime(inner)
+        }
+        ast::ExprKind::Call(call) => call.args.iter().any(expr_needs_async_runtime),
+        ast::ExprKind::MethodCall(mc) => {
+            expr_needs_async_runtime(&mc.object) || mc.args.iter().any(expr_needs_async_runtime)
+        }
+        ast::ExprKind::Binary(bin) => {
+            expr_needs_async_runtime(&bin.left) || expr_needs_async_runtime(&bin.right)
+        }
+        ast::ExprKind::Unary(un) => expr_needs_async_runtime(&un.operand),
+        ast::ExprKind::Paren(inner) => expr_needs_async_runtime(inner),
+        _ => false,
+    }
 }
 
 /// Classify an import source path and produce appropriate `use` declarations
@@ -5811,5 +5948,202 @@ function main() {}"#;
             },
             other => panic!("expected Function, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 030: Promise.all, spawn, and concurrency tests
+    // ---------------------------------------------------------------
+
+    // Test 1: Promise.all basic: await Promise.all([a(), b()]) → tokio::join!(a(), b())
+    #[test]
+    fn test_lower_promise_all_basic_produces_tokio_join() {
+        let source = r#"async function main() {
+            await Promise.all([getUser(), getPosts()]);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::Semi(expr) => match &expr.kind {
+                    RustExprKind::TokioJoin(elements) => {
+                        assert_eq!(elements.len(), 2, "expected 2 futures in tokio::join!");
+                        assert!(
+                            matches!(&elements[0].kind, RustExprKind::Call { func, .. } if func == "getUser"),
+                            "expected getUser call"
+                        );
+                        assert!(
+                            matches!(&elements[1].kind, RustExprKind::Call { func, .. } if func == "getPosts"),
+                            "expected getPosts call"
+                        );
+                    }
+                    other => panic!("expected TokioJoin, got {other:?}"),
+                },
+                other => panic!("expected Semi, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test 2: Promise.all with destructuring
+    #[test]
+    fn test_lower_promise_all_with_destructuring_produces_tuple_destructure() {
+        let source = r#"async function main() {
+            const [user, posts] = await Promise.all([getUser(), getPosts()]);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::TupleDestructure(td) => {
+                    assert_eq!(td.bindings, vec!["user", "posts"]);
+                    assert!(!td.mutable);
+                    match &td.init.kind {
+                        RustExprKind::TokioJoin(elements) => {
+                            assert_eq!(elements.len(), 2);
+                        }
+                        other => panic!("expected TokioJoin, got {other:?}"),
+                    }
+                }
+                other => panic!("expected TupleDestructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test 3: Promise.all three futures
+    #[test]
+    fn test_lower_promise_all_three_futures_produces_tokio_join_three() {
+        let source = r#"async function main() {
+            const [a, b, c] = await Promise.all([getA(), getB(), getC()]);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::TupleDestructure(td) => {
+                    assert_eq!(td.bindings, vec!["a", "b", "c"]);
+                    match &td.init.kind {
+                        RustExprKind::TokioJoin(elements) => {
+                            assert_eq!(elements.len(), 3, "expected 3 futures in tokio::join!");
+                        }
+                        other => panic!("expected TokioJoin, got {other:?}"),
+                    }
+                }
+                other => panic!("expected TupleDestructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test 4: spawn basic: spawn(async () => { work(); }) → tokio::spawn(async move { work(); })
+    #[test]
+    fn test_lower_spawn_basic_produces_tokio_spawn() {
+        let source = r#"async function main() {
+            spawn(async () => {
+                doWork();
+            });
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::Semi(expr) => match &expr.kind {
+                    RustExprKind::Call { func, args } => {
+                        assert_eq!(func, "tokio::spawn");
+                        assert_eq!(args.len(), 1);
+                        match &args[0].kind {
+                            RustExprKind::AsyncBlock { is_move, body } => {
+                                assert!(is_move, "spawn should add move to async block");
+                                assert!(!body.stmts.is_empty(), "body should have statements");
+                            }
+                            other => panic!("expected AsyncBlock, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Call, got {other:?}"),
+                },
+                other => panic!("expected Semi, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test 5: spawn with await inside
+    #[test]
+    fn test_lower_spawn_with_await_produces_tokio_spawn_with_await() {
+        let source = r#"async function main() {
+            spawn(async () => {
+                await asyncWork();
+            });
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::Semi(expr) => match &expr.kind {
+                    RustExprKind::Call { func, args } => {
+                        assert_eq!(func, "tokio::spawn");
+                        match &args[0].kind {
+                            RustExprKind::AsyncBlock { is_move, body } => {
+                                assert!(is_move);
+                                // The body should contain an await expression
+                                match &body.stmts[0] {
+                                    RustStmt::Semi(inner) => {
+                                        assert!(
+                                            matches!(&inner.kind, RustExprKind::Await(_)),
+                                            "expected Await inside spawn body"
+                                        );
+                                    }
+                                    other => panic!("expected Semi, got {other:?}"),
+                                }
+                            }
+                            other => panic!("expected AsyncBlock, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Call, got {other:?}"),
+                },
+                other => panic!("expected Semi, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test 6: import { spawn } from "std/concurrent" does not produce use declaration
+    #[test]
+    fn test_lower_std_concurrent_import_no_use_declaration() {
+        let source = r#"import { spawn } from "std/concurrent";
+async function main() {
+    spawn(async () => { doWork(); });
+}"#;
+        let file = lower_source(source);
+        let use_paths: Vec<&str> = file.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            !use_paths.iter().any(|p| p.contains("concurrent")),
+            "std/concurrent should not produce a use declaration, got: {use_paths:?}"
+        );
+    }
+
+    // Test 7: needs_async_runtime is set for spawn usage
+    #[test]
+    fn test_lower_module_with_spawn_sets_needs_async_runtime() {
+        let source = r#"function main() {
+            spawn(async () => { doWork(); });
+        }"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new();
+        let (_, _, _, needs_async_runtime) = transform.lower_module(&module);
+        assert!(
+            needs_async_runtime,
+            "expected needs_async_runtime to be true when spawn is used"
+        );
+    }
+
+    // Test 8: needs_async_runtime is set for Promise.all usage
+    #[test]
+    fn test_lower_module_with_promise_all_sets_needs_async_runtime() {
+        let source = r#"async function main() {
+            const [a, b] = await Promise.all([getA(), getB()]);
+        }"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new();
+        let (_, _, _, needs_async_runtime) = transform.lower_module(&module);
+        assert!(
+            needs_async_runtime,
+            "expected needs_async_runtime to be true when Promise.all is used"
+        );
     }
 }

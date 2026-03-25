@@ -106,6 +106,9 @@ impl UseMap {
                     Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
                 }
             }
+            ast::Stmt::ArrayDestructure(adestr) => {
+                Self::collect_expr_uses(&adestr.init, stmt_index, false, is_ref_call, uses);
+            }
             ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {
                 // No variable uses in break/continue
             }
@@ -346,6 +349,7 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
         ast::Stmt::VarDecl(_)
         | ast::Stmt::Return(_)
         | ast::Stmt::Destructure(_)
+        | ast::Stmt::ArrayDestructure(_)
         | ast::Stmt::Break(_)
         | ast::Stmt::Continue(_) => {}
         ast::Stmt::For(for_of) => {

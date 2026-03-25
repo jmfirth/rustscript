@@ -443,6 +443,9 @@ pub enum Stmt {
     /// A `for (const/let x of items) { ... }` loop.
     /// Lowers to Rust `for x in &items { ... }`.
     For(ForOfStmt),
+    /// An array destructuring declaration: `const [a, b] = expr;`.
+    /// Lowers to Rust tuple destructuring: `let (a, b) = expr;`.
+    ArrayDestructure(ArrayDestructureStmt),
     /// A `break;` statement.
     Break(BreakStmt),
     /// A `continue;` statement.
@@ -536,6 +539,23 @@ pub struct DestructureStmt {
     /// The initializer expression being destructured.
     pub init: Expr,
     /// The span covering the entire destructuring statement.
+    pub span: Span,
+}
+
+/// An array destructuring declaration: `const [a, b] = expr;`.
+///
+/// Lowers to Rust tuple destructuring: `let (a, b) = expr;`.
+/// Used primarily for `Promise.all` results where the concurrent
+/// futures return a tuple.
+#[derive(Debug, Clone)]
+pub struct ArrayDestructureStmt {
+    /// Whether this is a `const` or `let` binding.
+    pub binding: VarBinding,
+    /// The element names being extracted (positional).
+    pub elements: Vec<Ident>,
+    /// The initializer expression being destructured.
+    pub init: Expr,
+    /// The span covering the entire array destructuring statement.
     pub span: Span,
 }
 

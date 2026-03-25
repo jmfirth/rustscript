@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 
 use rsc_syntax::rust_ir::{
-    IteratorOp, IteratorTerminal, RustClosureBody, RustClosureParam, RustExpr, RustExprKind,
-    RustType,
+    IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustClosureParam, RustExpr,
+    RustExprKind, RustType,
 };
 
 #[cfg(test)]
@@ -65,6 +65,8 @@ pub(crate) struct BuiltinRegistry {
     methods: HashMap<String, HashMap<String, BuiltinEntry>>,
     string_methods: HashMap<String, StringMethodLowering>,
     collection_methods: HashMap<String, CollectionMethodLowering>,
+    /// Builtin free functions (e.g., `spawn`).
+    functions: HashMap<String, BuiltinLowering>,
 }
 
 impl BuiltinRegistry {
@@ -74,6 +76,7 @@ impl BuiltinRegistry {
             methods: HashMap::new(),
             string_methods: HashMap::new(),
             collection_methods: HashMap::new(),
+            functions: HashMap::new(),
         };
         register_defaults(&mut registry);
         registry
@@ -119,6 +122,19 @@ impl BuiltinRegistry {
         self.collection_methods.get(method)
     }
 
+    /// Register a builtin free function.
+    fn register_function(&mut self, name: &str, lowering: BuiltinLowering) {
+        self.functions.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up a free function by name.
+    ///
+    /// Returns the lowering function if the name is a known builtin free function
+    /// (e.g., `"spawn"`).
+    pub fn lookup_function(&self, name: &str) -> Option<&BuiltinLowering> {
+        self.functions.get(name)
+    }
+
     /// Check if a method call is a builtin and return its lowering function.
     pub fn lookup_method(&self, object: &str, method: &str) -> Option<&BuiltinLowering> {
         self.methods
@@ -153,6 +169,9 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_string_method("trim", lower_trim);
     registry.register_string_method("includes", lower_includes);
     registry.register_string_method("replace", lower_replace);
+
+    // Phase 2: spawn builtin
+    registry.register_function("spawn", lower_spawn);
 
     // Phase 2: collection methods (array iterator chains)
     registry.register_collection_method("map", lower_array_map);
@@ -192,6 +211,56 @@ fn strip_to_string(expr: RustExpr) -> RustExpr {
     } else {
         expr
     }
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency builtin lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `spawn(async () => { body })` to `tokio::spawn(async move { body })`.
+///
+/// Extracts the closure body from the async closure argument and wraps it in
+/// an `AsyncBlock` with `is_move: true` (spawned tasks must be `'static`).
+/// The result is a `tokio::spawn(...)` call with the async block as argument.
+fn lower_spawn(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    // Extract the async closure body from the first argument.
+    // The argument should be a Closure { is_async: true, body: ... }.
+    let async_block = if let Some(arg) = args.into_iter().next() {
+        match arg.kind {
+            RustExprKind::Closure { body, .. } => {
+                let block = match body {
+                    RustClosureBody::Block(b) => b,
+                    RustClosureBody::Expr(e) => RustBlock {
+                        stmts: vec![],
+                        expr: Some(e),
+                    },
+                };
+                RustExpr::synthetic(RustExprKind::AsyncBlock {
+                    is_move: true,
+                    body: block,
+                })
+            }
+            // If the argument is not a closure, pass it through directly
+            other => RustExpr::synthetic(other),
+        }
+    } else {
+        // No arguments — produce an empty async block
+        RustExpr::synthetic(RustExprKind::AsyncBlock {
+            is_move: true,
+            body: RustBlock {
+                stmts: vec![],
+                expr: None,
+            },
+        })
+    };
+
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
+        },
+        arg_span,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1399,6 +1468,61 @@ mod tests {
                 assert!(matches!(terminal, IteratorTerminal::Fold { .. }));
             }
             other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test: lookup_function("spawn") returns Some
+    #[test]
+    fn test_builtin_registry_lookup_function_spawn_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("spawn").is_some(),
+            "spawn should be registered as a builtin free function"
+        );
+    }
+
+    // Test: lookup_function for unknown returns None
+    #[test]
+    fn test_builtin_registry_lookup_function_unknown_returns_none() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("unknown_func").is_none(),
+            "unknown function should not be found"
+        );
+    }
+
+    // Test: lower_spawn produces tokio::spawn(async move { body })
+    #[test]
+    fn test_lower_spawn_produces_tokio_spawn_async_move_block() {
+        let work_call = RustExpr::synthetic(RustExprKind::Call {
+            func: "work".into(),
+            args: vec![],
+        });
+        let closure = RustExpr::synthetic(RustExprKind::Closure {
+            is_async: true,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![rsc_syntax::rust_ir::RustStmt::Semi(work_call)],
+                expr: None,
+            }),
+        });
+
+        let result = lower_spawn(vec![closure], span());
+        match &result.kind {
+            RustExprKind::Call { func, args } => {
+                assert_eq!(func, "tokio::spawn");
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    RustExprKind::AsyncBlock { is_move, body } => {
+                        assert!(is_move, "spawn should add move to async block");
+                        assert_eq!(body.stmts.len(), 1);
+                    }
+                    other => panic!("expected AsyncBlock, got {other:?}"),
+                }
+            }
+            other => panic!("expected Call, got {other:?}"),
         }
     }
 }

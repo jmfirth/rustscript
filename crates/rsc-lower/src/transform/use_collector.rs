@@ -212,6 +212,9 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(&let_else.expr, needs_hashmap, needs_hashset);
             scan_block_for_collections(&let_else.else_block, needs_hashmap, needs_hashset);
         }
+        RustStmt::TupleDestructure(td) => {
+            scan_expr_for_collections(&td.init, needs_hashmap, needs_hashset);
+        }
         RustStmt::Break(_) | RustStmt::Continue(_) => {}
     }
 }
@@ -302,7 +305,7 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             scan_expr_for_collections(closure_body, needs_hashmap, needs_hashset);
         }
-        RustExprKind::ClosureCall { body, .. } => {
+        RustExprKind::ClosureCall { body, .. } | RustExprKind::AsyncBlock { body, .. } => {
             scan_block_for_collections(body, needs_hashmap, needs_hashset);
         }
         RustExprKind::Closure { body, .. } => match body {
@@ -313,6 +316,11 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(block, needs_hashmap, needs_hashset);
             }
         },
+        RustExprKind::TokioJoin(exprs) => {
+            for expr in exprs {
+                scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+            }
+        }
         RustExprKind::IteratorChain {
             source,
             ops,
