@@ -236,3 +236,66 @@ fn test_e2e_p2_string_method_chaining_result() {
 // `new HashMap()` without type annotations produces rustc E0282.
 // Documented in Developer Outcome.
 // ===========================================================================
+
+// ===========================================================================
+// 13. Iterator .map() — transform array elements
+//
+// Features: .map() → .iter().map().collect::<Vec<_>>(), closure, console.log
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_e2e_p2_iterator_map_doubles_values() {
+    let source = r#"function main() {
+  const nums: Array<i64> = [1, 2, 3, 4, 5];
+  const doubled = nums.map((x) => x * 2);
+  console.log(doubled.length);
+  console.log(doubled[0]);
+  console.log(doubled[4]);
+}"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "5\n2\n10");
+}
+
+// ===========================================================================
+// 14. Iterator .filter() + .map() chain — filter then transform
+//
+// Features: chained .filter().map() → single iterator chain with collect
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_e2e_p2_iterator_filter_map_chain() {
+    let source = r#"function main() {
+  const nums: Array<i64> = [1, 2, 3, 4, 5, 6];
+  const evenDoubled = nums.filter((x) => x % 2 == 0).map((x) => x * 10);
+  console.log(evenDoubled.length);
+  console.log(evenDoubled[0]);
+  console.log(evenDoubled[1]);
+  console.log(evenDoubled[2]);
+}"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "3\n20\n40\n60");
+}
+
+// ===========================================================================
+// 15. Iterator .forEach() — side-effecting iteration
+//
+// Features: .forEach() → .iter().for_each(), closure with side effect
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_e2e_p2_iterator_for_each_prints_elements() {
+    let source = r#"function main() {
+  const names: Array<string> = ["Alice", "Bob", "Charlie"];
+  names.forEach((name) => {
+    console.log(name);
+  });
+}"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice\nBob\nCharlie");
+}

@@ -1,4 +1,8 @@
-//! `RustScript` AST type definitions for the Phase 0 syntax subset.
+//! `RustScript` AST type definitions.
+//!
+//! Covers the full language surface through Phase 2: functions, types, enums,
+//! interfaces, classes, async/await, closures, template literals, imports/exports,
+//! try/catch, switch/match, optional types, and array/string method calls.
 //!
 //! The parser produces this AST from `.rts` source. The lowering pass consumes
 //! it and produces Rust IR. Each node carries a [`Span`] for diagnostic reporting.

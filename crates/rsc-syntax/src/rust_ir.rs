@@ -1,4 +1,8 @@
-//! Rust IR type definitions for the Phase 0 syntax subset.
+//! Rust IR type definitions.
+//!
+//! Covers the full Rust output surface through Phase 2: functions (sync and async),
+//! structs, enums, traits, impl blocks, closures, iterator chains, Result/Option
+//! wrapping, match statements, and all expression/statement forms.
 //!
 //! The Rust IR is a separate type hierarchy closer to actual Rust syntax than
 //! the `RustScript` AST. The lowering pass transforms the AST into IR, and the
