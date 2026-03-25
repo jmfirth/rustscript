@@ -42,12 +42,18 @@ enum Command {
         /// Compilation target (e.g., wasm32-unknown-unknown, wasm32-wasip1)
         #[arg(long)]
         target: Option<String>,
+        /// Disable Tier 2 borrow inference (all params stay owned)
+        #[arg(long)]
+        no_borrow_inference: bool,
     },
     /// Compile and run the project
     Run {
         /// Compilation target (e.g., native targets only — WASM cannot be run directly)
         #[arg(long)]
         target: Option<String>,
+        /// Disable Tier 2 borrow inference (all params stay owned)
+        #[arg(long)]
+        no_borrow_inference: bool,
         /// Arguments to pass to the compiled program
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -93,8 +99,16 @@ fn main() {
 fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Init { name, template } => cmd_init(&name, template.as_deref()),
-        Command::Build { release, target } => cmd_build(release, target.as_deref()),
-        Command::Run { args, target } => cmd_run(&args, target.as_deref()),
+        Command::Build {
+            release,
+            target,
+            no_borrow_inference,
+        } => cmd_build(release, target.as_deref(), no_borrow_inference),
+        Command::Run {
+            args,
+            target,
+            no_borrow_inference,
+        } => cmd_run(&args, target.as_deref(), no_borrow_inference),
         Command::Test { release, args } => cmd_test(release, &args),
         Command::Check => cmd_check(),
         Command::Fmt { check, files } => cmd_fmt(check, &files),
@@ -130,8 +144,9 @@ fn cmd_init(name: &str, template: Option<&str>) -> Result<i32> {
 }
 
 /// Compile the project to a native binary (or WASM module with `--target`).
-fn cmd_build(release: bool, target: Option<&str>) -> Result<i32> {
-    let project = open_project()?;
+fn cmd_build(release: bool, target: Option<&str>, no_borrow_inference: bool) -> Result<i32> {
+    let mut project = open_project()?;
+    project.compile_options.no_borrow_inference = no_borrow_inference;
     match project.build(release, target) {
         Ok(()) => {
             println!("Build complete");
@@ -145,8 +160,9 @@ fn cmd_build(release: bool, target: Option<&str>) -> Result<i32> {
 }
 
 /// Compile and run the project.
-fn cmd_run(args: &[String], target: Option<&str>) -> Result<i32> {
-    let project = open_project()?;
+fn cmd_run(args: &[String], target: Option<&str>, no_borrow_inference: bool) -> Result<i32> {
+    let mut project = open_project()?;
+    project.compile_options.no_borrow_inference = no_borrow_inference;
     match project.run(args, target) {
         Ok(status) => Ok(status.code().unwrap_or(EXIT_INTERNAL_ERROR)),
         Err(DriverError::CompilationFailed(_)) => Ok(EXIT_USER_ERROR),

@@ -15,7 +15,7 @@ use rsc_syntax::rust_ir::RustModDecl;
 
 use crate::error::{DriverError, Result};
 use crate::error_translation::translate_rustc_errors;
-use crate::pipeline::{CompileResult, compile_source, compile_source_with_mods};
+use crate::pipeline::CompileResult;
 
 /// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
 const PROJECT_MANIFEST: &str = "cargo.toml";
@@ -199,6 +199,8 @@ pub struct Project {
     pub root: PathBuf,
     /// Project name (from directory name or `cargo.toml`).
     pub name: String,
+    /// Compilation options (e.g., `--no-borrow-inference`).
+    pub compile_options: crate::pipeline::CompileOptions,
 }
 
 impl Project {
@@ -221,6 +223,7 @@ impl Project {
                 return Ok(Self {
                     root: current,
                     name,
+                    compile_options: crate::pipeline::CompileOptions::default(),
                 });
             }
 
@@ -231,6 +234,7 @@ impl Project {
                 return Ok(Self {
                     root: current,
                     name,
+                    compile_options: crate::pipeline::CompileOptions::default(),
                 });
             }
 
@@ -323,7 +327,11 @@ impl Project {
                 .file_name()
                 .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
 
-            let module_result = compile_source(&module_source, module_file_name);
+            let module_result = crate::pipeline::compile_source_with_options(
+                &module_source,
+                module_file_name,
+                &self.compile_options,
+            );
 
             // Collect dependencies even from modules with errors (the imports are still valid)
             all_crate_deps.extend(module_result.crate_dependencies.iter().cloned());
@@ -361,9 +369,14 @@ impl Project {
             .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
 
         let result = if mod_decls.is_empty() {
-            compile_source(&source, file_name)
+            crate::pipeline::compile_source_with_options(&source, file_name, &self.compile_options)
         } else {
-            compile_source_with_mods(&source, file_name, mod_decls)
+            crate::pipeline::compile_source_with_mods_and_options(
+                &source,
+                file_name,
+                mod_decls,
+                &self.compile_options,
+            )
         };
 
         // Collect main file dependencies

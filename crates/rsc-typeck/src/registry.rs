@@ -127,6 +127,17 @@ impl TypeRegistry {
         self.types.get(name)
     }
 
+    /// Check whether a registered type is a simple enum (no data variants).
+    ///
+    /// Simple enums are `Copy` because they have no associated data.
+    /// Returns `false` if the name is not registered or is not a simple enum.
+    #[must_use]
+    pub fn is_simple_enum(&self, name: &str) -> bool {
+        self.types
+            .get(name)
+            .is_some_and(|td| matches!(td.kind, TypeDefKind::SimpleEnum(_)))
+    }
+
     /// Look up the method signatures for a registered interface.
     ///
     /// Returns `None` if the name is not registered or is not an interface.

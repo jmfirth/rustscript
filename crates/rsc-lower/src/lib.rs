@@ -29,6 +29,15 @@ pub struct CrateDependency {
     pub name: String,
 }
 
+/// Options controlling the lowering pass.
+#[derive(Debug, Clone, Default)]
+pub struct LowerOptions {
+    /// When true, disables Tier 2 borrow inference and forces all function
+    /// parameters to `Owned` mode (Tier 1 behavior). Useful for debugging
+    /// when generated Rust has borrow-related compilation issues.
+    pub no_borrow_inference: bool,
+}
+
 /// Result of lowering a single module.
 ///
 /// Groups the Rust IR, diagnostics, external crate dependencies, and
@@ -51,7 +60,16 @@ pub struct LowerResult {
 /// crate dependencies discovered from import statements.
 #[must_use]
 pub fn lower(module: &ast::Module) -> LowerResult {
-    let mut transform = Transform::new();
+    lower_with_options(module, &LowerOptions::default())
+}
+
+/// Lower a `RustScript` AST to Rust IR with explicit options.
+///
+/// Like [`lower`], but accepts [`LowerOptions`] to control lowering behavior
+/// (e.g., disabling borrow inference with `--no-borrow-inference`).
+#[must_use]
+pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> LowerResult {
+    let mut transform = Transform::new(options.no_borrow_inference);
     let (ir, diagnostics, crate_deps, needs_async_runtime) = transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {

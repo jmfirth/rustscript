@@ -30,6 +30,14 @@ pub struct CompileResult {
     pub source_map_lines: Vec<Option<Span>>,
 }
 
+/// Options controlling the compilation pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    /// When true, disables Tier 2 borrow inference and forces all function
+    /// parameters to `Owned` mode (Tier 1 behavior).
+    pub no_borrow_inference: bool,
+}
+
 /// Compile a single `RustScript` source string to Rust source code.
 ///
 /// Orchestrates the full pipeline: parse, lower, emit. Diagnostics from every
@@ -37,6 +45,19 @@ pub struct CompileResult {
 /// and the result is returned with `has_errors = true`.
 #[must_use]
 pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
+    compile_source_with_options(source, file_name, &CompileOptions::default())
+}
+
+/// Compile a single `RustScript` source string with explicit pipeline options.
+///
+/// Like [`compile_source`], but accepts [`CompileOptions`] to control behavior
+/// (e.g., `--no-borrow-inference`).
+#[must_use]
+pub fn compile_source_with_options(
+    source: &str,
+    file_name: &str,
+    options: &CompileOptions,
+) -> CompileResult {
     let mut source_map = SourceMap::new();
     let file_id = source_map.add_file(file_name.to_owned(), source.to_owned());
 
@@ -58,7 +79,10 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
     }
 
     // Stage 2: Lower
-    let lower_result = rsc_lower::lower(&module);
+    let lower_options = rsc_lower::LowerOptions {
+        no_borrow_inference: options.no_borrow_inference,
+    };
+    let lower_result = rsc_lower::lower_with_options(&module, &lower_options);
 
     all_diagnostics.extend(lower_result.diagnostics);
 
@@ -100,6 +124,19 @@ pub fn compile_source_with_mods(
     file_name: &str,
     mod_decls: Vec<rsc_syntax::rust_ir::RustModDecl>,
 ) -> CompileResult {
+    compile_source_with_mods_and_options(source, file_name, mod_decls, &CompileOptions::default())
+}
+
+/// Compile with mod declarations and explicit pipeline options.
+///
+/// Like [`compile_source_with_mods`], but accepts [`CompileOptions`].
+#[must_use]
+pub fn compile_source_with_mods_and_options(
+    source: &str,
+    file_name: &str,
+    mod_decls: Vec<rsc_syntax::rust_ir::RustModDecl>,
+    options: &CompileOptions,
+) -> CompileResult {
     let mut source_map = SourceMap::new();
     let file_id = source_map.add_file(file_name.to_owned(), source.to_owned());
 
@@ -121,7 +158,10 @@ pub fn compile_source_with_mods(
     }
 
     // Stage 2: Lower
-    let lower_result = rsc_lower::lower(&module);
+    let lower_options = rsc_lower::LowerOptions {
+        no_borrow_inference: options.no_borrow_inference,
+    };
+    let lower_result = rsc_lower::lower_with_options(&module, &lower_options);
 
     all_diagnostics.extend(lower_result.diagnostics);
 

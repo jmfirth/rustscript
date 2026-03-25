@@ -703,3 +703,115 @@ function main(): void {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "hello");
 }
+
+// ===========================================================================
+// Task 047: Tier 2 Ownership — Edge Cases E2E
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 047-E2E-1: Class method with &str param compiles and runs
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_047_class_method_borrowed_str() {
+    let source = "\
+class Greeter {
+  greet(name: string): void {
+    console.log(name);
+  }
+}
+
+function main() {
+  const g = new Greeter();
+  g.greet(\"Alice\");
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice");
+}
+
+// ---------------------------------------------------------------------------
+// 047-E2E-2: String method on &str param works correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_047_string_method_on_borrowed_str() {
+    let source = "\
+function shout(name: string): string {
+  return name.toUpperCase();
+}
+
+function main(): void {
+  const result: string = shout(\"hello\");
+  console.log(result);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "HELLO");
+}
+
+// ---------------------------------------------------------------------------
+// 047-E2E-3: --no-borrow-inference flag produces Tier 1 (both compile)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_047_no_borrow_inference_both_compile() {
+    use rsc_driver::{CompileOptions, compile_source_with_options};
+
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  greet(\"hello\");
+}";
+
+    // With borrow inference (default)
+    let with_borrow = compile_and_run(source);
+    assert_eq!(with_borrow.trim(), "hello");
+
+    // Without borrow inference — should also compile and produce same output
+    let options = CompileOptions {
+        no_borrow_inference: true,
+    };
+    let result = compile_source_with_options(source, "test.rts", &options);
+    assert!(!result.has_errors);
+
+    // Build and run the no-borrow version too
+    let rust_source = result.rust_source;
+    assert!(
+        rust_source.contains("fn greet(name: String)"),
+        "no-borrow should use String: {rust_source}"
+    );
+
+    // Verify it compiles by building
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let src_dir = tmp_dir.path().join("src");
+    std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
+    let cargo_toml =
+        "[package]\nname = \"rsc-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n";
+    std::fs::write(tmp_dir.path().join("Cargo.toml"), cargo_toml)
+        .expect("failed to write Cargo.toml");
+    std::fs::write(src_dir.join("main.rs"), &rust_source).expect("failed to write main.rs");
+
+    let output = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(tmp_dir.path())
+        .output()
+        .expect("failed to run cargo");
+
+    assert!(
+        output.status.success(),
+        "no-borrow version should compile and run.\nstdout: {}\nstderr: {}\ngenerated:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        rust_source,
+    );
+    let stdout = String::from_utf8(output.stdout).expect("not utf-8");
+    assert_eq!(stdout.trim(), "hello");
+}

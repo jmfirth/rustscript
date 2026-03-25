@@ -12,5 +12,8 @@ mod project;
 mod templates;
 
 pub use error_translation::translate_rustc_errors;
-pub use pipeline::{CompileResult, compile_source, compile_source_with_mods};
+pub use pipeline::{
+    CompileOptions, CompileResult, compile_source, compile_source_with_mods,
+    compile_source_with_mods_and_options, compile_source_with_options,
+};
 pub use project::{Project, WasmTarget, init_project, parse_wasm_target};

@@ -2503,3 +2503,252 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("tier2_mixed_params_same_fn", &actual, expected);
 }
+
+// ===========================================================================
+// Task 047: Tier 2 Ownership — Edge Cases and Optimization
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 047-1. Class method with borrowed param emits `&str`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_class_method_borrowed_param() {
+    let source = "\
+class Greeter {
+  greet(name: string): void {
+    console.log(name);
+  }
+}
+
+function main() {
+  const g = new Greeter();
+  g.greet(\"world\");
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Greeter {
+}
+
+impl Greeter {
+    fn greet(&self, name: &str) {
+        println!(\"{}\", name);
+    }
+}
+
+fn main() {
+    let g = Greeter::new();
+    g.greet(\"world\".to_string());
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("047_class_method_borrowed_param", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 047-2. Class method `self` param unchanged by borrow analysis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_class_method_self_unchanged() {
+    let source = "\
+class Counter {
+  public count: i32;
+
+  constructor() {
+    this.count = 0;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  display(label: string): void {
+    console.log(label);
+    console.log(this.count);
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    // increment mutates self → &mut self
+    assert!(
+        actual.contains("fn increment(&mut self)"),
+        "increment should have &mut self: {actual}"
+    );
+    // display only reads self → &self, label is borrowed
+    assert!(
+        actual.contains("fn display(&self, label: &str)"),
+        "display should have &self and label: &str: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-3. Trait impl method params stay Owned
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_trait_impl_method_stays_owned() {
+    let source = "\
+interface Processor {
+  process(data: string): void;
+}
+
+class MyProcessor implements Processor {
+  process(data: string): void {
+    console.log(data);
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    // Trait method signature: owned String
+    assert!(
+        actual.contains("fn process(&self, data: String)"),
+        "trait impl method should keep Owned params: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-3b. Generic param T used only in println! stays Owned
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_generic_param_stays_owned() {
+    let source = "\
+function show<T>(val: T): void {
+  console.log(val);
+}";
+
+    let actual = compile_to_rust(source);
+    // Generic type params conservatively stay Owned — we can't know if T is Copy
+    assert!(
+        actual.contains("fn show<T>(val: T)"),
+        "generic param T should stay Owned: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-4. Simple enum type param stays Owned (Copy type)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_simple_enum_param_stays_owned() {
+    let source = r#"type Color = "red" | "green" | "blue"
+
+function useColor(c: Color, name: string): void {
+  console.log(name);
+}"#;
+
+    let actual = compile_to_rust(source);
+    // Simple enum param: Owned (Copy → no benefit from borrowing)
+    // String param: BorrowedStr (&str)
+    assert!(
+        actual.contains("fn useColor(c: Color, name: &str)"),
+        "simple enum param should stay Owned, string should borrow: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-5. Option<i32> param stays Owned (Copy type)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_option_copy_param_stays_owned() {
+    let source = "\
+function check(val: i32 | null): void {
+  console.log(val);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn check(val: Option<i32>)"),
+        "Option<i32> param should stay Owned (Copy): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-6. Parameter used in loop body → correct borrow inference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_param_in_loop_body_borrowed() {
+    let source = "\
+function repeat(msg: string, n: i32): void {
+  let i: i32 = 0;
+  while (i < n) {
+    console.log(msg);
+    i = i + 1;
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn repeat(msg: &str, n: i32)"),
+        "param read in loop should be borrowed: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-6b. String method on &str param (correctness scenario 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_string_method_on_borrowed_param() {
+    let source = "\
+function shout(name: string): string {
+  return name.toUpperCase();
+}";
+
+    let actual = compile_to_rust(source);
+    // name is only used in a method call → ReadOnly → BorrowedStr
+    assert!(
+        actual.contains("fn shout(name: &str) -> String"),
+        "param should be &str with String return: {actual}"
+    );
+    assert!(
+        actual.contains("name.to_uppercase()"),
+        "should call .to_uppercase() on &str: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 047-7. --no-borrow-inference flag produces Tier 1 output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_047_no_borrow_inference_flag() {
+    use rsc_driver::{CompileOptions, compile_source_with_options};
+
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  greet(\"hello\");
+}";
+
+    // With borrow inference (default): name → &str
+    let result_with = rsc_driver::compile_source(source, "test.rts");
+    assert!(!result_with.has_errors);
+    assert!(
+        result_with.rust_source.contains("fn greet(name: &str)"),
+        "default should use &str: {}",
+        result_with.rust_source,
+    );
+
+    // Without borrow inference: name → String
+    let options = CompileOptions {
+        no_borrow_inference: true,
+    };
+    let result_without = compile_source_with_options(source, "test.rts", &options);
+    assert!(!result_without.has_errors);
+    assert!(
+        result_without
+            .rust_source
+            .contains("fn greet(name: String)"),
+        "no-borrow should use String: {}",
+        result_without.rust_source,
+    );
+}

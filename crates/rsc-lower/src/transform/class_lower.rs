@@ -142,10 +142,12 @@ impl Transform {
         // Lower methods
         for member in &cls.members {
             if let ast::ClassMember::Method(method) = member {
-                let lowered = self.lower_class_method(method, &generic_names, ctx, &mut diags);
+                let is_trait_impl = trait_method_names.contains(&method.name.name);
+                let lowered =
+                    self.lower_class_method(method, &generic_names, is_trait_impl, ctx, &mut diags);
 
                 // Check if this method belongs to a trait impl
-                if trait_method_names.contains(&method.name.name) {
+                if is_trait_impl {
                     // Find which interface this method belongs to
                     for iface in &cls.implements {
                         if let Some(iface_methods) =
@@ -300,20 +302,60 @@ impl Transform {
     /// Lower a class method to a `RustMethod`.
     ///
     /// Determines `&self` or `&mut self` by analyzing whether the method
-    /// writes to `this.field`.
+    /// writes to `this.field`. When `is_trait_impl` is false and borrow
+    /// inference is enabled, non-self parameters are analyzed for borrowing.
+    /// Trait impl methods always keep `Owned` params to match the trait contract.
     fn lower_class_method(
         &self,
         method: &ast::ClassMethod,
         generic_names: &[String],
+        is_trait_impl: bool,
         ctx: &mut LoweringContext,
         diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
     ) -> RustMethod {
         ctx.push_scope();
 
+        // Analyze param usage for borrow inference (inherent methods only)
+        // Trait impl methods must match the trait signature → always Owned.
+        // Conditional move analysis is not attempted in Phase 4 — any branch
+        // that moves a parameter taints the entire parameter as Moved.
+        let param_modes = if !is_trait_impl && !self.no_borrow_inference {
+            let param_names: Vec<String> =
+                method.params.iter().map(|p| p.name.name.clone()).collect();
+            let builtins = &self.builtins;
+            let usage_map = ownership::analyze_param_usage(&method.body, &param_names, |obj, m| {
+                builtins.is_ref_args(obj, m)
+            });
+
+            let mut temp_diags = Vec::new();
+            let modes: Vec<ParamMode> = method
+                .params
+                .iter()
+                .map(|p| {
+                    let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                        &p.type_ann,
+                        &self.type_registry,
+                        generic_names,
+                        &mut temp_diags,
+                    );
+                    let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                    let usage = usage_map
+                        .get(p.name.name.as_str())
+                        .copied()
+                        .unwrap_or(ownership::ParamUsage::ReadOnly);
+                    ownership::usage_to_mode(usage, &rust_ty, Some(&self.type_registry))
+                })
+                .collect();
+            Some(modes)
+        } else {
+            None
+        };
+
         let params: Vec<RustParam> = method
             .params
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
                 let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
                     &p.type_ann,
                     &self.type_registry,
@@ -322,10 +364,17 @@ impl Transform {
                 );
                 let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
                 ctx.declare_variable(p.name.name.clone(), rust_ty.clone());
+
+                let mode = param_modes
+                    .as_ref()
+                    .and_then(|modes| modes.get(i))
+                    .copied()
+                    .unwrap_or(ParamMode::Owned);
+
                 RustParam {
                     name: p.name.name.clone(),
                     ty: rust_ty,
-                    mode: ParamMode::Owned,
+                    mode,
                     span: Some(p.span),
                 }
             })
@@ -358,7 +407,6 @@ impl Transform {
 
         // Build use map and lower the body
         let reassigned = ownership::find_reassigned_variables(&method.body);
-        // Class methods stay Tier 1 — no callee param mode lookup
         let use_map = UseMap::analyze(
             &method.body,
             |obj, method_name| self.builtins.is_ref_args(obj, method_name),

@@ -602,30 +602,44 @@ pub(crate) fn find_reassigned_variables(body: &ast::Block) -> HashSet<String> {
 
 /// Check whether a Rust type implements `Copy`.
 ///
-/// **Tier 1 only.** Currently covers primitive numeric types, `bool`, and `()`.
-/// Tier 2 ownership inference (Phase 4) will expand this to handle:
-/// - User-defined types that derive `Copy`
-/// - `Option<T>` where `T: Copy`
-/// - Named types that happen to be `Copy` (e.g., simple enums)
+/// Covers primitive numeric types, `bool`, `()`, simple enums (no data),
+/// and `Option<T>` where `T: Copy`. When a type registry is provided,
+/// `Named` types are checked against registered simple enums.
 ///
-/// Type parameters (`TypeParam`) are conservatively assumed non-Copy.
-/// Generic types are also assumed non-Copy.
+/// Type parameters (`TypeParam`) are conservatively assumed non-Copy
+/// because the concrete type is unknown at the definition site.
 pub(crate) fn is_copy_type(ty: &RustType) -> bool {
-    matches!(
-        ty,
+    is_copy_type_with_registry(ty, None)
+}
+
+/// Check whether a Rust type implements `Copy`, with access to the type registry.
+///
+/// When `registry` is `Some`, named types are checked against the registry to
+/// determine if they are simple enums (which derive Copy). `Option<CopyType>`
+/// is also recognized as Copy.
+pub(crate) fn is_copy_type_with_registry(
+    ty: &RustType,
+    registry: Option<&rsc_typeck::registry::TypeRegistry>,
+) -> bool {
+    match ty {
         RustType::I8
-            | RustType::I16
-            | RustType::I32
-            | RustType::I64
-            | RustType::U8
-            | RustType::U16
-            | RustType::U32
-            | RustType::U64
-            | RustType::F32
-            | RustType::F64
-            | RustType::Bool
-            | RustType::Unit
-    )
+        | RustType::I16
+        | RustType::I32
+        | RustType::I64
+        | RustType::U8
+        | RustType::U16
+        | RustType::U32
+        | RustType::U64
+        | RustType::F32
+        | RustType::F64
+        | RustType::Bool
+        | RustType::Unit => true,
+        // Simple enums (no data variants) derive Copy
+        RustType::Named(name) => registry.is_some_and(|reg| reg.is_simple_enum(name)),
+        // Option<T> is Copy when T is Copy
+        RustType::Option(inner) => is_copy_type_with_registry(inner, registry),
+        _ => false,
+    }
 }
 
 /// Check whether a type is safe to borrow as `&T` in function parameters.
@@ -814,15 +828,25 @@ pub(crate) fn analyze_param_usage(
 
 /// Convert a `ParamUsage` to a `ParamMode` for a given parameter type.
 ///
-/// Phase 4 is conservative: only `String` gets `BorrowedStr` and only
-/// collection generics (`Vec<T>`, `HashMap<K,V>`, `HashSet<T>`) get
-/// `Borrowed`. Named types (structs, enums) stay `Owned` because match
-/// destructuring with `&T` can produce reference bindings that break
-/// arithmetic on Copy inner fields. Task 047 may extend this.
-pub(crate) fn usage_to_mode(usage: ParamUsage, param_type: &RustType) -> ParamMode {
+/// Phase 4 conservative rules:
+/// - Copy types (primitives, simple enums, `Option<Copy>`) → always `Owned`
+/// - `String` read-only → `BorrowedStr`
+/// - Collection generics (`Vec<T>`, `HashMap<K,V>`, `HashSet<T>`) read-only → `Borrowed`
+/// - Type parameters (`T`) → always `Owned` (caller doesn't know the concrete type)
+/// - Named types (structs, data enums) → `Owned` (match destructuring issues)
+pub(crate) fn usage_to_mode(
+    usage: ParamUsage,
+    param_type: &RustType,
+    registry: Option<&rsc_typeck::registry::TypeRegistry>,
+) -> ParamMode {
     match usage {
         ParamUsage::ReadOnly => {
-            if is_copy_type(param_type) {
+            // Generic type parameters stay Owned — can't borrow what
+            // the caller doesn't know the concrete type of
+            if matches!(param_type, RustType::TypeParam(_)) {
+                return ParamMode::Owned;
+            }
+            if is_copy_type_with_registry(param_type, registry) {
                 // Copy types: no benefit from borrowing
                 ParamMode::Owned
             } else if matches!(param_type, RustType::String) {
@@ -832,9 +856,9 @@ pub(crate) fn usage_to_mode(usage: ParamUsage, param_type: &RustType) -> ParamMo
                 // Collection types: &Vec<T>, &HashMap<K,V>, &HashSet<T>
                 ParamMode::Borrowed
             } else {
-                // Named types (structs, enums), type params, etc. stay owned.
+                // Named types (structs, data enums), etc. stay owned.
                 // Borrowing these can cause issues with match destructuring
-                // and other patterns. Task 047 may extend this.
+                // and other patterns.
                 ParamMode::Owned
             }
         }
@@ -1926,16 +1950,16 @@ mod tests {
     #[test]
     fn test_usage_to_mode_copy_type_read_only_stays_owned() {
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &RustType::I32),
+            usage_to_mode(ParamUsage::ReadOnly, &RustType::I32, None),
             ParamMode::Owned,
             "Copy type ReadOnly should stay Owned"
         );
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &RustType::F64),
+            usage_to_mode(ParamUsage::ReadOnly, &RustType::F64, None),
             ParamMode::Owned,
         );
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &RustType::Bool),
+            usage_to_mode(ParamUsage::ReadOnly, &RustType::Bool, None),
             ParamMode::Owned,
         );
     }
@@ -1944,7 +1968,7 @@ mod tests {
     #[test]
     fn test_usage_to_mode_string_read_only_is_borrowed_str() {
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &RustType::String),
+            usage_to_mode(ParamUsage::ReadOnly, &RustType::String, None),
             ParamMode::BorrowedStr,
             "String ReadOnly should be BorrowedStr"
         );
@@ -1958,22 +1982,25 @@ mod tests {
             vec![RustType::I32],
         );
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &vec_type),
+            usage_to_mode(ParamUsage::ReadOnly, &vec_type, None),
             ParamMode::Borrowed,
             "Vec ReadOnly should be Borrowed"
         );
     }
 
     // Test 13: Named type parameter that's ReadOnly → ParamMode::Owned
-    // Phase 4 conservatively keeps named types (structs, enums) as Owned
-    // because match destructuring with &T can produce reference bindings
-    // that break arithmetic on Copy inner fields. Task 047 may extend this.
+    // Named types (structs, data enums) stay Owned without registry context.
+    // Simple enums are Copy when checked with a registry.
     #[test]
     fn test_usage_to_mode_named_type_read_only_is_owned() {
         assert_eq!(
-            usage_to_mode(ParamUsage::ReadOnly, &RustType::Named("User".to_owned())),
+            usage_to_mode(
+                ParamUsage::ReadOnly,
+                &RustType::Named("User".to_owned()),
+                None,
+            ),
             ParamMode::Owned,
-            "Named type ReadOnly should stay Owned in Phase 4"
+            "Named type ReadOnly should stay Owned without registry"
         );
     }
 
@@ -2083,10 +2110,174 @@ mod tests {
                 &RustType::Generic(
                     Box::new(RustType::Named("Vec".to_owned())),
                     vec![RustType::I32]
-                )
+                ),
+                None,
             ),
             ParamMode::Borrowed,
             "Generic Vec ReadOnly should be Borrowed"
+        );
+    }
+
+    // ========================================================================
+    // Task 047: Borrow Inference Edge Cases
+    // ========================================================================
+
+    // Test 047-1: Simple enum is Copy when registry knows about it
+    #[test]
+    fn test_is_copy_type_simple_enum_with_registry() {
+        let mut registry = rsc_typeck::registry::TypeRegistry::new();
+        registry.register_simple_enum(
+            "Direction".to_owned(),
+            vec![
+                "North".to_owned(),
+                "South".to_owned(),
+                "East".to_owned(),
+                "West".to_owned(),
+            ],
+        );
+
+        // With registry: simple enum is Copy
+        assert!(
+            is_copy_type_with_registry(&RustType::Named("Direction".to_owned()), Some(&registry)),
+            "Simple enum should be Copy with registry"
+        );
+
+        // Without registry: unknown named type is not Copy
+        assert!(
+            !is_copy_type(&RustType::Named("Direction".to_owned())),
+            "Named type without registry should not be Copy"
+        );
+    }
+
+    // Test 047-2: Option<CopyType> is Copy
+    #[test]
+    fn test_is_copy_type_option_of_copy() {
+        // Option<i32> is Copy
+        assert!(
+            is_copy_type(&RustType::Option(Box::new(RustType::I32))),
+            "Option<i32> should be Copy"
+        );
+
+        // Option<bool> is Copy
+        assert!(
+            is_copy_type(&RustType::Option(Box::new(RustType::Bool))),
+            "Option<bool> should be Copy"
+        );
+
+        // Option<String> is NOT Copy
+        assert!(
+            !is_copy_type(&RustType::Option(Box::new(RustType::String))),
+            "Option<String> should not be Copy"
+        );
+
+        // Option<Option<i32>> is Copy (recursive)
+        assert!(
+            is_copy_type(&RustType::Option(Box::new(RustType::Option(Box::new(
+                RustType::I32
+            ))))),
+            "Option<Option<i32>> should be Copy"
+        );
+    }
+
+    // Test 047-3: Simple enum param stays Owned (Copy type)
+    #[test]
+    fn test_usage_to_mode_simple_enum_read_only_stays_owned() {
+        let mut registry = rsc_typeck::registry::TypeRegistry::new();
+        registry.register_simple_enum(
+            "Color".to_owned(),
+            vec!["Red".to_owned(), "Green".to_owned(), "Blue".to_owned()],
+        );
+
+        assert_eq!(
+            usage_to_mode(
+                ParamUsage::ReadOnly,
+                &RustType::Named("Color".to_owned()),
+                Some(&registry),
+            ),
+            ParamMode::Owned,
+            "Simple enum ReadOnly should stay Owned (Copy type)"
+        );
+    }
+
+    // Test 047-4: Option<i32> param stays Owned (Copy type)
+    #[test]
+    fn test_usage_to_mode_option_copy_read_only_stays_owned() {
+        assert_eq!(
+            usage_to_mode(
+                ParamUsage::ReadOnly,
+                &RustType::Option(Box::new(RustType::I32)),
+                None,
+            ),
+            ParamMode::Owned,
+            "Option<i32> ReadOnly should stay Owned (Copy type)"
+        );
+    }
+
+    // Test 047-5: TypeParam always stays Owned
+    #[test]
+    fn test_usage_to_mode_type_param_read_only_stays_owned() {
+        assert_eq!(
+            usage_to_mode(
+                ParamUsage::ReadOnly,
+                &RustType::TypeParam("T".to_owned()),
+                None,
+            ),
+            ParamMode::Owned,
+            "TypeParam ReadOnly should stay Owned (can't borrow generic)"
+        );
+    }
+
+    // Test 047-6: main() with no params produces empty analysis
+    #[test]
+    fn test_param_usage_main_no_params_empty() {
+        let block = Block {
+            stmts: vec![],
+            span: span(0, 2),
+        };
+
+        let params: Vec<String> = vec![];
+        let usage = analyze_param_usage(&block, &params, no_ref_call);
+        assert!(
+            usage.is_empty(),
+            "main() with no params should produce empty usage map"
+        );
+    }
+
+    // Test 047-7: parameter used in loop body → ReadOnly
+    #[test]
+    fn test_param_usage_in_while_loop_read_only() {
+        // function f(name: string) { while (true) { console.log(name); } }
+        let block = Block {
+            stmts: vec![Stmt::While(WhileStmt {
+                condition: Expr {
+                    kind: ExprKind::BoolLit(true),
+                    span: span(0, 4),
+                },
+                body: Block {
+                    stmts: vec![Stmt::Expr(Expr {
+                        kind: ExprKind::MethodCall(MethodCallExpr {
+                            object: Box::new(ident_expr("console", 10, 17)),
+                            method: Ident {
+                                name: "log".to_owned(),
+                                span: span(18, 21),
+                            },
+                            args: vec![ident_expr("name", 22, 26)],
+                        }),
+                        span: span(10, 27),
+                    })],
+                    span: span(8, 28),
+                },
+                span: span(0, 28),
+            })],
+            span: span(0, 28),
+        };
+
+        let params = vec!["name".to_owned()];
+        let usage = analyze_param_usage(&block, &params, console_log_ref);
+        assert_eq!(
+            usage.get("name").copied(),
+            Some(ParamUsage::ReadOnly),
+            "param used in loop body via console.log should be ReadOnly"
         );
     }
 }
