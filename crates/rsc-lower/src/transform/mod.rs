@@ -162,6 +162,10 @@ impl Transform {
         let mut uses = use_collector::collect_use_declarations(&items);
         // Prepend import-derived use declarations
         import_uses.append(&mut uses);
+        // Deduplicate use declarations by path to avoid duplicate imports
+        // (e.g., when an import and new X() both generate a use for the same type)
+        let mut seen_paths = std::collections::HashSet::new();
+        import_uses.retain(|u| seen_paths.insert(u.path.clone()));
         let uses = import_uses;
 
         let diagnostics = ctx.into_diagnostics();
@@ -1230,6 +1234,9 @@ impl Transform {
 
         // General case: immediately-invoked closure
         // match (|| -> Result<(), E> { body; Ok(()) })() { Ok(_) => {}, Err(e) => { catch } }
+        // If the try block contains await expressions, use an async closure:
+        // match (async || -> Result<(), E> { body; Ok(()) })().await { ... }
+        let needs_async = block_contains_await(&tc.try_block);
         let try_body = self.lower_block(&tc.try_block, ctx, use_map, stmt_index, reassigned);
         let catch_body = self.lower_block(&tc.catch_block, ctx, use_map, stmt_index, reassigned);
 
@@ -1260,13 +1267,9 @@ impl Transform {
             expr: None,
         };
 
-        // For now, represent as a MatchResult on a synthetic closure call.
-        // We need to create a special expression that emits as the closure IIFE.
-        // Use a Call expression with a special name as a placeholder, then handle
-        // in the emitter. Actually, let's use a simpler approach: emit the MatchResult
-        // directly with the try block as-is.
         RustStmt::MatchResult(RustMatchResultStmt {
             expr: RustExpr::synthetic(RustExprKind::ClosureCall {
+                is_async: needs_async,
                 body: closure_body,
                 return_type: RustType::Result(Box::new(RustType::Unit), Box::new(err_ty)),
             }),
@@ -1684,6 +1687,13 @@ impl Transform {
             .params
             .iter()
             .map(|p| {
+                // Inferred types (from omitted annotations) produce ty: None
+                if matches!(p.type_ann.kind, ast::TypeKind::Inferred) {
+                    return RustClosureParam {
+                        name: p.name.name.clone(),
+                        ty: None,
+                    };
+                }
                 let ty = resolve::resolve_type_annotation_with_generics(
                     &p.type_ann,
                     &self.type_registry,
@@ -2081,6 +2091,54 @@ fn expr_needs_async_runtime(expr: &ast::Expr) -> bool {
     }
 }
 
+/// Check if a block contains any `await` expression.
+///
+/// Used to determine if a try/catch IIFE needs to be an async closure.
+fn block_contains_await(block: &ast::Block) -> bool {
+    block.stmts.iter().any(stmt_contains_await)
+}
+
+/// Check if a statement contains any `await` expression.
+fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Expr(expr)
+        | ast::Stmt::Return(ast::ReturnStmt {
+            value: Some(expr), ..
+        }) => expr_contains_await(expr),
+        ast::Stmt::VarDecl(decl) => expr_contains_await(&decl.init),
+        ast::Stmt::ArrayDestructure(adestr) => expr_contains_await(&adestr.init),
+        ast::Stmt::If(if_stmt) => {
+            expr_contains_await(&if_stmt.condition)
+                || block_contains_await(&if_stmt.then_block)
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::Block(b)) if block_contains_await(b))
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::ElseIf(elif)) if stmt_contains_await(&ast::Stmt::If(*elif.clone())))
+        }
+        ast::Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
+        ast::Stmt::For(f) => expr_contains_await(&f.iterable) || block_contains_await(&f.body),
+        ast::Stmt::TryCatch(tc) => {
+            block_contains_await(&tc.try_block) || block_contains_await(&tc.catch_block)
+        }
+        _ => false,
+    }
+}
+
+/// Check if an expression contains any `await` expression.
+fn expr_contains_await(expr: &ast::Expr) -> bool {
+    match &expr.kind {
+        ast::ExprKind::Await(_) => true,
+        ast::ExprKind::Call(call) => call.args.iter().any(expr_contains_await),
+        ast::ExprKind::MethodCall(mc) => {
+            expr_contains_await(&mc.object) || mc.args.iter().any(expr_contains_await)
+        }
+        ast::ExprKind::Binary(bin) => {
+            expr_contains_await(&bin.left) || expr_contains_await(&bin.right)
+        }
+        ast::ExprKind::Unary(un) => expr_contains_await(&un.operand),
+        ast::ExprKind::Paren(inner) => expr_contains_await(inner),
+        _ => false,
+    }
+}
+
 /// Classify an import source path and produce appropriate `use` declarations
 /// and crate dependencies.
 ///
@@ -2204,7 +2262,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                             .collect(),
                         ast::TypeKind::Void
                         | ast::TypeKind::Union(_)
-                        | ast::TypeKind::Function(_, _) => vec![],
+                        | ast::TypeKind::Function(_, _)
+                        | ast::TypeKind::Inferred => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

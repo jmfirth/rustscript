@@ -1076,10 +1076,14 @@ impl Parser {
         };
 
         let member_start = self.current_token().span;
+
+        // Check for optional `async` modifier before the method name
+        let is_async = self.eat(&TokenKind::Async);
+
         let name = self.parse_ident()?;
 
-        // Field: `name: Type;`
-        if self.check(&TokenKind::Colon) {
+        // Field: `name: Type;` (only if not async — async fields don't exist)
+        if !is_async && self.check(&TokenKind::Colon) {
             self.advance(); // consume `:`
             let type_ann = self.parse_type_annotation()?;
             self.expect(&TokenKind::Semicolon)?;
@@ -1092,7 +1096,7 @@ impl Parser {
             }));
         }
 
-        // Method: `name<T>(params): ReturnType { body }`
+        // Method: `[async] name<T>(params): ReturnType { body }`
         let type_params = if self.check(&TokenKind::Lt) {
             Some(self.parse_type_params()?)
         } else {
@@ -1109,7 +1113,7 @@ impl Parser {
         let span = member_start.merge(body.span);
 
         Some(ClassMember::Method(ClassMethod {
-            is_async: false,
+            is_async,
             visibility,
             name,
             type_params,
@@ -1223,6 +1227,65 @@ impl Parser {
             type_ann,
             span,
         })
+    }
+
+    /// Parse a comma-separated closure parameter list (without the surrounding parens).
+    ///
+    /// Closure parameters may omit their type annotations: `(a, b)` is valid
+    /// in addition to `(a: i32, b: i32)`.
+    fn parse_closure_param_list(&mut self) -> Vec<Param> {
+        let mut params = Vec::new();
+
+        if self.check(&TokenKind::RParen) || self.at_end() {
+            return params;
+        }
+
+        loop {
+            if let Some(param) = self.parse_closure_param() {
+                params.push(param);
+            }
+
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+
+            // Allow trailing comma
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
+        }
+
+        params
+    }
+
+    /// Parse a single closure parameter: `IDENT` or `IDENT : type`.
+    ///
+    /// When the type annotation is omitted, uses `TypeKind::Inferred`.
+    fn parse_closure_param(&mut self) -> Option<Param> {
+        let start = self.current_token().span;
+        let name = self.parse_ident()?;
+
+        // Type annotation is optional in closures
+        if self.check(&TokenKind::Colon) {
+            self.advance(); // consume `:`
+            let type_ann = self.parse_type_annotation()?;
+            let span = start.merge(type_ann.span);
+            Some(Param {
+                name,
+                type_ann,
+                span,
+            })
+        } else {
+            let span = name.span;
+            Some(Param {
+                name,
+                type_ann: TypeAnnotation {
+                    kind: TypeKind::Inferred,
+                    span,
+                },
+                span,
+            })
+        }
     }
 
     /// Parse a type annotation: `void`, a named type, a generic type, a union type,
@@ -2631,9 +2694,9 @@ impl Parser {
         // Optional `move` keyword
         let is_move = self.eat(&TokenKind::Move);
 
-        // Parameter list
+        // Parameter list — closure params allow omitted type annotations
         self.expect(&TokenKind::LParen)?;
-        let params = self.parse_param_list();
+        let params = self.parse_closure_param_list();
         self.expect(&TokenKind::RParen)?;
 
         // Optional return type annotation
@@ -2730,6 +2793,41 @@ impl Parser {
                 })
             }
             TokenKind::Ident(_) => {
+                // Check for single-param arrow function shorthand: `n => expr`
+                if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::FatArrow) {
+                    let start = self.current_token().span;
+                    let name = self.parse_ident()?;
+                    let param_span = name.span;
+                    self.expect(&TokenKind::FatArrow)?;
+                    let body = if self.check(&TokenKind::LBrace) {
+                        let block = self.parse_block()?;
+                        ClosureBody::Block(block)
+                    } else {
+                        let expr = self.parse_assignment()?;
+                        ClosureBody::Expr(Box::new(expr))
+                    };
+                    let end = match &body {
+                        ClosureBody::Block(block) => block.span,
+                        ClosureBody::Expr(expr) => expr.span,
+                    };
+                    return Some(Expr {
+                        kind: ExprKind::Closure(ClosureExpr {
+                            is_async: false,
+                            is_move: false,
+                            params: vec![Param {
+                                name,
+                                type_ann: TypeAnnotation {
+                                    kind: TypeKind::Inferred,
+                                    span: param_span,
+                                },
+                                span: param_span,
+                            }],
+                            return_type: None,
+                            body,
+                        }),
+                        span: start.merge(end),
+                    });
+                }
                 let ident = self.parse_ident()?;
                 let span = ident.span;
                 Some(Expr {
@@ -3054,11 +3152,7 @@ mod tests {
             .expect("expected return type annotation");
         match &type_ann.kind {
             TypeKind::Named(ident) => assert_eq!(ident.name, "i32"),
-            TypeKind::Void => panic!("expected Named, got Void"),
-            TypeKind::Generic(_, _) => panic!("expected Named, got Generic"),
-            TypeKind::Union(_) => panic!("expected Named, got Union"),
-            TypeKind::Function(_, _) => panic!("expected Named, got Function"),
-            TypeKind::Intersection(_) => panic!("expected Named, got Intersection"),
+            other => panic!("expected Named, got {other:?}"),
         }
         // Body has one return statement
         assert_eq!(f.body.stmts.len(), 1);

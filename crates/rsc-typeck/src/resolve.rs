@@ -124,6 +124,7 @@ pub fn resolve_type_annotation(
                 .first()
                 .map_or(Type::Unit, |m| resolve_type_annotation(m, diagnostics))
         }
+        ast::TypeKind::Inferred => Type::Error,
     }
 }
 
@@ -222,6 +223,11 @@ pub fn resolve_type_annotation_with_generics(
             members.first().map_or(Type::Unit, |m| {
                 resolve_type_annotation_with_generics(m, registry, generic_param_names, diagnostics)
             })
+        }
+        ast::TypeKind::Inferred => {
+            // Inferred types are used in closure parameters where the type is omitted.
+            // Return Error to signal that no explicit type was provided.
+            Type::Error
         }
     }
 }
