@@ -41,6 +41,53 @@ enum DependencySpec {
     },
 }
 
+/// Represents a WASM compilation target and its specific behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WasmTarget {
+    /// `wasm32-unknown-unknown` — browser WASM (no WASI). Produces a cdylib.
+    Unknown,
+    /// `wasm32-wasip1` — WASI preview 1 (server-side WASM). Can be a binary.
+    Wasip1,
+}
+
+impl WasmTarget {
+    /// The full target triple string.
+    #[must_use]
+    pub fn triple(&self) -> &'static str {
+        match self {
+            Self::Unknown => "wasm32-unknown-unknown",
+            Self::Wasip1 => "wasm32-wasip1",
+        }
+    }
+}
+
+/// Parse a `--target` value and determine if it is a WASM target.
+///
+/// Returns `Some(WasmTarget)` for recognized WASM targets, `None` for non-WASM targets.
+/// Non-WASM targets are passed through to Cargo unmodified.
+#[must_use]
+pub fn parse_wasm_target(target: &str) -> Option<WasmTarget> {
+    match target {
+        "wasm32-unknown-unknown" => Some(WasmTarget::Unknown),
+        "wasm32-wasip1" => Some(WasmTarget::Wasip1),
+        _ if target.starts_with("wasm32") => {
+            // Other wasm32 targets — treat as unknown-unknown behavior.
+            Some(WasmTarget::Unknown)
+        }
+        _ => None,
+    }
+}
+
+/// The kind of Cargo project to generate.
+#[derive(Debug, Clone, Default)]
+enum CrateKind {
+    /// A binary with `src/main.rs` (the default).
+    #[default]
+    Binary,
+    /// A library with `src/lib.rs` and a specified `crate-type`.
+    Library { crate_types: Vec<String> },
+}
+
 /// Structured builder for generating `Cargo.toml` content.
 ///
 /// Uses `BTreeMap` for deterministic alphabetical ordering of dependencies.
@@ -48,6 +95,7 @@ struct CargoTomlBuilder {
     name: String,
     edition: String,
     dependencies: BTreeMap<String, DependencySpec>,
+    crate_kind: CrateKind,
 }
 
 impl CargoTomlBuilder {
@@ -57,7 +105,13 @@ impl CargoTomlBuilder {
             name: name.to_owned(),
             edition: edition.to_owned(),
             dependencies: BTreeMap::new(),
+            crate_kind: CrateKind::default(),
         }
+    }
+
+    /// Set the crate kind to a library with the given crate types.
+    fn set_library(&mut self, crate_types: Vec<String>) {
+        self.crate_kind = CrateKind::Library { crate_types };
     }
 
     /// Add a dependency. If the dependency already exists, the existing entry
@@ -88,6 +142,23 @@ impl CargoTomlBuilder {
         let _ = writeln!(out, "name = \"{}\"", self.name);
         let _ = writeln!(out, "version = \"0.1.0\"");
         let _ = writeln!(out, "edition = \"{}\"", self.edition);
+
+        // Crate kind section ([lib] or [[bin]])
+        match &self.crate_kind {
+            CrateKind::Binary => {
+                // Default — Cargo infers [[bin]] from src/main.rs
+            }
+            CrateKind::Library { crate_types } => {
+                let _ = writeln!(out);
+                let _ = writeln!(out, "[lib]");
+                let types_str = crate_types
+                    .iter()
+                    .map(|t| format!("\"{t}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(out, "crate-type = [{types_str}]");
+            }
+        }
 
         // [dependencies] section (only if there are dependencies)
         if !self.dependencies.is_empty() {
@@ -302,7 +373,7 @@ impl Project {
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
 
-        // Add tokio if async runtime is needed (from any module)
+        // Add tokio if async runtime is needed (from any module) — but NOT for WASM targets
         if any_needs_async_runtime {
             cargo_builder.add_tokio_runtime();
         }
@@ -337,16 +408,75 @@ impl Project {
         Ok((result, build_dir, source, rts_filename))
     }
 
+    /// Compile the project with WASM-specific adjustments.
+    ///
+    /// Delegates to [`compile`](Self::compile) and then patches the generated
+    /// `Cargo.toml` and source files for WASM targets:
+    /// - Removes `tokio` dependency (async runtime not available for WASM)
+    /// - Sets `crate-type = ["cdylib"]` for `wasm32-unknown-unknown`
+    /// - Writes `lib.rs` instead of `main.rs` for library WASM targets
+    fn compile_for_target(
+        &self,
+        wasm_target: Option<&WasmTarget>,
+    ) -> Result<(CompileResult, PathBuf, String, String)> {
+        let (result, build_dir, source, rts_filename) = self.compile()?;
+
+        let Some(wt) = wasm_target else {
+            return Ok((result, build_dir, source, rts_filename));
+        };
+
+        // Rebuild the Cargo.toml with WASM-specific settings
+        let src_dir = build_dir.join("src");
+        let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
+
+        // For wasm32-unknown-unknown: library (cdylib), no main
+        // For wasm32-wasip1: binary if there's a main() function
+        let is_library = matches!(wt, WasmTarget::Unknown);
+
+        if is_library {
+            cargo_builder.set_library(vec!["cdylib".to_owned()]);
+        }
+
+        // Add external crate dependencies from the compile result — but NOT tokio
+        for dep in &result.crate_dependencies {
+            if dep.name != "tokio" {
+                cargo_builder.add_dependency(&dep.name, DependencySpec::Simple("*".to_owned()));
+            }
+        }
+
+        // Do NOT add tokio for WASM targets — it is not supported
+
+        fs::write(build_dir.join("Cargo.toml"), cargo_builder.build())?;
+
+        // For library targets, write lib.rs instead of main.rs
+        if is_library {
+            let lib_path = src_dir.join("lib.rs");
+            let main_path = src_dir.join("main.rs");
+            // Copy main.rs content to lib.rs (the Rust source is the same)
+            if main_path.is_file() {
+                let content = fs::read_to_string(&main_path)?;
+                fs::write(&lib_path, content)?;
+                // Remove main.rs to avoid ambiguity
+                let _ = fs::remove_file(&main_path);
+            }
+        }
+
+        Ok((result, build_dir, source, rts_filename))
+    }
+
     /// Build the project: compile, then invoke `cargo build` on the output.
     ///
-    /// If `release` is true, passes `--release` to Cargo.
+    /// If `release` is true, passes `--release` to Cargo. If `target` is provided,
+    /// passes `--target <triple>` to Cargo (e.g., for WASM cross-compilation).
     ///
     /// # Errors
     ///
     /// Returns [`DriverError::CompilationFailed`] if the `RustScript` compilation
     /// produces errors, or [`DriverError::CargoBuildFailed`] if `cargo build` fails.
-    pub fn build(&self, release: bool) -> Result<()> {
-        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
+    pub fn build(&self, release: bool, target: Option<&str>) -> Result<()> {
+        let wasm_target = target.and_then(parse_wasm_target);
+        let (result, build_dir, rts_source, rts_filename) =
+            self.compile_for_target(wasm_target.as_ref())?;
 
         if result.has_errors {
             render_errors(&result);
@@ -358,6 +488,11 @@ impl Project {
             return Err(DriverError::CompilationFailed(error_count));
         }
 
+        // Emit warning if async + WASM
+        if wasm_target.is_some() && result.needs_async_runtime {
+            eprintln!("warning: async runtime (tokio) is not available for WASM targets");
+        }
+
         let mut cmd = Command::new("cargo");
         cmd.arg("build").current_dir(&build_dir);
 
@@ -365,10 +500,27 @@ impl Project {
             cmd.arg("--release");
         }
 
+        // Pass --target to Cargo for any target (WASM or otherwise)
+        if let Some(t) = target {
+            cmd.arg("--target").arg(t);
+        }
+
         let output = cmd.output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Check for "target may not be installed" hint from Cargo
+            if let Some(ref wt) = wasm_target
+                && (stderr.contains("target may not be installed")
+                    || stderr.contains("can't find crate")
+                    || stderr.contains("no matching package"))
+            {
+                let triple = wt.triple();
+                eprintln!("error: WASM target not installed. Run: rustup target add {triple}");
+                return Err(DriverError::CargoBuildFailed);
+            }
+
             let source_map = if result.source_map_lines.is_empty() {
                 None
             } else {
@@ -386,18 +538,40 @@ impl Project {
             print!("{stdout}");
         }
 
+        // Report the output path for WASM targets
+        if let Some(ref wt) = wasm_target {
+            let profile = if release { "release" } else { "debug" };
+            let triple = wt.triple();
+            let ext = "wasm";
+            let artifact_path = build_dir
+                .join("target")
+                .join(triple)
+                .join(profile)
+                .join(format!("{}.{ext}", self.name));
+            println!("WASM output: {}", artifact_path.display());
+        }
+
         Ok(())
     }
 
     /// Run the project: compile, then invoke `cargo run` on the output.
     ///
-    /// Forwards `args` to the compiled program.
+    /// Forwards `args` to the compiled program. If `target` is a WASM target,
+    /// returns [`DriverError::WasmRunUnsupported`] since WASM cannot be run directly.
     ///
     /// # Errors
     ///
-    /// Returns [`DriverError::CompilationFailed`] if the `RustScript` compilation
+    /// Returns [`DriverError::WasmRunUnsupported`] if the target is a WASM triple,
+    /// [`DriverError::CompilationFailed`] if the `RustScript` compilation
     /// produces errors, or an I/O error if `cargo run` cannot be spawned.
-    pub fn run(&self, args: &[String]) -> Result<std::process::ExitStatus> {
+    pub fn run(&self, args: &[String], target: Option<&str>) -> Result<std::process::ExitStatus> {
+        // Reject WASM targets — can't run WASM directly
+        if let Some(t) = target
+            && parse_wasm_target(t).is_some()
+        {
+            return Err(DriverError::WasmRunUnsupported);
+        }
+
         let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
@@ -1473,5 +1647,243 @@ async function fetchData(): string {
         );
 
         assert!(!project_dir.join(".gitignore").exists());
+    }
+
+    // ---------------------------------------------------------------
+    // Task 050: WASM compilation target
+    // ---------------------------------------------------------------
+
+    // Test: parse_wasm_target recognizes wasm32-unknown-unknown
+    #[test]
+    fn test_parse_wasm_target_unknown_unknown() {
+        let result = parse_wasm_target("wasm32-unknown-unknown");
+        assert_eq!(result, Some(WasmTarget::Unknown));
+    }
+
+    // Test: parse_wasm_target recognizes wasm32-wasip1
+    #[test]
+    fn test_parse_wasm_target_wasip1() {
+        let result = parse_wasm_target("wasm32-wasip1");
+        assert_eq!(result, Some(WasmTarget::Wasip1));
+    }
+
+    // Test: parse_wasm_target returns None for non-WASM targets
+    #[test]
+    fn test_parse_wasm_target_native_returns_none() {
+        assert!(parse_wasm_target("x86_64-unknown-linux-gnu").is_none());
+        assert!(parse_wasm_target("aarch64-apple-darwin").is_none());
+    }
+
+    // Test: parse_wasm_target treats other wasm32-* as Unknown
+    #[test]
+    fn test_parse_wasm_target_other_wasm32_treated_as_unknown() {
+        let result = parse_wasm_target("wasm32-wasi");
+        assert!(result.is_some());
+    }
+
+    // Test: WasmTarget::triple returns correct strings
+    #[test]
+    fn test_wasm_target_triple_values() {
+        assert_eq!(WasmTarget::Unknown.triple(), "wasm32-unknown-unknown");
+        assert_eq!(WasmTarget::Wasip1.triple(), "wasm32-wasip1");
+    }
+
+    // Test: CargoTomlBuilder with library crate-type produces [lib] section
+    #[test]
+    fn test_cargo_toml_builder_library_cdylib() {
+        let mut builder = CargoTomlBuilder::new("wasm-app", "2024");
+        builder.set_library(vec!["cdylib".to_owned()]);
+        let output = builder.build();
+
+        assert!(
+            output.contains("[lib]"),
+            "expected [lib] section, got:\n{output}"
+        );
+        assert!(
+            output.contains("crate-type = [\"cdylib\"]"),
+            "expected crate-type cdylib, got:\n{output}"
+        );
+    }
+
+    // Test: Default CargoTomlBuilder (binary) does NOT produce [lib] section
+    #[test]
+    fn test_cargo_toml_builder_binary_has_no_lib_section() {
+        let builder = CargoTomlBuilder::new("my-app", "2024");
+        let output = builder.build();
+
+        assert!(
+            !output.contains("[lib]"),
+            "binary crate should not have [lib] section, got:\n{output}"
+        );
+    }
+
+    // Test: WASM target excludes tokio dependency from Cargo.toml
+    #[test]
+    fn test_compile_for_target_wasm_excludes_tokio() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("async-wasm");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"async-wasm\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        // Write an async main — the compiler will set needs_async_runtime = true
+        fs::write(
+            src_dir.join("index.rts"),
+            "async function main() {\n  console.log(\"hi\");\n}\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project
+            .compile_for_target(Some(&WasmTarget::Unknown))
+            .unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            !cargo_toml.contains("tokio"),
+            "WASM Cargo.toml should NOT contain tokio, got:\n{cargo_toml}"
+        );
+    }
+
+    // Test: WASM unknown-unknown target generates lib.rs instead of main.rs
+    #[test]
+    fn test_compile_for_target_wasm_unknown_generates_lib_rs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("wasm-lib", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project
+            .compile_for_target(Some(&WasmTarget::Unknown))
+            .unwrap();
+
+        let lib_rs = build_dir.join("src/lib.rs");
+        let main_rs = build_dir.join("src/main.rs");
+
+        assert!(
+            lib_rs.is_file(),
+            "expected lib.rs for wasm32-unknown-unknown"
+        );
+        assert!(
+            !main_rs.is_file(),
+            "main.rs should be removed for wasm32-unknown-unknown"
+        );
+    }
+
+    // Test: WASM wasip1 target keeps main.rs (binary)
+    #[test]
+    fn test_compile_for_target_wasm_wasip1_keeps_main_rs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("wasi-bin", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project
+            .compile_for_target(Some(&WasmTarget::Wasip1))
+            .unwrap();
+
+        let main_rs = build_dir.join("src/main.rs");
+        assert!(main_rs.is_file(), "expected main.rs for wasm32-wasip1");
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            !cargo_toml.contains("[lib]"),
+            "wasip1 binary should not have [lib] section, got:\n{cargo_toml}"
+        );
+    }
+
+    // Test: WASM unknown-unknown Cargo.toml has cdylib crate-type
+    #[test]
+    fn test_compile_for_target_wasm_unknown_cargo_toml_has_cdylib() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("wasm-cdylib", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project
+            .compile_for_target(Some(&WasmTarget::Unknown))
+            .unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("crate-type = [\"cdylib\"]"),
+            "expected crate-type cdylib for wasm32-unknown-unknown, got:\n{cargo_toml}"
+        );
+    }
+
+    // Test: compile_for_target with None produces same result as compile
+    #[test]
+    fn test_compile_for_target_none_matches_compile() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("no-target", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result1, _, _, _) = project.compile().unwrap();
+        let (result2, _, _, _) = project.compile_for_target(None).unwrap();
+
+        assert_eq!(result1.rust_source, result2.rust_source);
+    }
+
+    // Test: async function + WASM target sets needs_async_runtime flag
+    #[test]
+    fn test_compile_for_target_wasm_async_needs_runtime_flag() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("async-check");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"async-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src_dir.join("index.rts"),
+            "async function main() {\n  console.log(\"hello\");\n}\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, _, _, _) = project
+            .compile_for_target(Some(&WasmTarget::Unknown))
+            .unwrap();
+
+        // The compile result should still indicate async was used
+        // (the driver uses this to emit a warning)
+        assert!(
+            result.needs_async_runtime,
+            "expected needs_async_runtime to be true for async function"
+        );
+    }
+
+    // Test: run with WASM target returns WasmRunUnsupported
+    #[test]
+    fn test_run_wasm_target_returns_unsupported() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("run-wasm", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let err = project
+            .run(&[], Some("wasm32-unknown-unknown"))
+            .unwrap_err();
+        assert!(
+            matches!(err, DriverError::WasmRunUnsupported),
+            "expected WasmRunUnsupported, got: {err:?}"
+        );
+    }
+
+    // Test: run with wasm32-wasip1 target also returns WasmRunUnsupported
+    #[test]
+    fn test_run_wasm_wasip1_target_returns_unsupported() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("run-wasi", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let err = project.run(&[], Some("wasm32-wasip1")).unwrap_err();
+        assert!(
+            matches!(err, DriverError::WasmRunUnsupported),
+            "expected WasmRunUnsupported, got: {err:?}"
+        );
     }
 }

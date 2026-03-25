@@ -29,6 +29,12 @@ pub enum DriverError {
     #[error("unknown template: {0}")]
     InvalidTemplate(String),
 
+    /// Cannot run a WASM target directly (use a WASM runtime instead).
+    #[error(
+        "cannot run WASM target directly — use a WASM runtime (e.g., wasmtime) to execute the .wasm file"
+    )]
+    WasmRunUnsupported,
+
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),

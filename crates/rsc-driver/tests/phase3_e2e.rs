@@ -37,7 +37,7 @@ fn test_e2e_p3_template_format_build_pipeline() {
     // Build — should still compile
     let project = Project::open(&project_dir).expect("open project");
     project
-        .build(false)
+        .build(false, None)
         .expect("formatted template should still compile");
 }
 
@@ -137,10 +137,10 @@ fn test_e2e_p3_cli_template_full_pipeline() {
     let project = Project::open(&project_dir).expect("open project");
 
     // Build
-    project.build(false).expect("build should succeed");
+    project.build(false, None).expect("build should succeed");
 
     // Run
-    let status = project.run(&[]).expect("run should succeed");
+    let status = project.run(&[], None).expect("run should succeed");
     assert!(status.success(), "running CLI template should succeed");
 }
 

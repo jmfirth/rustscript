@@ -20,7 +20,7 @@ fn test_template_default_compiles() {
 
     let project = Project::open(&tmp.path().join("test-default")).expect("open project failed");
     project
-        .build(false)
+        .build(false, None)
         .expect("default template should compile");
 }
 
@@ -35,7 +35,9 @@ fn test_template_cli_compiles() {
     init_project("test-cli", tmp.path(), Some("cli")).expect("init_project failed");
 
     let project = Project::open(&tmp.path().join("test-cli")).expect("open project failed");
-    project.build(false).expect("cli template should compile");
+    project
+        .build(false, None)
+        .expect("cli template should compile");
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@ fn test_template_web_server_compiles() {
 
     let project = Project::open(&tmp.path().join("test-web")).expect("open project failed");
     project
-        .build(false)
+        .build(false, None)
         .expect("web-server template should compile");
 }
 
@@ -69,6 +71,6 @@ fn test_template_wasm_compiles_as_binary() {
 
     let project = Project::open(&tmp.path().join("test-wasm")).expect("open project failed");
     project
-        .build(false)
+        .build(false, None)
         .expect("wasm template should compile as binary");
 }
