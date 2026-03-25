@@ -56,7 +56,7 @@ fn test_diagnostic_p2_error_translation_string_type() {
   |                      ^^ expected String, found integer
 "#;
 
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("expected string, found integer"),
         "String should be translated to string, got:\n{translated}"
@@ -76,7 +76,7 @@ fn test_diagnostic_p2_error_translation_string_type() {
 #[test]
 fn test_diagnostic_p2_error_translation_vec_to_array() {
     let rustc_error = "error: expected Vec<String>, found i32";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("Array<string>"),
         "Vec<String> should become Array<string>, got:\n{translated}"
@@ -92,7 +92,7 @@ fn test_diagnostic_p2_error_translation_vec_to_array() {
 #[test]
 fn test_diagnostic_p2_error_translation_option_to_null() {
     let rustc_error = "error: expected Option<i32>";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("i32 | null"),
         "Option<i32> should become i32 | null, got:\n{translated}"
@@ -108,7 +108,7 @@ fn test_diagnostic_p2_error_translation_option_to_null() {
 #[test]
 fn test_diagnostic_p2_error_translation_result_to_throws() {
     let rustc_error = "error: expected Result<String, MyError>";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("string (throws MyError)"),
         "Result<String, MyError> should become string (throws MyError), got:\n{translated}"
@@ -124,7 +124,7 @@ fn test_diagnostic_p2_error_translation_result_to_throws() {
 #[test]
 fn test_diagnostic_p2_error_translation_hashmap_to_map() {
     let rustc_error = "error: expected HashMap<String, i32>";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("Map<string, i32>"),
         "HashMap<String, i32> should become Map<string, i32>, got:\n{translated}"
@@ -140,7 +140,7 @@ fn test_diagnostic_p2_error_translation_hashmap_to_map() {
 #[test]
 fn test_diagnostic_p2_error_translation_unknown_fallback() {
     let rustc_error = "error[E9999]: something totally unknown";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("rustc error (in generated code)"),
         "unknown error should use raw header, got:\n{translated}"
@@ -160,7 +160,7 @@ fn test_diagnostic_p2_error_translation_unknown_fallback() {
 #[test]
 fn test_diagnostic_p2_error_translation_complex_nested() {
     let rustc_error = "error: expected HashMap<String, Vec<Option<i32>>>";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("Map<string, Array<i32 | null>>"),
         "complex nested type should translate fully, got:\n{translated}"
@@ -203,7 +203,7 @@ fn test_diagnostic_p2_unknown_type_in_async_function() {
 #[test]
 fn test_diagnostic_p2_error_translation_impl_fn_to_arrow() {
     let rustc_error = "error: expected impl Fn(i32) -> bool";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("(i32) => bool"),
         "impl Fn(i32) -> bool should become (i32) => bool, got:\n{translated}"
@@ -217,7 +217,7 @@ fn test_diagnostic_p2_error_translation_impl_fn_to_arrow() {
 #[test]
 fn test_diagnostic_p2_error_translation_str_ref() {
     let rustc_error = "error: expected &str, found i32";
-    let translated = translate_rustc_errors(rustc_error);
+    let translated = translate_rustc_errors(rustc_error, None, None, None);
     assert!(
         translated.contains("string (reference)"),
         "&str should become string (reference), got:\n{translated}"

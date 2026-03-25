@@ -893,7 +893,7 @@ mod tests {
             lower_diags.is_empty(),
             "unexpected lowering diagnostics: {lower_diags:?}"
         );
-        rsc_emit::emit(&ir)
+        rsc_emit::emit(&ir).source
     }
 
     /// Parse and lower a RustScript source string, returning the Rust IR.

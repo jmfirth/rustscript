@@ -1,6 +1,8 @@
 //! Internal emitter implementation.
 //!
 //! Walks the Rust IR tree and produces formatted `.rs` source text.
+//! Also builds a line-level source map: for each line in the generated `.rs`
+//! output, records the corresponding `.rts` [`Span`] (if any).
 
 use rsc_syntax::rust_ir::{
     IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr,
@@ -9,6 +11,21 @@ use rsc_syntax::rust_ir::{
     RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock, RustType,
     RustTypeParam,
 };
+use rsc_syntax::span::Span;
+
+/// Emit result containing both the generated source text and a line-level source map.
+///
+/// The source map is a `Vec<Option<Span>>` where the index is the 0-based line number
+/// in the generated `.rs` file, and the value is the `.rts` source span that the line
+/// originated from (if any). Lines from compiler-generated code (like `use` declarations)
+/// have `None`.
+#[derive(Debug)]
+pub struct EmitResult {
+    /// The generated `.rs` source text.
+    pub source: String,
+    /// Line-level source map: index = 0-based `.rs` line, value = `.rts` span.
+    pub source_map: Vec<Option<Span>>,
+}
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
 struct Emitter {
@@ -16,6 +33,14 @@ struct Emitter {
     output: String,
     /// The current indentation level (each level = 4 spaces).
     indent: usize,
+    /// The most recently encountered IR node span from the original `.rts` source.
+    /// Updated as the emitter visits IR nodes that carry spans.
+    current_span: Option<Span>,
+    /// Line-level source map built during emission.
+    /// Each entry corresponds to one line in the output (0-based index).
+    line_map: Vec<Option<Span>>,
+    /// Number of lines emitted so far (tracked by counting newlines in output).
+    lines_emitted: usize,
 }
 
 impl Emitter {
@@ -24,6 +49,9 @@ impl Emitter {
         Self {
             output: String::new(),
             indent: 0,
+            current_span: None,
+            line_map: Vec::new(),
+            lines_emitted: 0,
         }
     }
 
@@ -32,15 +60,32 @@ impl Emitter {
         self.output.push_str(s);
     }
 
-    /// Append text followed by a newline.
+    /// Append text followed by a newline, recording the current span for the line.
     fn writeln(&mut self, s: &str) {
         self.output.push_str(s);
         self.output.push('\n');
+        self.record_line();
     }
 
-    /// Append a bare newline.
+    /// Append a bare newline, recording the current span for the line.
     fn newline(&mut self) {
         self.output.push('\n');
+        self.record_line();
+    }
+
+    /// Record the current span for the most recently completed line.
+    fn record_line(&mut self) {
+        self.line_map.push(self.current_span);
+        self.lines_emitted += 1;
+    }
+
+    /// Set the current span from an IR node's span, if it has one.
+    fn set_span(&mut self, span: Option<Span>) {
+        if let Some(s) = span
+            && !s.is_dummy()
+        {
+            self.current_span = Some(s);
+        }
     }
 
     /// Write indentation spaces for the current level.
@@ -62,8 +107,9 @@ impl Emitter {
 
     /// Emit an entire Rust source file.
     fn emit_file(&mut self, file: &RustFile) {
-        // Emit use declarations first
+        // Emit use declarations first (these are compiler-generated, no .rts span)
         for use_decl in &file.uses {
+            self.set_span(use_decl.span);
             if use_decl.public {
                 self.write("pub use ");
             } else {
@@ -73,8 +119,9 @@ impl Emitter {
             self.writeln(";");
         }
 
-        // Emit mod declarations
+        // Emit mod declarations (compiler-generated)
         for mod_decl in &file.mod_decls {
+            self.set_span(mod_decl.span);
             if mod_decl.public {
                 self.write("pub mod ");
             } else {
@@ -111,6 +158,7 @@ impl Emitter {
 
     /// Emit a struct definition.
     fn emit_struct(&mut self, s: &RustStructDef) {
+        self.set_span(s.span);
         self.write_indent();
         if s.public {
             self.write("pub struct ");
@@ -123,6 +171,7 @@ impl Emitter {
         self.push_indent();
 
         for field in &s.fields {
+            self.set_span(field.span);
             self.write_indent();
             if field.public {
                 self.write("pub ");
@@ -140,6 +189,7 @@ impl Emitter {
 
     /// Emit an enum definition.
     fn emit_enum(&mut self, e: &RustEnumDef) {
+        self.set_span(e.span);
         self.write_indent();
         if e.public {
             self.write("pub enum ");
@@ -151,6 +201,7 @@ impl Emitter {
         self.push_indent();
 
         for variant in &e.variants {
+            self.set_span(variant.span);
             self.write_indent();
             self.write(&variant.name);
             if variant.fields.is_empty() {
@@ -181,6 +232,7 @@ impl Emitter {
 
     /// Emit a trait definition.
     fn emit_trait(&mut self, t: &RustTraitDef) {
+        self.set_span(t.span);
         self.write_indent();
         if t.public {
             self.write("pub trait ");
@@ -193,6 +245,7 @@ impl Emitter {
         self.push_indent();
 
         for method in &t.methods {
+            self.set_span(method.span);
             self.write_indent();
             self.write("fn ");
             self.write(&method.name);
@@ -234,6 +287,7 @@ impl Emitter {
 
     /// Emit an inherent impl block: `impl TypeName { methods }`.
     fn emit_impl_block(&mut self, imp: &RustImplBlock) {
+        self.set_span(imp.span);
         self.write_indent();
         self.write("impl ");
         self.write(&imp.type_name);
@@ -255,6 +309,7 @@ impl Emitter {
 
     /// Emit a trait impl block: `impl TraitName for TypeName { methods }`.
     fn emit_trait_impl_block(&mut self, ti: &RustTraitImplBlock) {
+        self.set_span(ti.span);
         self.write_indent();
         self.write("impl ");
         self.write(&ti.trait_name);
@@ -278,6 +333,7 @@ impl Emitter {
 
     /// Emit a single method within an impl block.
     fn emit_method(&mut self, method: &RustMethod) {
+        self.set_span(method.span);
         self.write_indent();
         if method.is_async {
             self.write("async fn ");
@@ -367,6 +423,7 @@ impl Emitter {
 
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
+        self.set_span(f.span);
         // Emit attributes before the function declaration
         for attr in &f.attributes {
             self.write_indent();
@@ -468,6 +525,7 @@ impl Emitter {
     fn emit_stmt(&mut self, stmt: &RustStmt) {
         match stmt {
             RustStmt::Let(let_stmt) => {
+                self.set_span(let_stmt.span);
                 self.write_indent();
                 if let_stmt.mutable {
                     self.write("let mut ");
@@ -484,16 +542,19 @@ impl Emitter {
                 self.writeln(";");
             }
             RustStmt::Expr(expr) => {
+                self.set_span(expr.span);
                 self.write_indent();
                 self.emit_expr(expr);
                 self.newline();
             }
             RustStmt::Semi(expr) => {
+                self.set_span(expr.span);
                 self.write_indent();
                 self.emit_expr(expr);
                 self.writeln(";");
             }
             RustStmt::Return(ret) => {
+                self.set_span(ret.span);
                 self.write_indent();
                 if let Some(ref val) = ret.value {
                     self.write("return ");
@@ -504,11 +565,13 @@ impl Emitter {
                 }
             }
             RustStmt::If(if_stmt) => {
+                self.set_span(if_stmt.span);
                 self.write_indent();
                 self.emit_if(if_stmt);
                 self.newline();
             }
             RustStmt::While(while_stmt) => {
+                self.set_span(while_stmt.span);
                 self.write_indent();
                 self.write("while ");
                 self.emit_expr(&while_stmt.condition);
@@ -517,6 +580,7 @@ impl Emitter {
                 self.newline();
             }
             RustStmt::Destructure(destr) => {
+                self.set_span(destr.span);
                 self.write_indent();
                 if destr.mutable {
                     self.write("let mut ");
@@ -536,6 +600,7 @@ impl Emitter {
                 self.writeln(";");
             }
             RustStmt::TupleDestructure(td) => {
+                self.set_span(td.span);
                 self.write_indent();
                 if td.mutable {
                     self.write("let mut (");
@@ -553,35 +618,42 @@ impl Emitter {
                 self.writeln(";");
             }
             RustStmt::Match(match_stmt) => {
+                self.set_span(match_stmt.span);
                 self.write_indent();
                 self.emit_match(match_stmt);
                 self.newline();
             }
             RustStmt::IfLet(if_let) => {
+                self.set_span(if_let.span);
                 self.write_indent();
                 self.emit_if_let(if_let);
                 self.newline();
             }
             RustStmt::LetElse(let_else) => {
+                self.set_span(let_else.span);
                 self.write_indent();
                 self.emit_let_else(let_else);
                 self.newline();
             }
             RustStmt::MatchResult(match_result) => {
+                self.set_span(match_result.span);
                 self.write_indent();
                 self.emit_match_result(match_result);
                 self.newline();
             }
             RustStmt::ForIn(for_in) => {
+                self.set_span(for_in.span);
                 self.write_indent();
                 self.emit_for_in(for_in);
                 self.newline();
             }
-            RustStmt::Break(_) => {
+            RustStmt::Break(span) => {
+                self.set_span(*span);
                 self.write_indent();
                 self.writeln("break;");
             }
-            RustStmt::Continue(_) => {
+            RustStmt::Continue(span) => {
+                self.set_span(*span);
                 self.write_indent();
                 self.writeln("continue;");
             }
@@ -683,6 +755,7 @@ impl Emitter {
     #[allow(clippy::too_many_lines)]
     // Expression emission covers all IR node kinds; splitting would obscure the match structure
     fn emit_expr(&mut self, expr: &RustExpr) {
+        self.set_span(expr.span);
         match &expr.kind {
             RustExprKind::IntLit(n) => {
                 self.write(&n.to_string());
@@ -1121,10 +1194,17 @@ impl Emitter {
 }
 
 /// Emit Rust source code from Rust IR.
-pub fn emit(file: &RustFile) -> String {
+///
+/// Returns an [`EmitResult`] containing both the generated `.rs` source text
+/// and a line-level source map mapping each `.rs` line to its originating
+/// `.rts` span (if any).
+pub fn emit(file: &RustFile) -> EmitResult {
     let mut emitter = Emitter::new();
     emitter.emit_file(file);
-    emitter.output
+    EmitResult {
+        source: emitter.output,
+        source_map: emitter.line_map,
+    }
 }
 
 #[cfg(test)]
@@ -1140,6 +1220,11 @@ mod tests {
     };
 
     use super::emit;
+
+    /// Helper: emit and return just the source string (ignoring the source map).
+    fn emit_source(file: &RustFile) -> String {
+        emit(file).source
+    }
 
     /// Helper: construct a synthetic expression.
     fn syn(kind: RustExprKind) -> RustExpr {
@@ -1182,7 +1267,7 @@ mod tests {
     #[test]
     fn test_emit_empty_function_produces_fn_main() {
         let file = simple_fn("main", vec![], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(output, "fn main() {\n}\n");
     }
 
@@ -1218,7 +1303,7 @@ mod tests {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(output, "fn add(a: i32, b: i32) -> i32 {\n}\n");
     }
 
@@ -1226,7 +1311,7 @@ mod tests {
     #[test]
     fn test_emit_void_fn_omits_unit_return() {
         let file = simple_fn("greet", vec![], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(!output.contains("-> ()"), "void fn should not show -> ()");
         assert!(output.starts_with("fn greet()"));
     }
@@ -1245,7 +1330,7 @@ mod tests {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("    let x: i32 = 42;\n"));
     }
 
@@ -1263,7 +1348,7 @@ mod tests {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("    let mut x: i64 = 0;\n"));
     }
 
@@ -1281,7 +1366,7 @@ mod tests {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("    let x = 42;\n"));
         // Ensure no colon (type annotation) present.
         assert!(!output.contains("let x:"));
@@ -1306,7 +1391,7 @@ mod tests {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn main() {
     if condition {
@@ -1346,7 +1431,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("} else if b {"),
             "should have `}} else if` on same line"
@@ -1372,7 +1457,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn main() {
     while running {
@@ -1395,7 +1480,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("a + b;"));
     }
 
@@ -1415,7 +1500,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("a + b * c;"));
     }
 
@@ -1436,7 +1521,7 @@ fn main() {
             ],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("-x;"));
         assert!(output.contains("!flag;"));
     }
@@ -1452,7 +1537,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("foo(a, b);"));
     }
 
@@ -1469,7 +1554,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("receiver.method(a, b);"));
     }
 
@@ -1484,7 +1569,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("println!(\"{}\", x);"), "got: {}", output);
     }
 
@@ -1503,7 +1588,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("println!(\"{} {}\", x, y);"),
             "got: {}",
@@ -1521,7 +1606,7 @@ fn main() {
             )))))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("x.clone();"));
     }
 
@@ -1535,7 +1620,7 @@ fn main() {
             ))))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("x.to_string();"));
     }
 
@@ -1550,7 +1635,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("return x;"));
     }
 
@@ -1564,7 +1649,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("return;"));
     }
 
@@ -1578,7 +1663,7 @@ fn main() {
             )))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains(r#""hello\nworld""#), "got: {}", output);
     }
 
@@ -1590,7 +1675,7 @@ fn main() {
             vec![RustStmt::Semi(syn(RustExprKind::FloatLit(3.0)))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("3.0;"), "got: {}", output);
     }
 
@@ -1618,7 +1703,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn main() {
     if a {
@@ -1668,7 +1753,7 @@ fn main() {
                 }),
             ],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "fn foo() {\n}\n\nfn bar() {\n}\n";
         assert_eq!(output, expected);
     }
@@ -1694,7 +1779,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn answer() -> i32 {
     42
@@ -1774,7 +1859,7 @@ fn answer() -> i32 {
             })],
         };
 
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn fibonacci(n: i32) -> i32 {
     if n <= 1 {
@@ -1878,7 +1963,7 @@ fn fibonacci(n: i32) -> i32 {
             None,
         );
 
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 fn complex() {
     let x: i32 = 10;
@@ -1923,7 +2008,7 @@ fn complex() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 use std::collections::HashMap;
 
@@ -1965,7 +2050,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         let expected = "\
 mod utils;
 pub mod api;
@@ -1997,7 +2082,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(output, "fn main() {\n}\n");
     }
 
@@ -2014,7 +2099,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("x += 1;"),
             "expected `x += 1;` in output, got: {output}"
@@ -2042,7 +2127,7 @@ fn main() {
                 }))],
                 None,
             );
-            let output = emit(&file);
+            let output = emit_source(&file);
             assert!(
                 output.contains(expected),
                 "expected `{expected}` in output for {op:?}, got: {output}"
@@ -2081,7 +2166,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("struct User {"), "output: {output}");
         assert!(output.contains("pub name: String,"), "output: {output}");
         assert!(output.contains("pub age: u32,"), "output: {output}");
@@ -2107,7 +2192,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("Point { x: 1.0, y: 2.0 }"),
             "output: {output}"
@@ -2125,7 +2210,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("user.name"), "output: {output}");
     }
 
@@ -2143,7 +2228,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("let User { name, age, .. } = user;"),
             "output: {output}"
@@ -2190,7 +2275,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(output, "fn id<T>(x: T) -> T {\n    return x;\n}\n");
     }
 
@@ -2232,7 +2317,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(
             output,
             "fn merge<T: Comparable>(a: T, b: T) -> T {\n    return a;\n}\n"
@@ -2261,7 +2346,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert_eq!(output, "struct Container<T> {\n    pub value: T,\n}\n");
     }
 
@@ -2317,7 +2402,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("enum Direction {"));
         assert!(output.contains("    North,"));
         assert!(output.contains("    South,"));
@@ -2367,7 +2452,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("enum Shape {"));
         assert!(output.contains("    Circle {"));
         assert!(output.contains("        pub radius: f64,"));
@@ -2422,7 +2507,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("match dir {"));
         assert!(output.contains("Direction::North => {"));
         assert!(output.contains("Direction::South => {"));
@@ -2476,7 +2561,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("Shape::Circle { radius }"));
         assert!(output.contains("Shape::Rect { width, height }"));
     }
@@ -2498,7 +2583,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("let dir = Direction::North;"));
     }
 
@@ -2524,7 +2609,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("vec![1, 2, 3]"), "output: {output}");
     }
 
@@ -2546,7 +2631,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("HashMap::new()"), "output: {output}");
     }
 
@@ -2561,7 +2646,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(output.contains("arr[0]"), "output: {output}");
     }
 
@@ -2590,7 +2675,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("use std::collections::HashMap;"),
             "output: {output}"
@@ -2623,7 +2708,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("-> Option<String>"),
             "expected -> Option<String>, got:\n{output}"
@@ -2641,7 +2726,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("return None;"),
             "expected 'return None;' in output:\n{output}"
@@ -2661,7 +2746,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("return Some(\"hello\");"),
             "expected 'return Some(\"hello\");' in output:\n{output}"
@@ -2685,7 +2770,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("if let Some(name) = value"),
             "expected 'if let Some(name) = value' in output:\n{output}"
@@ -2718,7 +2803,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("-> Result<i32, String>"),
             "expected Result<i32, String> in output:\n{output}"
@@ -2738,7 +2823,7 @@ fn main() {
             ))))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("fetch()?"),
             "expected 'fetch()?' in output:\n{output}"
@@ -2756,7 +2841,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("return Ok(42)"),
             "expected 'return Ok(42)' in output:\n{output}"
@@ -2776,7 +2861,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("return Err(\"oops\")"),
             "expected 'return Err(\"oops\")' in output:\n{output}"
@@ -2807,7 +2892,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("match fetch()"),
             "expected 'match fetch()' in output:\n{output}"
@@ -2854,7 +2939,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("|x: i32| -> i32 { x * 2 }"),
             "expected closure with braces in output:\n{output}"
@@ -2888,7 +2973,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("|| {"),
             "expected closure in output:\n{output}"
@@ -2922,7 +3007,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("move || {"),
             "expected move closure in output:\n{output}"
@@ -2961,7 +3046,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("f: impl Fn(i32) -> i32"),
             "expected impl Fn in output:\n{output}"
@@ -2989,7 +3074,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("trait Serializable {"),
             "expected trait definition in output:\n{output}"
@@ -3027,7 +3112,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("fn process<T: Serializable + Printable>(input: T) -> String"),
             "expected generic fn with trait bounds in output:\n{output}"
@@ -3053,7 +3138,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("fn clone(&self) -> Self;"),
             "expected Self return type in output:\n{output}"
@@ -3084,7 +3169,7 @@ fn main() {
             })],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("for x in &items"),
             "expected `for x in &items` in output:\n{output}"
@@ -3095,7 +3180,7 @@ fn main() {
     #[test]
     fn test_emit_break_statement() {
         let file = simple_fn("main", vec![RustStmt::Break(None)], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("break;"),
             "expected `break;` in output:\n{output}"
@@ -3106,7 +3191,7 @@ fn main() {
     #[test]
     fn test_emit_continue_statement() {
         let file = simple_fn("main", vec![RustStmt::Continue(None)], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("continue;"),
             "expected `continue;` in output:\n{output}"
@@ -3138,7 +3223,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("pub fn greet()"),
             "expected `pub fn greet()` in output:\n{output}"
@@ -3166,7 +3251,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("fn helper()"),
             "expected `fn helper()` in output:\n{output}"
@@ -3189,7 +3274,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("use crate::models::User;"),
             "expected `use crate::models::User;` in output:\n{output}"
@@ -3208,7 +3293,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("pub use crate::models::User;"),
             "expected `pub use crate::models::User;` in output:\n{output}"
@@ -3227,7 +3312,7 @@ fn main() {
             }],
             items: vec![],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("mod models;"),
             "expected `mod models;` in output:\n{output}"
@@ -3246,7 +3331,7 @@ fn main() {
             }],
             items: vec![],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("pub mod models;"),
             "expected `pub mod models;` in output:\n{output}"
@@ -3272,7 +3357,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("pub struct User"),
             "expected `pub struct User` in output:\n{output}"
@@ -3315,7 +3400,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("impl Counter {"),
             "expected `impl Counter {{` in output:\n{output}"
@@ -3359,7 +3444,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("impl Describable for User {"),
             "expected `impl Describable for User {{` in output:\n{output}"
@@ -3397,7 +3482,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("self.count"),
             "expected `self.count` in output:\n{output}"
@@ -3427,7 +3512,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("fn mutate(&mut self)"),
             "expected `fn mutate(&mut self)` in output:\n{output}"
@@ -3464,7 +3549,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("async fn foo()"),
             "expected `async fn foo()` in output:\n{output}"
@@ -3481,7 +3566,7 @@ fn main() {
             )))))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("result.await;"),
             "expected `result.await;` in output:\n{output}"
@@ -3501,7 +3586,7 @@ fn main() {
             )))))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("get_data().await;"),
             "expected `get_data().await;` in output:\n{output}"
@@ -3530,7 +3615,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("async ||"),
             "expected `async ||` in output:\n{output}"
@@ -3561,7 +3646,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("async fn handle(&self)"),
             "expected `async fn handle(&self)` in output:\n{output}"
@@ -3589,7 +3674,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("pub async fn handler()"),
             "expected `pub async fn handler()` in output:\n{output}"
@@ -3609,7 +3694,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("response.json::<User>()"),
             "expected `response.json::<User>()` in output:\n{output}"
@@ -3629,7 +3714,7 @@ fn main() {
             }))],
             None,
         );
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("v.push(1)"),
             "expected `v.push(1)` in output:\n{output}"
@@ -3666,7 +3751,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("#[tokio::main]"),
             "expected #[tokio::main] in output:\n{output}"
@@ -3705,7 +3790,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             !output.contains("#["),
             "expected no attributes on non-main async fn:\n{output}"
@@ -3742,7 +3827,7 @@ fn main() {
                 span: None,
             })],
         };
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("#[tokio::main(flavor = \"current_thread\")]"),
             "expected attribute with args in output:\n{output}"
@@ -3772,7 +3857,7 @@ fn main() {
             terminal: IteratorTerminal::CollectVec,
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("arr.iter().map(|x| x * 2).collect::<Vec<_>>()"),
             "expected iterator chain with map and collect in output:\n{output}"
@@ -3797,7 +3882,7 @@ fn main() {
             },
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("arr.iter().fold(0, |acc, x| acc + x)"),
             "expected fold with correct argument order in output:\n{output}"
@@ -3826,7 +3911,7 @@ fn main() {
             terminal: IteratorTerminal::CollectVec,
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("items.iter().filter(|x| x > 0).cloned().collect::<Vec<_>>()"),
             "expected filter with cloned and collect in output:\n{output}"
@@ -3852,7 +3937,7 @@ fn main() {
             ),
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("items.iter().find(|x| x > 3).cloned()"),
             "expected find with cloned in output:\n{output}"
@@ -3878,7 +3963,7 @@ fn main() {
             ),
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("items.iter().any(|x| x > 5)"),
             "expected any in output:\n{output}"
@@ -3904,7 +3989,7 @@ fn main() {
             ),
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("items.iter().all(|x| x > 0)"),
             "expected all in output:\n{output}"
@@ -3926,7 +4011,7 @@ fn main() {
             ),
         });
         let file = wrap_expr_in_file(chain);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("items.iter().for_each(|x| x)"),
             "expected for_each in output:\n{output}"
@@ -3973,7 +4058,7 @@ fn main() {
             }),
         ]));
         let file = simple_fn("test", vec![RustStmt::Semi(join_expr)], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("tokio::join!(get_user(), get_posts())"),
             "expected tokio::join! macro, got: {output}"
@@ -3998,7 +4083,7 @@ fn main() {
             args: vec![async_block],
         });
         let file = simple_fn("test", vec![RustStmt::Semi(spawn_call)], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("tokio::spawn(async move {"),
             "expected tokio::spawn with async move block, got: {output}"
@@ -4023,7 +4108,7 @@ fn main() {
             },
         });
         let file = simple_fn("test", vec![RustStmt::Semi(async_block)], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("async move {"),
             "expected 'async move {{' in output, got: {output}"
@@ -4044,10 +4129,101 @@ fn main() {
             span: None,
         });
         let file = simple_fn("test", vec![td], None);
-        let output = emit(&file);
+        let output = emit_source(&file);
         assert!(
             output.contains("let (a, b) = get_pair();"),
             "expected 'let (a, b) = get_pair();' in output, got: {output}"
+        );
+    }
+
+    // =========================================================================
+    // Task 040: Source map generation tests
+    // =========================================================================
+
+    // Task 040 Test 1: Source map generation — emitter produces a source map alongside .rs output.
+    #[test]
+    fn test_emit_source_map_generated() {
+        let file = simple_fn("main", vec![], None);
+        let result = emit(&file);
+        assert!(
+            !result.source.is_empty(),
+            "expected non-empty source output"
+        );
+        assert!(
+            !result.source_map.is_empty(),
+            "expected non-empty source map"
+        );
+    }
+
+    // Task 040 Test 2: Source map line count — source map has same number of entries as .rs lines.
+    #[test]
+    fn test_emit_source_map_line_count_matches_output() {
+        let file = simple_fn("main", vec![], None);
+        let result = emit(&file);
+        let line_count = result.source.lines().count();
+        // The source may or may not have a trailing newline. The source_map records
+        // one entry per newline emitted. A trailing newline means the last line is "".
+        // lines() strips trailing empty lines, so the count may be off by one.
+        // The source_map should match the actual number of newlines in the output.
+        let newline_count = result.source.chars().filter(|&c| c == '\n').count();
+        assert_eq!(
+            result.source_map.len(),
+            newline_count,
+            "source map length should match newline count in output. lines={line_count}, newlines={newline_count}, map={:?}",
+            result.source_map
+        );
+    }
+
+    // Task 040 Test 3: Source map span accuracy — function body lines map to correct .rts spans.
+    #[test]
+    fn test_emit_source_map_span_accuracy_for_fn_body() {
+        use rsc_syntax::span::Span;
+        let span = Span::new(10, 30);
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
+                is_async: false,
+                public: false,
+                name: "foo".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![RustStmt::Semi(RustExpr {
+                        kind: RustExprKind::IntLit(42),
+                        span: Some(span),
+                    })],
+                    expr: None,
+                },
+                span: Some(span),
+            })],
+        };
+        let result = emit(&file);
+        // The function has a span — lines belonging to it should carry that span.
+        let has_span = result.source_map.iter().any(|entry| *entry == Some(span));
+        assert!(
+            has_span,
+            "expected source map to contain the function span {span:?}, got: {:?}",
+            result.source_map
+        );
+    }
+
+    // Task 040 Test 9: EmitResult API — emit() returns EmitResult with both source and source map.
+    #[test]
+    fn test_emit_returns_emit_result_with_source_and_map() {
+        let file = simple_fn("main", vec![], None);
+        let result = emit(&file);
+        // Verify the EmitResult has the expected fields.
+        assert!(
+            result.source.contains("fn main()"),
+            "EmitResult.source should contain fn main()"
+        );
+        // Source map should be populated
+        assert!(
+            !result.source_map.is_empty(),
+            "EmitResult.source_map should be non-empty"
         );
     }
 }

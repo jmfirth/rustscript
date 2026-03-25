@@ -5,6 +5,7 @@
 
 use rsc_syntax::diagnostic::{Diagnostic, Severity};
 use rsc_syntax::source::SourceMap;
+use rsc_syntax::span::Span;
 
 /// Result of compiling a single `RustScript` source file.
 pub struct CompileResult {
@@ -22,6 +23,11 @@ pub struct CompileResult {
     /// External crate dependencies discovered from import statements.
     /// The driver adds these to the generated Cargo.toml.
     pub crate_dependencies: Vec<rsc_lower::CrateDependency>,
+    /// Line-level source map from generated `.rs` to original `.rts`.
+    ///
+    /// Index = 0-based `.rs` line number, value = `.rts` source span.
+    /// `None` entries indicate compiler-generated lines with no `.rts` origin.
+    pub source_map_lines: Vec<Option<Span>>,
 }
 
 /// Compile a single `RustScript` source string to Rust source code.
@@ -47,6 +53,7 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
             has_errors: true,
             needs_async_runtime: false,
             crate_dependencies: Vec::new(),
+            source_map_lines: Vec::new(),
         };
     }
 
@@ -63,21 +70,23 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
             has_errors: true,
             needs_async_runtime: false,
             crate_dependencies: Vec::new(),
+            source_map_lines: Vec::new(),
         };
     }
 
     // Stage 3: Emit
-    let rust_source = rsc_emit::emit(&lower_result.ir);
+    let emit_result = rsc_emit::emit(&lower_result.ir);
 
     let has_errors = has_errors(&all_diagnostics);
 
     CompileResult {
-        rust_source,
+        rust_source: emit_result.source,
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
         needs_async_runtime: lower_result.needs_async_runtime,
         crate_dependencies: lower_result.crate_dependencies,
+        source_map_lines: emit_result.source_map,
     }
 }
 
@@ -107,6 +116,7 @@ pub fn compile_source_with_mods(
             has_errors: true,
             needs_async_runtime: false,
             crate_dependencies: Vec::new(),
+            source_map_lines: Vec::new(),
         };
     }
 
@@ -123,6 +133,7 @@ pub fn compile_source_with_mods(
             has_errors: true,
             needs_async_runtime: false,
             crate_dependencies: Vec::new(),
+            source_map_lines: Vec::new(),
         };
     }
 
@@ -131,17 +142,18 @@ pub fn compile_source_with_mods(
     ir.mod_decls = mod_decls;
 
     // Stage 3: Emit
-    let rust_source = rsc_emit::emit(&ir);
+    let emit_result = rsc_emit::emit(&ir);
 
     let has_errors = has_errors(&all_diagnostics);
 
     CompileResult {
-        rust_source,
+        rust_source: emit_result.source,
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
         needs_async_runtime: lower_result.needs_async_runtime,
         crate_dependencies: lower_result.crate_dependencies,
+        source_map_lines: emit_result.source_map,
     }
 }
 
@@ -1047,6 +1059,58 @@ async function getData(): string {
             result.rust_source.contains(".collect::<Vec<_>>()"),
             "expected .collect::<Vec<_>>() at end of chain:\n{}",
             result.rust_source
+        );
+    }
+
+    // =========================================================================
+    // Task 040: Pipeline integration tests
+    // =========================================================================
+
+    // Task 040 Test 10: Pipeline integration — CompileResult carries the source map.
+    #[test]
+    fn test_compile_result_carries_source_map_lines() {
+        let source = r#"function main() {
+  console.log("Hello!");
+}"#;
+        let result = compile_source(source, "hello.rts");
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.source_map_lines.is_empty(),
+            "expected non-empty source_map_lines"
+        );
+        // The number of source map entries should match the number of newlines in the output.
+        let newline_count = result.rust_source.chars().filter(|&c| c == '\n').count();
+        assert_eq!(
+            result.source_map_lines.len(),
+            newline_count,
+            "source_map_lines length should match newline count in rust_source"
+        );
+    }
+
+    // Task 040: Source map entries have spans for function body.
+    #[test]
+    fn test_compile_source_map_has_spans_for_fn_body() {
+        let source = r#"function main() {
+  const x: i32 = 42;
+}"#;
+        let result = compile_source(source, "spans.rts");
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        // At least some source map entries should have a span (the function body lines).
+        let has_some_spans = result.source_map_lines.iter().any(|entry| entry.is_some());
+        assert!(
+            has_some_spans,
+            "expected at least some source_map_lines entries to have spans, got: {:?}",
+            result.source_map_lines
         );
     }
 }

@@ -5,6 +5,7 @@
 //! those messages into `RustScript` equivalents so the developer sees familiar terms.
 
 use regex::Regex;
+use rsc_syntax::span::Span;
 use std::sync::LazyLock;
 
 /// Header prepended to translated rustc error output.
@@ -42,6 +43,8 @@ struct TranslationPatterns {
     impl_trait: Regex,
     /// Matches `'static` lifetime annotations.
     static_lifetime: Regex,
+    /// Matches file reference patterns like `src/main.rs:LINE:COL` in rustc output.
+    file_reference: Regex,
 }
 
 static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPatterns {
@@ -57,29 +60,102 @@ static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPat
     fn_type: Regex::new(r"\bfn\(").expect("valid regex"),
     impl_trait: Regex::new(r"\bimpl\s+([A-Z]\w+)\b").expect("valid regex"),
     static_lifetime: Regex::new(r"'static\s*").expect("valid regex"),
+    file_reference: Regex::new(r"(src/\w+)\.rs:(\d+):(\d+)").expect("valid regex"),
 });
 
 /// Translate `rustc` error output into `RustScript`-friendly terms.
 ///
-/// Performs string substitution on type names in the error text. If the input
-/// appears to contain recognized rustc error patterns, returns the translated
-/// output with a descriptive header. Otherwise, returns the original text with
-/// a fallback header.
+/// Performs three translation passes:
+/// 1. Translates Rust type names to `RustScript` equivalents (e.g., `String` → `string`).
+/// 2. Remaps `.rs` line numbers to `.rts` line numbers using the source map (if provided).
+/// 3. Replaces `.rs` file references with `.rts` file references (if source map provided).
+///
+/// When `source_map` is `None`, only type name translation is performed (Phase 2 behavior).
+/// The `rts_source` parameter is the original `.rts` source text, used to convert byte
+/// offsets in spans to line numbers. The `rts_filename` is the display name for the `.rts`
+/// file (e.g., `"src/index.rts"`).
 #[must_use]
-pub fn translate_rustc_errors(stderr: &str) -> String {
+pub fn translate_rustc_errors(
+    stderr: &str,
+    source_map: Option<&[Option<Span>]>,
+    rts_source: Option<&str>,
+    rts_filename: Option<&str>,
+) -> String {
     if stderr.trim().is_empty() {
         return String::new();
     }
 
-    let translated = translate_type_names(stderr);
+    let mut translated = translate_type_names(stderr);
+    let mut did_translate = translated != stderr;
+
+    // Apply line number and file reference remapping if we have a source map
+    if let Some(map) = source_map {
+        let remapped = remap_file_references(&translated, map, rts_source, rts_filename);
+        if remapped != translated {
+            did_translate = true;
+            translated = remapped;
+        }
+    }
 
     // If we actually changed something, use the translated header.
     // If nothing changed, use the raw header as fallback.
-    if translated == stderr {
-        format!("{RAW_HEADER}\n{stderr}")
-    } else {
+    if did_translate {
         format!("{TRANSLATED_HEADER}\n{translated}")
+    } else {
+        format!("{RAW_HEADER}\n{stderr}")
     }
+}
+
+/// Convert a byte offset in source text to a 1-based line number.
+///
+/// Counts newlines before the byte offset to determine the line number.
+fn byte_offset_to_line(source: &str, byte_offset: u32) -> usize {
+    let offset = byte_offset as usize;
+    let clamped = offset.min(source.len());
+    source[..clamped].bytes().filter(|&b| b == b'\n').count() + 1
+}
+
+/// Remap `.rs` file references and line numbers to `.rts` equivalents.
+///
+/// Finds patterns like `src/main.rs:LINE:COL` in rustc stderr output and replaces
+/// them with the corresponding `.rts` file and line number using the source map.
+/// Lines without a source map entry keep the original `.rs` reference.
+fn remap_file_references(
+    input: &str,
+    source_map: &[Option<Span>],
+    rts_source: Option<&str>,
+    rts_filename: Option<&str>,
+) -> String {
+    let rts_file = rts_filename.unwrap_or("src/index.rts");
+    let pattern = &PATTERNS.file_reference;
+
+    pattern
+        .replace_all(input, |caps: &regex::Captures| {
+            let rs_line_str = &caps[2];
+            let col = &caps[3];
+
+            // Parse the 1-based line number from the .rs reference
+            if let Ok(rs_line) = rs_line_str.parse::<usize>() {
+                // Source map is 0-based, rustc lines are 1-based
+                let map_index = rs_line.saturating_sub(1);
+                if let Some(Some(span)) = source_map.get(map_index) {
+                    // Convert the span's byte offset to a 1-based .rts line number
+                    if let Some(source) = rts_source {
+                        let rts_line = byte_offset_to_line(source, span.start.0);
+                        format!("{rts_file}:{rts_line}:{col}")
+                    } else {
+                        // No source text to resolve byte offsets — just fix the filename
+                        format!("{rts_file}:{rs_line}:{col}")
+                    }
+                } else {
+                    // No mapping for this line — keep original .rs reference
+                    caps[0].to_owned()
+                }
+            } else {
+                caps[0].to_owned()
+            }
+        })
+        .into_owned()
 }
 
 /// Apply all type name translations to the given text.
@@ -481,7 +557,7 @@ mod tests {
     #[test]
     fn test_translate_unrecognized_error_shows_raw_header() {
         let input = "error[E9999]: some future error\n --> src/main.rs:3:1\n";
-        let result = translate_rustc_errors(input);
+        let result = translate_rustc_errors(input, None, None, None);
         assert!(
             result.starts_with(RAW_HEADER),
             "expected raw header, got:\n{result}"
@@ -495,7 +571,7 @@ mod tests {
     // --- Test 5: Empty stderr produces empty output ---
     #[test]
     fn test_translate_empty_stderr_returns_empty() {
-        let result = translate_rustc_errors("");
+        let result = translate_rustc_errors("", None, None, None);
         assert!(result.is_empty());
     }
 
@@ -582,7 +658,7 @@ mod tests {
 5 |     let x: String = 42;
   |                      ^^ expected String, found integer
 "#;
-        let result = translate_rustc_errors(input);
+        let result = translate_rustc_errors(input, None, None, None);
         assert!(
             result.starts_with(TRANSLATED_HEADER),
             "expected translated header, got:\n{result}"
@@ -596,7 +672,7 @@ mod tests {
     // --- Test 16: Successful build (no error) ---
     #[test]
     fn test_translate_whitespace_only_returns_empty() {
-        let result = translate_rustc_errors("   \n  ");
+        let result = translate_rustc_errors("   \n  ", None, None, None);
         assert!(result.is_empty());
     }
 
@@ -649,7 +725,7 @@ mod tests {
 5 |     let x: String = 42;
   |                      ^^ expected String, found integer
 "#;
-        let result = translate_rustc_errors(input);
+        let result = translate_rustc_errors(input, None, None, None);
         assert!(
             result.contains("expected string, found integer"),
             "correctness scenario 1 failed: {result}"
@@ -660,7 +736,7 @@ mod tests {
     #[test]
     fn test_correctness_fallback_unknown_error() {
         let input = "error[E9999]: some future error\n --> src/main.rs:3:1\n";
-        let result = translate_rustc_errors(input);
+        let result = translate_rustc_errors(input, None, None, None);
         assert!(
             result.starts_with(RAW_HEADER),
             "correctness scenario 2 failed: expected raw header, got:\n{result}"
@@ -669,5 +745,233 @@ mod tests {
             result.contains("error[E9999]: some future error"),
             "original error should be preserved in:\n{result}"
         );
+    }
+
+    // =========================================================================
+    // Task 040: Enhanced error message tests
+    // =========================================================================
+
+    // Task 040 Test 4: Line number translation —
+    // src/main.rs:5:10 in stderr is remapped to the .rts line.
+    #[test]
+    fn test_translate_line_number_remapped_via_source_map() {
+        use rsc_syntax::span::Span;
+        // Source map: 5 entries (lines 0-4). Line 4 (1-based: line 5) maps to .rts span at byte 20.
+        // The .rts source has line 3 starting at byte 20 ("line1\nline2\nline3\n...")
+        let source_map: Vec<Option<Span>> = vec![
+            None,
+            Some(Span::new(0, 5)),
+            Some(Span::new(6, 11)),
+            Some(Span::new(12, 19)),
+            Some(Span::new(20, 30)),
+        ];
+        let rts_source = "line1\nline2\nline3\nline4\nline5\n";
+        // Line 5 in .rs → source_map[4] → Span(20, 30) → byte 20 in rts_source → line 4
+        let stderr = "error: something at src/main.rs:5:10\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("src/index.rts:4:10"),
+            "expected src/index.rts:4:10 in output, got:\n{result}"
+        );
+    }
+
+    // Task 040 Test 5: File name translation —
+    // src/main.rs is replaced with src/index.rts.
+    #[test]
+    fn test_translate_file_name_remapped_to_rts() {
+        use rsc_syntax::span::Span;
+        let source_map: Vec<Option<Span>> = vec![None, Some(Span::new(0, 5))];
+        let rts_source = "line1\n";
+        let stderr = " --> src/main.rs:2:5\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("src/index.rts"),
+            "expected src/index.rts in output, got:\n{result}"
+        );
+        assert!(
+            !result.contains("src/main.rs"),
+            "src/main.rs should be replaced, got:\n{result}"
+        );
+    }
+
+    // Task 040 Test 6: Type name translation preserved —
+    // Existing type translations still work with the new signature.
+    #[test]
+    fn test_translate_type_names_preserved_with_source_map() {
+        use rsc_syntax::span::Span;
+        let source_map: Vec<Option<Span>> = vec![None, Some(Span::new(0, 5))];
+        let stderr = "error: expected String at src/main.rs:2:5\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some("x\n"),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("expected string"),
+            "String should be translated to string, got:\n{result}"
+        );
+    }
+
+    // Task 040 Test 7: Fallback on no source map —
+    // When no source map is provided, behavior matches Task 034.
+    #[test]
+    fn test_translate_fallback_no_source_map() {
+        let stderr = "error: expected String\n";
+        let result = translate_rustc_errors(stderr, None, None, None);
+        assert!(
+            result.contains("expected string"),
+            "type translation should work without source map, got:\n{result}"
+        );
+        assert!(
+            result.starts_with(TRANSLATED_HEADER),
+            "should use translated header, got:\n{result}"
+        );
+    }
+
+    // Task 040 Test 8: Fallback on unmapped line —
+    // Lines without a source map entry keep the .rs reference.
+    #[test]
+    fn test_translate_fallback_unmapped_line_keeps_rs_reference() {
+        use rsc_syntax::span::Span;
+        // Source map has 2 entries, but .rs line 5 is out of bounds.
+        let source_map: Vec<Option<Span>> = vec![None, Some(Span::new(0, 5))];
+        let stderr = " --> src/main.rs:5:10\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some("x\n"),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("src/main.rs:5:10"),
+            "unmapped line should keep .rs reference, got:\n{result}"
+        );
+    }
+
+    // Task 040 Test 10: Pipeline integration — verified at the pipeline level in pipeline.rs.
+    // (See compile_source test below that checks source_map_lines is populated.)
+
+    // =========================================================================
+    // Task 040: Correctness scenarios
+    // =========================================================================
+
+    // Correctness Scenario 1: Line number remapping
+    #[test]
+    fn test_correctness_line_number_remapping() {
+        use rsc_syntax::span::Span;
+        // source map: [None, Some(Span{line:1}), Some(Span{line:3})]
+        // The spec says "line 1" and "line 3" which we interpret as byte offsets
+        // that resolve to those line numbers in the .rts source.
+        // rts_source: "a\nb\nc\nd\n" — line 1 starts at byte 0, line 2 at byte 2, line 3 at byte 4.
+        let source_map: Vec<Option<Span>> = vec![
+            None,
+            Some(Span::new(0, 1)), // .rts byte 0 = line 1
+            Some(Span::new(4, 5)), // .rts byte 4 = line 3
+        ];
+        let rts_source = "a\nb\nc\nd\n";
+        let stderr = "error at src/main.rs:2:5\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("src/index.rts:1:5"),
+            "correctness scenario 1: expected line 1, got:\n{result}"
+        );
+    }
+
+    // Correctness Scenario 2: Type and line translation combined
+    #[test]
+    fn test_correctness_type_and_line_translation_combined() {
+        use rsc_syntax::span::Span;
+        // .rts source: "x\ny\nz\n" — line 1 byte 0, line 2 byte 2, line 3 byte 4
+        // source map: line 5 (index 4) maps to byte 4 in rts = line 3
+        let source_map: Vec<Option<Span>> = vec![
+            None,
+            None,
+            None,
+            None,
+            Some(Span::new(4, 5)), // .rs line 5 → .rts byte 4 → line 3
+        ];
+        let rts_source = "x\ny\nz\n";
+        let stderr = "error: expected String at src/main.rs:5:10\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("expected string"),
+            "String should be translated to string, got:\n{result}"
+        );
+        assert!(
+            result.contains("src/index.rts:3:10"),
+            "expected src/index.rts:3:10, got:\n{result}"
+        );
+    }
+
+    // Correctness Scenario 3: No source map fallback
+    // Existing Task 034 tests continue to pass when source_map is None.
+    #[test]
+    fn test_correctness_no_source_map_fallback() {
+        // This is the same as the Task 034 tests — just verifying they still work.
+        let input = r#"error[E0308]: mismatched types
+ --> src/main.rs:5:10
+  |
+5 |     let x: String = 42;
+  |                      ^^ expected String, found integer
+"#;
+        let result = translate_rustc_errors(input, None, None, None);
+        assert!(
+            result.contains("expected string, found integer"),
+            "correctness scenario 3: type translation should work without source map, got:\n{result}"
+        );
+        assert!(
+            result.starts_with(TRANSLATED_HEADER),
+            "correctness scenario 3: expected translated header, got:\n{result}"
+        );
+    }
+
+    // Task 040: byte_offset_to_line utility tests
+    #[test]
+    fn test_byte_offset_to_line_first_line() {
+        let source = "hello\nworld\n";
+        assert_eq!(byte_offset_to_line(source, 0), 1);
+        assert_eq!(byte_offset_to_line(source, 3), 1);
+    }
+
+    #[test]
+    fn test_byte_offset_to_line_second_line() {
+        let source = "hello\nworld\n";
+        assert_eq!(byte_offset_to_line(source, 6), 2);
+        assert_eq!(byte_offset_to_line(source, 10), 2);
+    }
+
+    #[test]
+    fn test_byte_offset_to_line_third_line() {
+        let source = "a\nb\nc\n";
+        assert_eq!(byte_offset_to_line(source, 4), 3);
+    }
+
+    #[test]
+    fn test_byte_offset_to_line_beyond_end() {
+        let source = "a\nb\n";
+        // Beyond end is clamped to source length. "a\nb\n" has 2 newlines,
+        // so the clamped range covers all of them → line 3 (1-based).
+        assert_eq!(byte_offset_to_line(source, 100), 3);
     }
 }
