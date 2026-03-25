@@ -42,8 +42,6 @@ struct FnSignature {
     param_types: Vec<RustType>,
     /// Inferred parameter modes from Tier 2 borrow analysis.
     /// `None` means analysis hasn't run (e.g., external functions).
-    #[allow(dead_code)]
-    // Populated by Task 045; consumed by Task 046 emitter changes.
     param_modes: Option<Vec<ParamMode>>,
 }
 
@@ -539,18 +537,32 @@ impl Transform {
         reassigned.extend(method_receivers);
 
         // Phase 2: build use map for ownership analysis
-        let use_map = UseMap::analyze(&f.body, |obj, method| {
-            self.builtins.is_ref_args(obj, method)
-        });
+        // Tier 2: pass callee param modes so arguments to borrowed params are not move positions
+        let use_map = UseMap::analyze(
+            &f.body,
+            |obj, method| self.builtins.is_ref_args(obj, method),
+            |callee_name| {
+                self.fn_signatures
+                    .get(callee_name)
+                    .and_then(|sig| sig.param_modes.as_deref())
+            },
+        );
 
         // Track intersection type parameter counter for fresh names
         let mut intersection_param_counter = 0_u32;
+
+        // Look up pre-computed param modes from the signature map (Tier 2)
+        let precomputed_modes = self
+            .fn_signatures
+            .get(&f.name.name)
+            .and_then(|sig| sig.param_modes.as_ref());
 
         // Declare parameters in scope
         let params: Vec<RustParam> = f
             .params
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(param_idx, p)| {
                 let mut diags = Vec::new();
 
                 // Check for intersection type parameters
@@ -598,10 +610,17 @@ impl Transform {
                     ctx.emit_diagnostic(d);
                 }
                 ctx.declare_variable(p.name.name.clone(), ty.clone());
+
+                // Use pre-computed param mode from Tier 2 analysis
+                let mode = precomputed_modes
+                    .and_then(|modes| modes.get(param_idx))
+                    .copied()
+                    .unwrap_or(ParamMode::Owned);
+
                 RustParam {
                     name: p.name.name.clone(),
                     ty,
-                    mode: ParamMode::Owned,
+                    mode,
                     span: Some(p.span),
                 }
             })

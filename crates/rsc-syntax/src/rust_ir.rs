@@ -896,6 +896,11 @@ pub enum RustExprKind {
     /// `tokio::join!(expr1, expr2, ...)` — concurrent execution of futures.
     /// Produced by lowering `await Promise.all([...])`.
     TokioJoin(Vec<RustExpr>),
+    /// A borrow expression: `&expr`.
+    ///
+    /// Inserted by Tier 2 ownership when a function takes a borrowed parameter.
+    /// Rust's auto-deref means `&String` coerces to `&str` where needed.
+    Borrow(Box<RustExpr>),
     /// An iterator chain: `source.iter().ops...terminal`.
     ///
     /// Produced by lowering TypeScript-style array method chains

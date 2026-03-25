@@ -5,11 +5,11 @@
 //! output, records the corresponding `.rts` [`Span`] (if any).
 
 use rsc_syntax::rust_ir::{
-    IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr,
-    RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock,
-    RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern,
-    RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock, RustType,
-    RustTypeParam,
+    IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustElse, RustEnumDef,
+    RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
+    RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt, RustMethod,
+    RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
+    RustType, RustTypeParam,
 };
 use rsc_syntax::span::Span;
 
@@ -265,7 +265,7 @@ impl Emitter {
                 }
                 self.write(&param.name);
                 self.write(": ");
-                self.write(&param.ty.to_string());
+                self.emit_param_type(param.mode, &param.ty);
             }
 
             self.write(")");
@@ -360,7 +360,7 @@ impl Emitter {
             }
             self.write(&param.name);
             self.write(": ");
-            self.write(&param.ty.to_string());
+            self.emit_param_type(param.mode, &param.ty);
         }
 
         self.write(")");
@@ -456,7 +456,7 @@ impl Emitter {
             }
             self.write(&param.name);
             self.write(": ");
-            self.write(&param.ty.to_string());
+            self.emit_param_type(param.mode, &param.ty);
         }
 
         self.write(")");
@@ -497,6 +497,21 @@ impl Emitter {
             }
         }
         self.write(">");
+    }
+
+    /// Emit a parameter type respecting its [`ParamMode`].
+    ///
+    /// `Owned` emits the type as-is, `Borrowed` emits `&Type`, and
+    /// `BorrowedStr` emits `&str` (regardless of the underlying type).
+    fn emit_param_type(&mut self, mode: ParamMode, ty: &RustType) {
+        match mode {
+            ParamMode::Owned => self.write(&ty.to_string()),
+            ParamMode::Borrowed => {
+                self.write("&");
+                self.write(&ty.to_string());
+            }
+            ParamMode::BorrowedStr => self.write("&str"),
+        }
     }
 
     /// Emit a block `{ stmts; [expr] }`.
@@ -868,6 +883,10 @@ impl Emitter {
             RustExprKind::Clone(inner) => {
                 self.emit_expr(inner);
                 self.write(".clone()");
+            }
+            RustExprKind::Borrow(inner) => {
+                self.write("&");
+                self.emit_expr(inner);
             }
             RustExprKind::ToString(inner) => {
                 self.emit_expr(inner);
@@ -4234,6 +4253,96 @@ fn main() {
         assert!(
             !result.source_map.is_empty(),
             "EmitResult.source_map should be non-empty"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 046: Borrow expression emission
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_emit_borrow_expression() {
+        let file = simple_fn(
+            "test",
+            vec![RustStmt::Semi(syn(RustExprKind::Call {
+                func: "greet".to_owned(),
+                args: vec![syn(RustExprKind::Borrow(Box::new(ident("name"))))],
+            }))],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("greet(&name)"),
+            "Borrow expression should emit &name: {output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_param_mode_borrowed_str() {
+        let span = rsc_syntax::span::Span::new(0, 10);
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
+                is_async: false,
+                public: false,
+                name: "greet".to_owned(),
+                type_params: vec![],
+                params: vec![RustParam {
+                    name: "name".to_owned(),
+                    ty: RustType::String,
+                    mode: ParamMode::BorrowedStr,
+                    span: Some(span),
+                }],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: Some(span),
+            })],
+        };
+        let output = emit_source(&file);
+        assert!(
+            output.contains("fn greet(name: &str)"),
+            "BorrowedStr mode should emit &str: {output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_param_mode_borrowed() {
+        let span = rsc_syntax::span::Span::new(0, 10);
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
+                is_async: false,
+                public: false,
+                name: "process".to_owned(),
+                type_params: vec![],
+                params: vec![RustParam {
+                    name: "items".to_owned(),
+                    ty: RustType::Generic(
+                        Box::new(RustType::Named("Vec".to_owned())),
+                        vec![RustType::I32],
+                    ),
+                    mode: ParamMode::Borrowed,
+                    span: Some(span),
+                }],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: Some(span),
+            })],
+        };
+        let output = emit_source(&file);
+        assert!(
+            output.contains("fn process(items: &Vec<i32>)"),
+            "Borrowed mode should emit &Vec<i32>: {output}"
         );
     }
 }

@@ -31,11 +31,25 @@ impl UseMap {
     /// `is_ref_call` is a predicate that returns true if a method call's
     /// arguments are passed by reference (not moved). This decouples ownership
     /// analysis from the builtin registry.
-    pub fn analyze(body: &ast::Block, is_ref_call: impl Fn(&str, &str) -> bool) -> Self {
+    ///
+    /// `callee_param_modes` returns the parameter modes for a callee by name.
+    /// When a callee's parameter is `Borrowed` or `BorrowedStr`, passing an
+    /// argument to that position is NOT a move — eliminating unnecessary clones.
+    pub fn analyze<'a>(
+        body: &ast::Block,
+        is_ref_call: impl Fn(&str, &str) -> bool,
+        callee_param_modes: impl Fn(&str) -> Option<&'a [ParamMode]>,
+    ) -> Self {
         let mut uses: HashMap<String, Vec<UseLocation>> = HashMap::new();
 
         for (stmt_index, stmt) in body.stmts.iter().enumerate() {
-            Self::collect_stmt_uses(stmt, stmt_index, &is_ref_call, &mut uses);
+            Self::collect_stmt_uses(
+                stmt,
+                stmt_index,
+                &is_ref_call,
+                &callee_param_modes,
+                &mut uses,
+            );
         }
 
         Self { uses }
@@ -47,27 +61,51 @@ impl UseMap {
     }
 
     /// Collect variable uses from a statement.
-    fn collect_stmt_uses(
+    #[allow(clippy::too_many_lines)]
+    // Statement scanning covers all statement kinds with callee param mode threading
+    fn collect_stmt_uses<'a>(
         stmt: &ast::Stmt,
         stmt_index: usize,
         is_ref_call: &impl Fn(&str, &str) -> bool,
+        callee_param_modes: &impl Fn(&str) -> Option<&'a [ParamMode]>,
         uses: &mut HashMap<String, Vec<UseLocation>>,
     ) {
         match stmt {
             ast::Stmt::VarDecl(decl) => {
                 // The initializer expression may reference variables
-                Self::collect_expr_uses(&decl.init, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &decl.init,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::Stmt::Expr(expr) => {
-                Self::collect_expr_uses(expr, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    expr,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::Stmt::Return(ret) => {
                 if let Some(value) = &ret.value {
-                    Self::collect_expr_uses(value, stmt_index, false, is_ref_call, uses);
+                    Self::collect_expr_uses(
+                        value,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::Stmt::If(if_stmt) => {
-                Self::collect_if_uses(if_stmt, stmt_index, is_ref_call, uses);
+                Self::collect_if_uses(if_stmt, stmt_index, is_ref_call, callee_param_modes, uses);
             }
             ast::Stmt::While(while_stmt) => {
                 Self::collect_expr_uses(
@@ -75,40 +113,99 @@ impl UseMap {
                     stmt_index,
                     false,
                     is_ref_call,
+                    callee_param_modes,
                     uses,
                 );
                 for inner_stmt in &while_stmt.body.stmts {
-                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::Stmt::Destructure(destr) => {
-                Self::collect_expr_uses(&destr.init, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &destr.init,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::Stmt::Switch(switch) => {
-                Self::collect_expr_uses(&switch.scrutinee, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &switch.scrutinee,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
                 for case in &switch.cases {
                     for inner_stmt in &case.body {
-                        Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                        Self::collect_stmt_uses(
+                            inner_stmt,
+                            stmt_index,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
                     }
                 }
             }
             ast::Stmt::TryCatch(tc) => {
                 for inner_stmt in &tc.try_block.stmts {
-                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
                 for inner_stmt in &tc.catch_block.stmts {
-                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::Stmt::For(for_of) => {
                 // The iterable is borrowed, not moved — mark as non-move position
-                Self::collect_expr_uses(&for_of.iterable, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &for_of.iterable,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
                 for inner_stmt in &for_of.body.stmts {
-                    Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::Stmt::ArrayDestructure(adestr) => {
-                Self::collect_expr_uses(&adestr.init, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &adestr.init,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {
                 // No variable uses in break/continue
@@ -117,25 +214,51 @@ impl UseMap {
     }
 
     /// Collect uses from an if statement.
-    fn collect_if_uses(
+    fn collect_if_uses<'a>(
         if_stmt: &ast::IfStmt,
         stmt_index: usize,
         is_ref_call: &impl Fn(&str, &str) -> bool,
+        callee_param_modes: &impl Fn(&str) -> Option<&'a [ParamMode]>,
         uses: &mut HashMap<String, Vec<UseLocation>>,
     ) {
-        Self::collect_expr_uses(&if_stmt.condition, stmt_index, false, is_ref_call, uses);
+        Self::collect_expr_uses(
+            &if_stmt.condition,
+            stmt_index,
+            false,
+            is_ref_call,
+            callee_param_modes,
+            uses,
+        );
         for inner_stmt in &if_stmt.then_block.stmts {
-            Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+            Self::collect_stmt_uses(
+                inner_stmt,
+                stmt_index,
+                is_ref_call,
+                callee_param_modes,
+                uses,
+            );
         }
         if let Some(else_clause) = &if_stmt.else_clause {
             match else_clause {
                 ast::ElseClause::Block(block) => {
                     for inner_stmt in &block.stmts {
-                        Self::collect_stmt_uses(inner_stmt, stmt_index, is_ref_call, uses);
+                        Self::collect_stmt_uses(
+                            inner_stmt,
+                            stmt_index,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
                     }
                 }
                 ast::ElseClause::ElseIf(nested_if) => {
-                    Self::collect_if_uses(nested_if, stmt_index, is_ref_call, uses);
+                    Self::collect_if_uses(
+                        nested_if,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
         }
@@ -145,11 +268,14 @@ impl UseMap {
     ///
     /// `in_move_position` is true when this expression is a function call
     /// argument in a non-ref call.
-    fn collect_expr_uses(
+    #[allow(clippy::too_many_lines)]
+    // Expression scanning covers all expression kinds; splitting would obscure the match
+    fn collect_expr_uses<'a>(
         expr: &ast::Expr,
         stmt_index: usize,
         in_move_position: bool,
         is_ref_call: &impl Fn(&str, &str) -> bool,
+        callee_param_modes: &impl Fn(&str) -> Option<&'a [ParamMode]>,
         uses: &mut HashMap<String, Vec<UseLocation>>,
     ) {
         match &expr.kind {
@@ -162,16 +288,49 @@ impl UseMap {
                     });
             }
             ast::ExprKind::Binary(bin) => {
-                Self::collect_expr_uses(&bin.left, stmt_index, false, is_ref_call, uses);
-                Self::collect_expr_uses(&bin.right, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &bin.left,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &bin.right,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::Unary(un) => {
-                Self::collect_expr_uses(&un.operand, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &un.operand,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::Call(call) => {
-                // Regular function calls: arguments are in move position
-                for arg in &call.args {
-                    Self::collect_expr_uses(arg, stmt_index, true, is_ref_call, uses);
+                // Tier 2: check callee's param modes to determine move positions
+                let modes = callee_param_modes(&call.callee.name);
+                for (i, arg) in call.args.iter().enumerate() {
+                    let is_borrowed = modes
+                        .and_then(|m| m.get(i))
+                        .is_some_and(|m| matches!(m, ParamMode::Borrowed | ParamMode::BorrowedStr));
+                    let is_move = !is_borrowed;
+                    Self::collect_expr_uses(
+                        arg,
+                        stmt_index,
+                        is_move,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::ExprKind::MethodCall(mc) => {
@@ -184,47 +343,124 @@ impl UseMap {
                 let arg_move = !is_ref;
 
                 // The object itself may be a variable reference
-                Self::collect_expr_uses(&mc.object, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &mc.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
                 for arg in &mc.args {
-                    Self::collect_expr_uses(arg, stmt_index, arg_move, is_ref_call, uses);
+                    Self::collect_expr_uses(
+                        arg,
+                        stmt_index,
+                        arg_move,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::ExprKind::Paren(inner) => {
-                Self::collect_expr_uses(inner, stmt_index, in_move_position, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    inner,
+                    stmt_index,
+                    in_move_position,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::Assign(assign) => {
                 // The target is not a "use" in the ownership sense (it's being written to)
                 // The value side may reference variables
-                Self::collect_expr_uses(&assign.value, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &assign.value,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::StructLit(slit) => {
                 for field in &slit.fields {
-                    Self::collect_expr_uses(&field.value, stmt_index, false, is_ref_call, uses);
+                    Self::collect_expr_uses(
+                        &field.value,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::ExprKind::FieldAccess(fa) => {
-                Self::collect_expr_uses(&fa.object, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &fa.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::TemplateLit(tpl) => {
                 for part in &tpl.parts {
                     if let ast::TemplatePart::Expr(e) = part {
-                        Self::collect_expr_uses(e, stmt_index, false, is_ref_call, uses);
+                        Self::collect_expr_uses(
+                            e,
+                            stmt_index,
+                            false,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
                     }
                 }
             }
             ast::ExprKind::ArrayLit(elements) => {
                 for elem in elements {
-                    Self::collect_expr_uses(elem, stmt_index, false, is_ref_call, uses);
+                    Self::collect_expr_uses(
+                        elem,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::ExprKind::New(new_expr) => {
                 for arg in &new_expr.args {
-                    Self::collect_expr_uses(arg, stmt_index, false, is_ref_call, uses);
+                    Self::collect_expr_uses(
+                        arg,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
                 }
             }
             ast::ExprKind::Index(index_expr) => {
-                Self::collect_expr_uses(&index_expr.object, stmt_index, false, is_ref_call, uses);
-                Self::collect_expr_uses(&index_expr.index, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &index_expr.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &index_expr.index,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::IntLit(_)
             | ast::ExprKind::FloatLit(_)
@@ -239,26 +475,75 @@ impl UseMap {
                 // approach per the task spec.
             }
             ast::ExprKind::FieldAssign(fa) => {
-                Self::collect_expr_uses(&fa.object, stmt_index, false, is_ref_call, uses);
-                Self::collect_expr_uses(&fa.value, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &fa.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &fa.value,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::OptionalChain(chain) => {
-                Self::collect_expr_uses(&chain.object, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &chain.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
                 match &chain.access {
                     ast::OptionalAccess::Field(_) => {}
                     ast::OptionalAccess::Method(_, args) => {
                         for arg in args {
-                            Self::collect_expr_uses(arg, stmt_index, false, is_ref_call, uses);
+                            Self::collect_expr_uses(
+                                arg,
+                                stmt_index,
+                                false,
+                                is_ref_call,
+                                callee_param_modes,
+                                uses,
+                            );
                         }
                     }
                 }
             }
             ast::ExprKind::NullishCoalescing(nc) => {
-                Self::collect_expr_uses(&nc.left, stmt_index, false, is_ref_call, uses);
-                Self::collect_expr_uses(&nc.right, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    &nc.left,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &nc.right,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
             ast::ExprKind::Throw(inner) | ast::ExprKind::Await(inner) => {
-                Self::collect_expr_uses(inner, stmt_index, false, is_ref_call, uses);
+                Self::collect_expr_uses(
+                    inner,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
             }
         }
     }
@@ -339,6 +624,16 @@ pub(crate) fn is_copy_type(ty: &RustType) -> bool {
             | RustType::Bool
             | RustType::Unit
     )
+}
+
+/// Check whether a type is safe to borrow as `&T` in function parameters.
+///
+/// Phase 4 conservatively limits this to generic collection types where
+/// `&Vec<T>`, `&HashMap<K,V>`, etc. are idiomatic Rust patterns. Named
+/// types (structs, enums) are excluded because match destructuring with
+/// `&T` produces reference bindings that can break arithmetic on Copy fields.
+fn is_borrowable_type(ty: &RustType) -> bool {
+    matches!(ty, RustType::Generic(..))
 }
 
 /// Recursively collect assignment targets from a statement.
@@ -515,6 +810,12 @@ pub(crate) fn analyze_param_usage(
 }
 
 /// Convert a `ParamUsage` to a `ParamMode` for a given parameter type.
+///
+/// Phase 4 is conservative: only `String` gets `BorrowedStr` and only
+/// collection generics (`Vec<T>`, `HashMap<K,V>`, `HashSet<T>`) get
+/// `Borrowed`. Named types (structs, enums) stay `Owned` because match
+/// destructuring with `&T` can produce reference bindings that break
+/// arithmetic on Copy inner fields. Task 047 may extend this.
 pub(crate) fn usage_to_mode(usage: ParamUsage, param_type: &RustType) -> ParamMode {
     match usage {
         ParamUsage::ReadOnly => {
@@ -524,9 +825,14 @@ pub(crate) fn usage_to_mode(usage: ParamUsage, param_type: &RustType) -> ParamMo
             } else if matches!(param_type, RustType::String) {
                 // String → &str is the highest-value optimization
                 ParamMode::BorrowedStr
-            } else {
-                // Everything else: &T
+            } else if is_borrowable_type(param_type) {
+                // Collection types: &Vec<T>, &HashMap<K,V>, &HashSet<T>
                 ParamMode::Borrowed
+            } else {
+                // Named types (structs, enums), type params, etc. stay owned.
+                // Borrowing these can cause issues with match destructuring
+                // and other patterns. Task 047 may extend this.
+                ParamMode::Owned
             }
         }
         ParamUsage::Moved | ParamUsage::Mutated | ParamUsage::Unknown => ParamMode::Owned,
@@ -1021,6 +1327,10 @@ mod tests {
         false
     }
 
+    fn no_callee_modes() -> impl Fn(&str) -> Option<&'static [ParamMode]> {
+        |_: &str| -> Option<&'static [ParamMode]> { None }
+    }
+
     fn console_log_ref(obj: &str, method: &str) -> bool {
         obj == "console" && method == "log"
     }
@@ -1056,7 +1366,7 @@ mod tests {
             span: span(0, 25),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         let x_uses = use_map.get_uses("x").unwrap();
         assert_eq!(x_uses.len(), 2);
         assert_eq!(x_uses[0].stmt_index, 0);
@@ -1089,7 +1399,7 @@ mod tests {
             span: span(0, 28),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         assert!(needs_clone("x", 0, &use_map, &RustType::String));
     }
 
@@ -1117,7 +1427,7 @@ mod tests {
             span: span(0, 28),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         assert!(!needs_clone("x", 2, &use_map, &RustType::String));
     }
 
@@ -1144,7 +1454,7 @@ mod tests {
             span: span(0, 16),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         assert!(!needs_clone("x", 0, &use_map, &RustType::I32));
         assert!(!needs_clone("x", 0, &use_map, &RustType::I64));
         assert!(!needs_clone("x", 0, &use_map, &RustType::F64));
@@ -1174,7 +1484,7 @@ mod tests {
             span: span(0, 16),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         assert!(!needs_clone("x", 0, &use_map, &RustType::I8));
         assert!(!needs_clone("x", 0, &use_map, &RustType::I16));
         assert!(!needs_clone("x", 0, &use_map, &RustType::U8));
@@ -1209,7 +1519,7 @@ mod tests {
             span: span(0, 34),
         };
 
-        let use_map = UseMap::analyze(&block, console_log_ref);
+        let use_map = UseMap::analyze(&block, console_log_ref, no_callee_modes());
         // Even though x is String and used later, println! is not a move position
         assert!(!needs_clone("x", 0, &use_map, &RustType::String));
     }
@@ -1237,7 +1547,7 @@ mod tests {
             span: span(0, 30),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         let vec_type = RustType::Generic(
             Box::new(RustType::Named("Vec".to_owned())),
             vec![RustType::I32],
@@ -1272,7 +1582,7 @@ mod tests {
             span: span(0, 34),
         };
 
-        let use_map = UseMap::analyze(&block, no_ref_call);
+        let use_map = UseMap::analyze(&block, no_ref_call, no_callee_modes());
         let items_uses = use_map.get_uses("items").unwrap();
         // The for-of iterable should not be a move position
         assert_eq!(items_uses.len(), 2);
@@ -1646,13 +1956,16 @@ mod tests {
         );
     }
 
-    // Test 13: Named type parameter that's ReadOnly → ParamMode::Borrowed
+    // Test 13: Named type parameter that's ReadOnly → ParamMode::Owned
+    // Phase 4 conservatively keeps named types (structs, enums) as Owned
+    // because match destructuring with &T can produce reference bindings
+    // that break arithmetic on Copy inner fields. Task 047 may extend this.
     #[test]
-    fn test_usage_to_mode_named_type_read_only_is_borrowed() {
+    fn test_usage_to_mode_named_type_read_only_is_owned() {
         assert_eq!(
             usage_to_mode(ParamUsage::ReadOnly, &RustType::Named("User".to_owned())),
-            ParamMode::Borrowed,
-            "Named type ReadOnly should be Borrowed"
+            ParamMode::Owned,
+            "Named type ReadOnly should stay Owned in Phase 4"
         );
     }
 
@@ -1698,5 +2011,74 @@ mod tests {
         assert_eq!(param.ty.to_string(), "i32");
         assert_eq!(param.mode, ParamMode::Owned);
         assert_eq!(param.name, "x");
+    }
+
+    // Test 046-1: UseMap with borrowed-param callee does not mark argument as move
+    #[test]
+    fn test_use_map_borrowed_callee_arg_not_move() {
+        // Block: { greet(x); greet(x); }
+        // If greet takes BorrowedStr, x should NOT be in move position
+        let block = Block {
+            stmts: vec![
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("greet", 0, 5),
+                        args: vec![ident_expr("x", 6, 7)],
+                    }),
+                    span: span(0, 8),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee: ident("greet", 10, 15),
+                        args: vec![ident_expr("x", 16, 17)],
+                    }),
+                    span: span(10, 18),
+                }),
+            ],
+            span: span(0, 20),
+        };
+
+        let borrowed_modes: [ParamMode; 1] = [ParamMode::BorrowedStr];
+        let use_map = UseMap::analyze(&block, no_ref_call, |callee| {
+            if callee == "greet" {
+                Some(&borrowed_modes[..])
+            } else {
+                None
+            }
+        });
+
+        let uses = use_map.get_uses("x").expect("x should have uses");
+        assert_eq!(uses.len(), 2);
+        // With borrowed callee, arguments should NOT be move positions
+        assert!(
+            !uses[0].is_move_position,
+            "arg to borrowed param should not be move"
+        );
+        assert!(
+            !uses[1].is_move_position,
+            "arg to borrowed param should not be move"
+        );
+
+        // Therefore no clone is needed
+        assert!(
+            !needs_clone("x", 0, &use_map, &RustType::String),
+            "no clone needed when callee borrows"
+        );
+    }
+
+    // Test 046-2: Generic type (Vec) read-only → Borrowed
+    #[test]
+    fn test_usage_to_mode_generic_vec_read_only_is_borrowed() {
+        assert_eq!(
+            usage_to_mode(
+                ParamUsage::ReadOnly,
+                &RustType::Generic(
+                    Box::new(RustType::Named("Vec".to_owned())),
+                    vec![RustType::I32]
+                )
+            ),
+            ParamMode::Borrowed,
+            "Generic Vec ReadOnly should be Borrowed"
+        );
     }
 }

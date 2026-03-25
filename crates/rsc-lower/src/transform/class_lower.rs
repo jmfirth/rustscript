@@ -227,9 +227,12 @@ impl Transform {
 
         // Build use map for the constructor body
         let empty_reassigned = std::collections::HashSet::new();
-        let use_map = UseMap::analyze(&ctor.body, |obj, method| {
-            self.builtins.is_ref_args(obj, method)
-        });
+        // Class methods stay Tier 1 — no callee param mode lookup
+        let use_map = UseMap::analyze(
+            &ctor.body,
+            |obj, method| self.builtins.is_ref_args(obj, method),
+            |_| None,
+        );
 
         for (i, stmt) in ctor.body.stmts.iter().enumerate() {
             match stmt {
@@ -350,9 +353,12 @@ impl Transform {
 
         // Build use map and lower the body
         let reassigned = ownership::find_reassigned_variables(&method.body);
-        let use_map = UseMap::analyze(&method.body, |obj, method_name| {
-            self.builtins.is_ref_args(obj, method_name)
-        });
+        // Class methods stay Tier 1 — no callee param mode lookup
+        let use_map = UseMap::analyze(
+            &method.body,
+            |obj, method_name| self.builtins.is_ref_args(obj, method_name),
+            |_| None,
+        );
 
         let body = self.lower_block(&method.body, ctx, &use_map, 0, &reassigned);
 
