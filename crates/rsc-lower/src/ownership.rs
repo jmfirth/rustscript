@@ -253,7 +253,7 @@ impl UseMap {
                 Self::collect_expr_uses(&nc.left, stmt_index, false, is_ref_call, uses);
                 Self::collect_expr_uses(&nc.right, stmt_index, false, is_ref_call, uses);
             }
-            ast::ExprKind::Throw(inner) => {
+            ast::ExprKind::Throw(inner) | ast::ExprKind::Await(inner) => {
                 Self::collect_expr_uses(inner, stmt_index, false, is_ref_call, uses);
             }
         }

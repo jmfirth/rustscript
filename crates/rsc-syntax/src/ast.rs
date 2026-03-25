@@ -138,8 +138,11 @@ pub struct ReturnTypeAnnotation {
 ///
 /// Corresponds to `RustScript` `function name<T>(params): ReturnType { body }`.
 /// Lowers to a Rust `fn` item. Generic type parameters are optional.
+/// `async function` declarations lower to `async fn` in Rust.
 #[derive(Debug, Clone)]
 pub struct FnDecl {
+    /// Whether this is an `async function`.
+    pub is_async: bool,
     /// The function name.
     pub name: Ident,
     /// Optional generic type parameters: `<T, U extends Clone>`.
@@ -306,11 +309,14 @@ pub struct ClassConstructor {
     pub span: Span,
 }
 
-/// A class method: `[private|public] name(params): ReturnType { body }`.
+/// A class method: `[private|public] [async] name(params): ReturnType { body }`.
 ///
 /// Lowers to a method in an `impl` block with `&self` or `&mut self`.
+/// `async` methods lower to `async fn` in Rust.
 #[derive(Debug, Clone)]
 pub struct ClassMethod {
+    /// Whether this is an `async` method.
+    pub is_async: bool,
     /// The visibility modifier (`public` or `private`).
     pub visibility: Visibility,
     /// The method name.
@@ -689,6 +695,9 @@ pub enum ExprKind {
     /// The `this` keyword — refers to the current class instance.
     /// Lowers to `self` in Rust methods.
     This,
+    /// An `await` expression: `await expr`.
+    /// Lowers to Rust's postfix `.await`: `expr.await`.
+    Await(Box<Expr>),
 }
 
 /// A binary expression with an operator and two operands.
@@ -942,10 +951,12 @@ pub struct NullishCoalescingExpr {
 
 /// A closure / arrow function expression.
 ///
-/// Corresponds to `(params): ReturnType => body` in `RustScript`.
-/// Lowers to a Rust closure expression: `|params| -> RetType { body }`.
+/// Corresponds to `[async] (params): ReturnType => body` in `RustScript`.
+/// Lowers to a Rust closure expression: `[async] |params| -> RetType { body }`.
 #[derive(Debug, Clone)]
 pub struct ClosureExpr {
+    /// Whether this is an `async` closure.
+    pub is_async: bool,
     /// Whether this is a `move` closure.
     pub is_move: bool,
     /// Parameters (with type annotations).
@@ -996,6 +1007,7 @@ mod tests {
     #[test]
     fn test_fn_decl_with_two_params_field_access() {
         let decl = FnDecl {
+            is_async: false,
             name: ident("add", 0, 3),
             type_params: None,
             params: vec![

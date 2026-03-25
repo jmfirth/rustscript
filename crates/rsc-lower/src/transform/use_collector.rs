@@ -264,7 +264,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::Some(inner)
         | RustExprKind::QuestionMark(inner)
         | RustExprKind::Ok(inner)
-        | RustExprKind::Err(inner) => {
+        | RustExprKind::Err(inner)
+        | RustExprKind::Await(inner) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustExprKind::Assign { value, .. }

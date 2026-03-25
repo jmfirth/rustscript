@@ -210,6 +210,8 @@ pub struct RustTraitImplBlock {
 /// Unlike [`RustTraitMethod`] which is a signature only, this has a body.
 #[derive(Debug, Clone)]
 pub struct RustMethod {
+    /// Whether this is an `async` method.
+    pub is_async: bool,
     /// The method name.
     pub name: String,
     /// The self parameter (`&self`, `&mut self`, or none for associated functions).
@@ -238,6 +240,8 @@ pub enum RustSelfParam {
 /// Produced by lowering a `RustScript` [`FnDecl`](crate::ast::FnDecl).
 #[derive(Debug, Clone)]
 pub struct RustFnDecl {
+    /// Whether this is an `async fn`.
+    pub is_async: bool,
     /// Whether this function is `pub` (exported from the module).
     pub public: bool,
     /// The function name.
@@ -654,12 +658,14 @@ pub enum RustExprKind {
         /// The argument list.
         args: Vec<RustExpr>,
     },
-    /// A method call (e.g., `receiver.method(args)`).
+    /// A method call (e.g., `receiver.method(args)` or `receiver.method::<T>(args)`).
     MethodCall {
         /// The receiver expression.
         receiver: Box<RustExpr>,
         /// The method name.
         method: String,
+        /// Explicit type arguments for turbofish syntax (e.g., `::<T>`).
+        type_args: Vec<RustType>,
         /// The argument list.
         args: Vec<RustExpr>,
     },
@@ -773,9 +779,11 @@ pub enum RustExprKind {
         /// The closure body expression.
         closure_body: Box<RustExpr>,
     },
-    /// A closure expression: `|params| body` or `move |params| body`.
+    /// A closure expression: `[async] [move] |params| body`.
     /// Produced by lowering `RustScript` arrow functions.
     Closure {
+        /// Whether this is an `async` closure.
+        is_async: bool,
         /// Whether this is a `move` closure.
         is_move: bool,
         /// The closure parameters.
@@ -785,6 +793,9 @@ pub enum RustExprKind {
         /// The closure body — expression or block.
         body: RustClosureBody,
     },
+    /// An `.await` expression: `expr.await`.
+    /// Note: Rust uses postfix `.await` while `RustScript` uses prefix `await expr`.
+    Await(Box<RustExpr>),
     /// `self` — reference to the current instance in an impl method.
     /// Produced by lowering `this` in class methods.
     SelfRef,
@@ -945,6 +956,7 @@ mod tests {
     #[test]
     fn test_rust_fn_decl_complete_construction() {
         let decl = RustFnDecl {
+            is_async: false,
             public: false,
             name: "add".to_owned(),
             type_params: vec![],
