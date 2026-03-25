@@ -1439,6 +1439,21 @@ impl Transform {
                         expr.span,
                     );
                 }
+
+                // `.length` on strings/arrays → `.len()` method call
+                if fa.field.name == "length" {
+                    let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                    return RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(object),
+                            method: "len".into(),
+                            type_args: vec![],
+                            args: vec![],
+                        },
+                        expr.span,
+                    );
+                }
+
                 let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                 RustExpr::new(
                     RustExprKind::FieldAccess {
@@ -1668,6 +1683,7 @@ impl Transform {
     ///
     /// First checks if the method call matches a builtin. If so, lowers
     /// the arguments first then delegates to the builtin lowering function.
+    /// Then checks string methods registered in the builtin registry.
     fn lower_method_call(
         &self,
         mc: &ast::MethodCallExpr,
@@ -1689,6 +1705,18 @@ impl Transform {
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
             return lowering_fn(lowered_args, span);
+        }
+
+        // Check for string method: if the method name matches a registered
+        // string method, lower via the string method lowering function.
+        if let Some(lowering_fn) = self.builtins.lookup_string_method(&mc.method.name) {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return lowering_fn(receiver, lowered_args, span);
         }
 
         // Not a builtin — lower as a regular method call

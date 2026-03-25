@@ -2061,3 +2061,131 @@ fn test_snapshot_non_async_function_unchanged() {
     let actual = compile_to_rust(source);
     assert_snapshot("non_async_function_unchanged", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 032: String extension methods — correctness scenarios
+// ---------------------------------------------------------------------------
+
+// Correctness scenario 1: string method variety
+#[test]
+fn test_snapshot_string_method_variety() {
+    let source = r#"function main() {
+  const name = "Alice";
+  const upper = name.toUpperCase();
+  const starts = name.startsWith("A");
+  const trimmed = "  hello  ".trim();
+  const included = name.includes("lic");
+  console.log(upper);
+}"#;
+
+    let expected = r#"fn main() {
+    let name = "Alice".to_string();
+    let upper = name.to_uppercase();
+    let starts = name.starts_with("A");
+    let trimmed = "  hello  ".to_string().trim().to_string();
+    let included = name.contains("lic");
+    println!("{}", upper);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_method_variety", &actual, expected);
+}
+
+// Correctness scenario 2: split method
+#[test]
+fn test_snapshot_string_split_method() {
+    let source = r#"function main() {
+  const parts = "a,b,c".split(",");
+  console.log(parts.length);
+}"#;
+
+    let expected = r#"fn main() {
+    let parts = "a,b,c".to_string().split(",").map(|s| s.to_string()).collect::<Vec<String>>();
+    println!("{}", parts.len());
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_split_method", &actual, expected);
+}
+
+// Correctness scenario 3: replace method
+#[test]
+fn test_snapshot_string_replace_method() {
+    let source = r#"function main() {
+  const result = "hello world".replace("world", "rust");
+  console.log(result);
+}"#;
+
+    let expected = r#"fn main() {
+    let result = "hello world".to_string().replace("world", "rust");
+    println!("{}", result);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_replace_method", &actual, expected);
+}
+
+// Chaining: toUpperCase().startsWith()
+#[test]
+fn test_snapshot_string_method_chaining() {
+    let source = r#"function main() {
+  const name = "Alice";
+  const result = name.toUpperCase().startsWith("A");
+  console.log(result);
+}"#;
+
+    let expected = r#"fn main() {
+    let name = "Alice".to_string();
+    let result = name.to_uppercase().starts_with("A");
+    println!("{}", result);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_method_chaining", &actual, expected);
+}
+
+// toLowerCase and endsWith
+#[test]
+fn test_snapshot_string_to_lower_case_and_ends_with() {
+    let source = r#"function main() {
+  const name = "HELLO";
+  const lower = name.toLowerCase();
+  const ends = name.endsWith("z");
+  console.log(lower);
+}"#;
+
+    let expected = r#"fn main() {
+    let name = "HELLO".to_string();
+    let lower = name.to_lowercase();
+    let ends = name.ends_with("z");
+    println!("{}", lower);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_to_lower_case_and_ends_with", &actual, expected);
+}
+
+// .length property on strings
+#[test]
+fn test_snapshot_string_length_property() {
+    let source = r#"function main() {
+  const name = "Alice";
+  const len = name.length;
+  console.log(len);
+}"#;
+
+    let expected = r#"fn main() {
+    let name = "Alice".to_string();
+    let len = name.len();
+    println!("{}", len);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_length_property", &actual, expected);
+}
