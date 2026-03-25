@@ -5,6 +5,7 @@ members = [
     "crates/rsc-typeck",
     "crates/rsc-lower",
     "crates/rsc-emit",
+    "crates/rsc-fmt",
     "crates/rsc-driver",
     "crates/rsc-cli",
 ]

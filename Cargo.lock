@@ -339,6 +339,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rsc-driver",
+ "rsc-fmt",
  "rsc-syntax",
  "tempfile",
 ]
@@ -361,6 +362,15 @@ name = "rsc-emit"
 version = "0.1.0"
 dependencies = [
  "rsc-syntax",
+]
+
+[[package]]
+name = "rsc-fmt"
+version = "0.1.0"
+dependencies = [
+ "rsc-parser",
+ "rsc-syntax",
+ "thiserror",
 ]
 
 [[package]]
