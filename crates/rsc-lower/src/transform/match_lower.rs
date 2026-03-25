@@ -4,6 +4,7 @@
 //! including enum variant pattern matching and field destructuring rewrites.
 
 use rsc_syntax::ast;
+use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBlock, RustExpr, RustExprKind, RustMatchArm, RustMatchStmt, RustPattern, RustReturnStmt,
     RustStmt,
@@ -42,7 +43,12 @@ impl Transform {
             .as_ref()
             .and_then(|name| ctx.lookup_variable(name))
             .and_then(|info| extract_named_type(&info.ty))
-            .unwrap_or_else(|| "Unknown".to_owned());
+            .unwrap_or_else(|| {
+                ctx.emit_diagnostic(Diagnostic::error(
+                    "cannot infer enum type for switch expression",
+                ));
+                "_UnknownEnum".to_owned()
+            });
 
         let td = self.type_registry.lookup(&enum_name);
 

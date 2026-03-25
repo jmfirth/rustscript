@@ -829,6 +829,20 @@ impl Transform {
             .is_some_and(|ty| matches!(ty, RustType::Option(_)));
         let is_throws = ctx.is_fn_throws();
 
+        // Set struct type context from return type for struct literal inference.
+        // This allows `return { name: "Alice" }` to resolve the struct name from
+        // the function's return type (possibly wrapped in Option or Result).
+        let return_struct_name = ctx.current_return_type().and_then(|ty| match ty {
+            RustType::Named(name) => Some(name.clone()),
+            RustType::Option(inner) => extract_named_type(inner),
+            RustType::Result(ok, _) => extract_named_type(ok),
+            _ => None,
+        });
+        let prev_struct_name = ctx.current_struct_type_name().map(String::from);
+        if let Some(ref name) = return_struct_name {
+            ctx.set_struct_type_name(Some(name.clone()));
+        }
+
         let value = ret.value.as_ref().map(|v| {
             if is_throws {
                 let lowered = self.lower_expr(v, ctx, use_map, stmt_index);
@@ -846,6 +860,9 @@ impl Transform {
                 self.lower_expr(v, ctx, use_map, stmt_index)
             }
         });
+
+        // Restore previous struct type context.
+        ctx.set_struct_type_name(prev_struct_name);
 
         // Bare `return;` in throws context → `return Ok(());`
         // Bare `return;` in Option context → `return None;`
@@ -1091,14 +1108,18 @@ impl Transform {
     ) -> RustStmt {
         let init = self.lower_expr(&destr.init, ctx, use_map, stmt_index);
 
-        // Try to infer the type name from the init expression. If the init
-        // is an identifier, look up its type in the context.
+        // Infer the type name from the init expression. If the init is an
+        // identifier, look up its type in the context. Emit a diagnostic if
+        // the type cannot be resolved — "Unknown" sentinels produce invalid Rust.
         let type_name = match &destr.init.kind {
             ast::ExprKind::Ident(ident) => ctx
                 .lookup_variable(&ident.name)
-                .and_then(|info| extract_named_type(&info.ty))
-                .unwrap_or_else(|| "Unknown".to_owned()),
-            _ => "Unknown".to_owned(),
+                .and_then(|info| extract_named_type(&info.ty)),
+            _ => None,
+        };
+        let Some(type_name) = type_name else {
+            ctx.emit_diagnostic(Diagnostic::error("cannot infer type for destructuring"));
+            return RustStmt::Semi(init);
         };
 
         let fields = destr.fields.iter().map(|f| f.name.clone()).collect();
@@ -1539,8 +1560,6 @@ impl Transform {
         }
     }
 
-    /// Lower an identifier reference, inserting a clone if needed.
-    #[allow(clippy::unused_self)] // Method for consistency with other lower_* methods
     /// Lower a closure / arrow function expression.
     ///
     /// Maps `(x: i32): i32 => x * 2` to `|x: i32| -> i32 { x * 2 }`.
@@ -1702,7 +1721,10 @@ impl Transform {
             .as_ref()
             .map(|n| n.name.clone())
             .or_else(|| ctx.current_struct_type_name().map(String::from))
-            .unwrap_or_else(|| "Unknown".to_owned());
+            .unwrap_or_else(|| {
+                ctx.emit_diagnostic(Diagnostic::error("cannot infer struct type for literal"));
+                "_UnknownStruct".to_owned()
+            });
 
         let fields = slit
             .fields
