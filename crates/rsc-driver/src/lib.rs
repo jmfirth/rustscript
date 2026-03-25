@@ -9,5 +9,5 @@ pub mod error;
 mod pipeline;
 mod project;
 
-pub use pipeline::{CompileResult, compile_source, compile_source_with_mods};
+pub use pipeline::{CompileResult, CrateDependency, compile_source, compile_source_with_mods};
 pub use project::{Project, init_project};

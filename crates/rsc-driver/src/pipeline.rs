@@ -6,6 +6,17 @@
 use rsc_syntax::diagnostic::{Diagnostic, Severity};
 use rsc_syntax::source::SourceMap;
 
+/// A crate dependency discovered during compilation.
+#[derive(Debug, Clone)]
+pub struct CrateDependency {
+    /// Crate name as it appears in Cargo.toml (e.g., "tokio", "serde").
+    pub name: String,
+    /// Version requirement (e.g., "1", "0.12").
+    pub version: String,
+    /// Features to enable (e.g., `["full"]` for tokio).
+    pub features: Vec<String>,
+}
+
 /// Result of compiling a single `RustScript` source file.
 pub struct CompileResult {
     /// The generated Rust source code (empty if compilation failed).
@@ -16,6 +27,12 @@ pub struct CompileResult {
     pub source_map: SourceMap,
     /// Whether any error-level diagnostics were emitted.
     pub has_errors: bool,
+    /// Whether the compiled code uses async/await and needs a tokio runtime.
+    /// When true, the driver adds tokio to `Cargo.toml` and wraps main in `#[tokio::main]`.
+    pub needs_async_runtime: bool,
+    /// External crate dependencies discovered from import statements.
+    /// The driver adds these to the generated Cargo.toml.
+    pub crate_dependencies: Vec<CrateDependency>,
 }
 
 /// Compile a single `RustScript` source string to Rust source code.
@@ -39,6 +56,8 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
             diagnostics: all_diagnostics,
             source_map,
             has_errors: true,
+            needs_async_runtime: false,
+            crate_dependencies: Vec::new(),
         };
     }
 
@@ -53,6 +72,8 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
             diagnostics: all_diagnostics,
             source_map,
             has_errors: true,
+            needs_async_runtime: false,
+            crate_dependencies: Vec::new(),
         };
     }
 
@@ -66,6 +87,8 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
+        needs_async_runtime: false,
+        crate_dependencies: Vec::new(),
     }
 }
 
@@ -93,6 +116,8 @@ pub fn compile_source_with_mods(
             diagnostics: all_diagnostics,
             source_map,
             has_errors: true,
+            needs_async_runtime: false,
+            crate_dependencies: Vec::new(),
         };
     }
 
@@ -107,6 +132,8 @@ pub fn compile_source_with_mods(
             diagnostics: all_diagnostics,
             source_map,
             has_errors: true,
+            needs_async_runtime: false,
+            crate_dependencies: Vec::new(),
         };
     }
 
@@ -123,6 +150,8 @@ pub fn compile_source_with_mods(
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
+        needs_async_runtime: false,
+        crate_dependencies: Vec::new(),
     }
 }
 
