@@ -8,3 +8,6 @@ license.workspace = true
 rsc-syntax = { path = "../rsc-syntax" }
 rsc-parser = { path = "../rsc-parser" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+rsc-driver = { path = "../rsc-driver" }

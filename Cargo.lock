@@ -740,6 +740,7 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "rsc-emit",
+ "rsc-fmt",
  "rsc-lower",
  "rsc-parser",
  "rsc-syntax",
@@ -758,6 +759,7 @@ dependencies = [
 name = "rsc-fmt"
 version = "0.1.0"
 dependencies = [
+ "rsc-driver",
  "rsc-parser",
  "rsc-syntax",
  "thiserror",

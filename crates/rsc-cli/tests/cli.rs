@@ -23,6 +23,173 @@ fn test_cli_help_mentions_all_commands() {
     assert!(stdout.contains("check"), "help should mention check");
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3 integration: CLI surface completeness (all 7 commands)
+// ---------------------------------------------------------------------------
+
+// Test P3-1: rsc --help lists all 7 Phase 3 commands
+#[test]
+fn test_cli_help_lists_all_seven_commands() {
+    let output = rsc_bin().arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "rsc --help should succeed");
+
+    let required_commands = ["init", "build", "run", "check", "test", "fmt", "lsp"];
+    for cmd in &required_commands {
+        assert!(
+            stdout.contains(cmd),
+            "help output should mention '{cmd}', got: {stdout}"
+        );
+    }
+}
+
+// Test P3-2: rsc fmt --help is a valid command
+#[test]
+fn test_cli_fmt_help_is_valid() {
+    let output = rsc_bin().args(["fmt", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "rsc fmt --help should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("check"),
+        "fmt help should mention --check flag, got: {stdout}"
+    );
+}
+
+// Test P3-3: rsc lsp --help is a valid command
+#[test]
+fn test_cli_lsp_help_is_valid() {
+    let output = rsc_bin().args(["lsp", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "rsc lsp --help should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("LSP") || stdout.contains("lsp") || stdout.contains("editor"),
+        "lsp help should describe LSP functionality, got: {stdout}"
+    );
+}
+
+// Test P3-4: rsc init with --template cli creates a CLI project
+#[test]
+#[ignore] // Slow: invokes binary, creates filesystem artifacts
+fn test_cli_init_template_cli_creates_project() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    let output = rsc_bin()
+        .args(["init", "my-cli", "--template", "cli"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "rsc init --template cli should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("Created project"),
+        "should print creation message, got: {stdout}"
+    );
+
+    let project_dir = tmp.path().join("my-cli");
+    assert!(project_dir.join("src/index.rts").is_file());
+    assert!(project_dir.join("cargo.toml").is_file());
+}
+
+// Test P3-5: rsc init with invalid template shows error
+#[test]
+fn test_cli_init_invalid_template_shows_error() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    let output = rsc_bin()
+        .args(["init", "bad-proj", "--template", "invalid-template"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "rsc init with invalid template should exit 1"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown template"),
+        "should mention unknown template, got: {stderr}"
+    );
+}
+
+// Test P3-6: rsc fmt on an unformatted file exits 1 with --check
+#[test]
+#[ignore] // Slow: creates filesystem artifacts
+fn test_cli_fmt_check_unformatted_exits_one() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Create a minimal project structure with an unformatted file
+    let src_dir = tmp.path().join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(src_dir.join("index.rts"), "function foo() { const x = 1; }").unwrap();
+
+    let output = rsc_bin()
+        .args(["fmt", "--check"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "rsc fmt --check on unformatted file should exit 1, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Test P3-7: rsc fmt formats a file in place
+#[test]
+#[ignore] // Slow: creates filesystem artifacts
+fn test_cli_fmt_formats_file_in_place() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Create a minimal project structure with an unformatted file
+    let src_dir = tmp.path().join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let source_path = src_dir.join("index.rts");
+    std::fs::write(&source_path, "function foo() { const x = 1; }").unwrap();
+
+    let output = rsc_bin()
+        .arg("fmt")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "rsc fmt should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The file should now be formatted (multi-line)
+    let formatted = std::fs::read_to_string(&source_path).unwrap();
+    assert!(
+        formatted.contains('\n'),
+        "formatted output should be multi-line, got: {formatted}"
+    );
+    assert!(
+        formatted.contains("  const x = 1;"),
+        "should have indented body, got: {formatted}"
+    );
+}
+
 // Test 2: rsc --version produces version output
 #[test]
 fn test_cli_version_output() {
