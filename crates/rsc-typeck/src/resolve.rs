@@ -124,6 +124,10 @@ pub fn resolve_type_annotation(
                 .map_or(Type::Unit, |m| resolve_type_annotation(m, diagnostics))
         }
         ast::TypeKind::Inferred => Type::Error,
+        ast::TypeKind::Shared(inner) => {
+            let inner_ty = resolve_type_annotation(inner, diagnostics);
+            Type::ArcMutex(Box::new(inner_ty))
+        }
     }
 }
 
@@ -227,6 +231,15 @@ pub fn resolve_type_annotation_with_generics(
             // Inferred types are used in closure parameters where the type is omitted.
             // Return Error to signal that no explicit type was provided.
             Type::Error
+        }
+        ast::TypeKind::Shared(inner) => {
+            let inner_ty = resolve_type_annotation_with_generics(
+                inner,
+                registry,
+                generic_param_names,
+                diagnostics,
+            );
+            Type::ArcMutex(Box::new(inner_ty))
         }
     }
 }

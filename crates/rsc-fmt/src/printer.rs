@@ -285,6 +285,11 @@ impl Printer {
                 }
             }
             TypeKind::Inferred => {}
+            TypeKind::Shared(inner) => {
+                self.write("shared<");
+                self.print_type_annotation(inner);
+                self.write(">");
+            }
         }
     }
 
@@ -712,6 +717,11 @@ impl Printer {
             ExprKind::Await(inner) => {
                 self.write("await ");
                 self.print_expr(inner);
+            }
+            ExprKind::Shared(inner) => {
+                self.write("shared(");
+                self.print_expr(inner);
+                self.write(")");
             }
         }
     }

@@ -30,6 +30,8 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     /// A type variable (for generic type parameters like `T`).
     TypeVar(String),
+    /// `Arc<Mutex<T>>` — from `shared<T>`.
+    ArcMutex(Box<Type>),
     /// Type could not be resolved — used for error recovery.
     Error,
 }

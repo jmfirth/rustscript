@@ -1367,6 +1367,33 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
+            TokenKind::Ident(name) if name == "shared" => {
+                let start = token.span;
+                self.advance(); // consume `shared`
+
+                // Require `<T>` type parameter
+                if !self.check(&TokenKind::Lt) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "`shared` type requires a type parameter: `shared<T>`".to_owned(),
+                        )
+                        .with_label(
+                            start,
+                            self.file_id,
+                            "expected `<` after `shared`",
+                        ),
+                    );
+                    return None;
+                }
+                self.advance(); // consume `<`
+                let inner = self.parse_type_annotation()?;
+                let close = self.expect(&TokenKind::Gt)?;
+                let span = start.merge(close.span);
+                Some(TypeAnnotation {
+                    kind: TypeKind::Shared(Box::new(inner)),
+                    span,
+                })
+            }
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
                 let start_span = ident.span;
@@ -2801,6 +2828,21 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::Ident(_) => {
+                // Check for `shared(expr)` constructor
+                if matches!(&token.kind, TokenKind::Ident(name) if name == "shared")
+                    && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::LParen)
+                {
+                    let start = self.current_token().span;
+                    self.advance(); // consume `shared`
+                    self.advance(); // consume `(`
+                    let inner = self.parse_expr()?;
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = start.merge(close.span);
+                    return Some(Expr {
+                        kind: ExprKind::Shared(Box::new(inner)),
+                        span,
+                    });
+                }
                 // Check for single-param arrow function shorthand: `n => expr`
                 if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::FatArrow) {
                     let start = self.current_token().span;
@@ -5815,6 +5857,67 @@ function main(): void {
         assert!(
             has_unclosed,
             "expected unclosed rust block diagnostic, got: {diagnostics:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // shared<T> type and shared(expr) constructor tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_shared_type_in_type_position_produces_shared_kind() {
+        let module = parse_ok("function main() { const x: shared<i32> = shared(0); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            let type_ann = decl.type_ann.as_ref().expect("expected type annotation");
+            match &type_ann.kind {
+                TypeKind::Shared(inner) => {
+                    assert!(
+                        matches!(&inner.kind, TypeKind::Named(ident) if ident.name == "i32"),
+                        "expected inner type i32, got: {:?}",
+                        inner.kind
+                    );
+                }
+                other => panic!("expected TypeKind::Shared, got: {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_shared_constructor_in_expr_position_produces_shared_expr() {
+        let module = parse_ok("function main() { const x: shared<i32> = shared(0); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::Shared(inner) => {
+                    assert!(
+                        matches!(&inner.kind, ExprKind::IntLit(0)),
+                        "expected IntLit(0), got: {:?}",
+                        inner.kind
+                    );
+                }
+                other => panic!("expected ExprKind::Shared, got: {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_shared_without_type_param_produces_diagnostic() {
+        let source = "function main() { const x: shared = shared(0); }";
+        let (_module, diagnostics) = parse_source(source);
+        assert!(
+            !diagnostics.is_empty(),
+            "expected diagnostic for shared without type parameter"
+        );
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains("shared")),
+            "expected shared-related diagnostic, got: {diagnostics:?}"
         );
     }
 }

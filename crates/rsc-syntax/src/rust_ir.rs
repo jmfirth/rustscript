@@ -366,6 +366,9 @@ pub enum RustType {
     /// The inferred type placeholder `_`.
     /// Used in turbofish positions like `.collect::<Vec<_>>()`.
     Infer,
+    /// `Arc<Mutex<T>>` — from `shared<T>`.
+    /// Keeps the inner type explicit for derive analysis and display.
+    ArcMutex(Box<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -409,6 +412,7 @@ impl std::fmt::Display for RustType {
             }
             Self::SelfType => "Self",
             Self::Infer => "_",
+            Self::ArcMutex(inner) => return write!(f, "Arc<Mutex<{inner}>>"),
         };
         f.write_str(s)
     }
@@ -909,6 +913,8 @@ pub enum RustExprKind {
     /// Inserted by Tier 2 ownership when a function takes a borrowed parameter.
     /// Rust's auto-deref means `&String` coerces to `&str` where needed.
     Borrow(Box<RustExpr>),
+    /// `Arc::new(Mutex::new(expr))` — from `shared(expr)`.
+    ArcMutexNew(Box<RustExpr>),
     /// An iterator chain: `source.iter().ops...terminal`.
     ///
     /// Produced by lowering TypeScript-style array method chains
@@ -1237,5 +1243,27 @@ mod tests {
         let expr = RustExpr::new(RustExprKind::IntLit(42), s);
 
         assert_eq!(expr.span, Some(s));
+    }
+
+    #[test]
+    fn test_rust_type_arc_mutex_display_simple() {
+        let ty = RustType::ArcMutex(Box::new(RustType::I32));
+        assert_eq!(ty.to_string(), "Arc<Mutex<i32>>");
+    }
+
+    #[test]
+    fn test_rust_type_arc_mutex_display_string() {
+        let ty = RustType::ArcMutex(Box::new(RustType::String));
+        assert_eq!(ty.to_string(), "Arc<Mutex<String>>");
+    }
+
+    #[test]
+    fn test_rust_type_arc_mutex_display_nested_generic() {
+        let inner = RustType::Generic(
+            Box::new(RustType::Named("Vec".to_owned())),
+            vec![RustType::I32],
+        );
+        let ty = RustType::ArcMutex(Box::new(inner));
+        assert_eq!(ty.to_string(), "Arc<Mutex<Vec<i32>>>");
     }
 }

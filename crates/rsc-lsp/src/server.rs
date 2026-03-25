@@ -714,6 +714,7 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             types_str.join(" & ")
         }
         TypeKind::Inferred => "(inferred)".to_owned(),
+        TypeKind::Shared(inner) => format!("shared<{}>", format_type(inner)),
     }
 }
 

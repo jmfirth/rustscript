@@ -535,7 +535,9 @@ impl UseMap {
                     uses,
                 );
             }
-            ast::ExprKind::Throw(inner) | ast::ExprKind::Await(inner) => {
+            ast::ExprKind::Throw(inner)
+            | ast::ExprKind::Await(inner)
+            | ast::ExprKind::Shared(inner) => {
                 Self::collect_expr_uses(
                     inner,
                     stmt_index,
@@ -1106,7 +1108,10 @@ fn collect_param_usage_expr(
             collect_param_usage_expr(&nc.left, param_set, is_ref_call, result);
             collect_param_usage_expr(&nc.right, param_set, is_ref_call, result);
         }
-        ast::ExprKind::Paren(inner) | ast::ExprKind::Throw(inner) | ast::ExprKind::Await(inner) => {
+        ast::ExprKind::Paren(inner)
+        | ast::ExprKind::Throw(inner)
+        | ast::ExprKind::Await(inner)
+        | ast::ExprKind::Shared(inner) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
         }
         ast::ExprKind::IntLit(_)
@@ -1215,7 +1220,9 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
             collect_idents_in_expr(&nc.left, names);
             collect_idents_in_expr(&nc.right, names);
         }
-        ast::ExprKind::Throw(inner) | ast::ExprKind::Await(inner) => {
+        ast::ExprKind::Throw(inner)
+        | ast::ExprKind::Await(inner)
+        | ast::ExprKind::Shared(inner) => {
             collect_idents_in_expr(inner, names);
         }
         ast::ExprKind::Closure(_)
