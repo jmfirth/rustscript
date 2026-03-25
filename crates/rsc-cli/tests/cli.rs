@@ -9,7 +9,7 @@ fn rsc_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rsc"))
 }
 
-// Test 1: rsc --help produces help text mentioning init, build, run, check
+// Test 1: rsc --help produces help text mentioning init, build, run, test, check
 #[test]
 fn test_cli_help_mentions_all_commands() {
     let output = rsc_bin().arg("--help").output().unwrap();
@@ -19,6 +19,7 @@ fn test_cli_help_mentions_all_commands() {
     assert!(stdout.contains("init"), "help should mention init");
     assert!(stdout.contains("build"), "help should mention build");
     assert!(stdout.contains("run"), "help should mention run");
+    assert!(stdout.contains("test"), "help should mention test");
     assert!(stdout.contains("check"), "help should mention check");
 }
 
@@ -127,6 +128,86 @@ fn test_cli_check_syntax_error_exits_one() {
         output.status.code(),
         Some(1),
         "rsc check with syntax errors should exit 1, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Test 7: rsc test is a valid command (help text parses)
+#[test]
+fn test_cli_test_help_is_valid() {
+    let output = rsc_bin().args(["test", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "rsc test --help should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("release"),
+        "test help should mention --release flag, got: {stdout}"
+    );
+}
+
+// Correctness scenario 1: rsc test on valid project compiles and runs cargo test
+#[test]
+#[ignore] // Slow: invokes binary, compiles with cargo
+fn test_cli_test_valid_project_exits_zero() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Init project first
+    rsc_bin()
+        .args(["init", "test-ok"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let output = rsc_bin()
+        .arg("test")
+        .current_dir(tmp.path().join("test-ok"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "rsc test in valid project should exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // cargo test should report test results (even if 0 tests)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("running") || stdout.contains("test result"),
+        "rsc test should show cargo test output, got stdout: {stdout}"
+    );
+}
+
+// Correctness scenario 2: rsc test on project with compilation error exits 1
+#[test]
+#[ignore] // Slow: invokes binary, creates filesystem artifacts
+fn test_cli_test_compilation_error_exits_one() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Init project first
+    rsc_bin()
+        .args(["init", "test-err"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    // Overwrite source with invalid code
+    std::fs::write(tmp.path().join("test-err/src/index.rts"), "function {").unwrap();
+
+    let output = rsc_bin()
+        .arg("test")
+        .current_dir(tmp.path().join("test-err"))
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "rsc test with compilation errors should exit 1, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

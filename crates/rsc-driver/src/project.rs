@@ -428,6 +428,66 @@ impl Project {
 
         Ok(output.status)
     }
+
+    /// Run tests: compile the project, then invoke `cargo test` in the build directory.
+    ///
+    /// Forwards `args` to `cargo test` (after `--` separator). If `release` is true,
+    /// passes `--release` to cargo.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DriverError::CompilationFailed`] if `RustScript` compilation fails,
+    /// or [`DriverError::CargoBuildFailed`] if `cargo test` fails.
+    pub fn test(&self, release: bool, args: &[String]) -> Result<std::process::ExitStatus> {
+        let (result, build_dir) = self.compile()?;
+
+        if result.has_errors {
+            render_errors(&result);
+            let error_count = result
+                .diagnostics
+                .iter()
+                .filter(|d| matches!(d.severity, Severity::Error))
+                .count();
+            return Err(DriverError::CompilationFailed(error_count));
+        }
+
+        let mut cmd = Command::new("cargo");
+        cmd.arg("test").current_dir(&build_dir);
+
+        if release {
+            cmd.arg("--release");
+        }
+
+        if !args.is_empty() {
+            cmd.arg("--");
+            cmd.args(args);
+        }
+
+        let output = cmd.output()?;
+
+        // Forward stdout (test output).
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            print!("{stdout}");
+        }
+
+        // Forward stderr: translate on failure, pass through on success.
+        if output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                // On success, forward stderr as-is (cargo progress messages).
+                eprint!("{stderr}");
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                let translated = translate_rustc_errors(&stderr);
+                eprint!("{translated}");
+            }
+        }
+
+        Ok(output.status)
+    }
 }
 
 /// Initialize a new `RustScript` project.
@@ -1068,5 +1128,46 @@ async function fetchData(): string {
             !cargo_toml.contains("[dependencies]"),
             "expected no [dependencies] section for non-async project:\n{cargo_toml}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 037: Project::test
+    // ---------------------------------------------------------------
+
+    // Test: Project::test compiles first — compilation error returns CompilationFailed
+    #[test]
+    fn test_project_test_compilation_error_returns_compilation_failed() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("test-compile-err");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"test-compile-err\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        // Write invalid source
+        fs::write(src_dir.join("index.rts"), "function {").unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let err = project.test(false, &[]).unwrap_err();
+        assert!(
+            matches!(err, DriverError::CompilationFailed(_)),
+            "expected CompilationFailed, got: {err:?}"
+        );
+    }
+
+    // Test: Project has a public test method (compile check)
+    #[test]
+    fn test_project_test_method_exists() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-exists", tmp.path()).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        // Verify the method signature compiles — this is a type-level assertion
+        let _: fn(&Project, bool, &[String]) -> Result<std::process::ExitStatus> = Project::test;
+        drop(project);
     }
 }

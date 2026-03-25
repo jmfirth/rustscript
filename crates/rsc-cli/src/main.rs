@@ -41,6 +41,15 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Run tests for the project
+    Test {
+        /// Build and run tests in release mode
+        #[arg(long)]
+        release: bool,
+        /// Additional arguments passed to `cargo test` (e.g., test name filter)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Check the project for errors without building
     Check,
 }
@@ -65,6 +74,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Init { name } => cmd_init(&name),
         Command::Build { release } => cmd_build(release),
         Command::Run { args } => cmd_run(&args),
+        Command::Test { release, args } => cmd_test(release, &args),
         Command::Check => cmd_check(),
     }
 }
@@ -110,6 +120,18 @@ fn cmd_run(args: &[String]) -> Result<i32> {
         Ok(status) => Ok(status.code().unwrap_or(EXIT_INTERNAL_ERROR)),
         Err(DriverError::CompilationFailed(_)) => Ok(EXIT_USER_ERROR),
         Err(e) => Err(e).context("run failed"),
+    }
+}
+
+/// Compile and run tests for the project.
+fn cmd_test(release: bool, args: &[String]) -> Result<i32> {
+    let project = open_project()?;
+    match project.test(release, args) {
+        Ok(status) => Ok(status.code().unwrap_or(EXIT_INTERNAL_ERROR)),
+        Err(DriverError::CompilationFailed(_) | DriverError::CargoBuildFailed) => {
+            Ok(EXIT_USER_ERROR)
+        }
+        Err(e) => Err(e).context("test failed"),
     }
 }
 
