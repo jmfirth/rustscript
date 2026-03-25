@@ -498,13 +498,26 @@ impl Project {
 ///   src/
 ///     index.rts
 ///   cargo.toml
+///   .gitignore    (if template provides one)
 /// ```
+///
+/// When `template` is `None`, creates a bare hello-world project (backward
+/// compatible with the original behavior). When a template name is provided,
+/// scaffolds the project with pre-configured dependencies and starter code.
 ///
 /// # Errors
 ///
 /// Returns [`DriverError::ProjectExists`] if `parent_dir/{name}` already exists,
+/// [`DriverError::InvalidTemplate`] if the template name is not recognized,
 /// or an I/O error if directory/file creation fails.
-pub fn init_project(name: &str, parent_dir: &Path) -> Result<PathBuf> {
+pub fn init_project(name: &str, parent_dir: &Path, template: Option<&str>) -> Result<PathBuf> {
+    // Validate the template name before creating any directories.
+    if let Some(t) = template
+        && crate::templates::get_template(t).is_none()
+    {
+        return Err(DriverError::InvalidTemplate(t.to_owned()));
+    }
+
     let project_dir = parent_dir.join(name);
 
     if project_dir.exists() {
@@ -514,13 +527,21 @@ pub fn init_project(name: &str, parent_dir: &Path) -> Result<PathBuf> {
     let src_dir = project_dir.join("src");
     fs::create_dir_all(&src_dir)?;
 
-    // Write cargo.toml (lowercase — RustScript convention)
-    let cargo_toml =
-        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-    fs::write(project_dir.join(PROJECT_MANIFEST), cargo_toml)?;
-
-    // Write src/index.rts
-    fs::write(src_dir.join("index.rts"), HELLO_WORLD_SOURCE)?;
+    if let Some(tmpl) = template.and_then(crate::templates::get_template) {
+        // Template-based initialization
+        let cargo_toml = tmpl.cargo_toml.replace("{name}", name);
+        fs::write(project_dir.join(PROJECT_MANIFEST), cargo_toml)?;
+        fs::write(src_dir.join("index.rts"), tmpl.index_rts)?;
+        if let Some(gitignore) = tmpl.gitignore {
+            fs::write(project_dir.join(".gitignore"), gitignore)?;
+        }
+    } else {
+        // Default (bare) project — backward compatible
+        let cargo_toml =
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+        fs::write(project_dir.join(PROJECT_MANIFEST), cargo_toml)?;
+        fs::write(src_dir.join("index.rts"), HELLO_WORLD_SOURCE)?;
+    }
 
     Ok(project_dir)
 }
@@ -559,7 +580,7 @@ mod tests {
     #[test]
     fn test_init_project_creates_directory_structure() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         assert!(project_dir.join("src").is_dir());
         assert!(project_dir.join("src/index.rts").is_file());
@@ -570,7 +591,7 @@ mod tests {
     #[test]
     fn test_init_project_cargo_toml_has_correct_name() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let content = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
         assert!(
@@ -587,7 +608,7 @@ mod tests {
     #[test]
     fn test_init_project_index_rts_has_hello_world() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let content = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
         assert!(
@@ -604,9 +625,9 @@ mod tests {
     #[test]
     fn test_init_project_existing_dir_returns_error() {
         let tmp = TempDir::new().unwrap();
-        init_project("test-app", tmp.path()).unwrap();
+        init_project("test-app", tmp.path(), None).unwrap();
 
-        let err = init_project("test-app", tmp.path()).unwrap_err();
+        let err = init_project("test-app", tmp.path(), None).unwrap_err();
         assert!(
             matches!(err, DriverError::ProjectExists(_)),
             "expected ProjectExists, got: {err:?}"
@@ -617,7 +638,7 @@ mod tests {
     #[test]
     fn test_project_open_finds_project_in_directory() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         assert_eq!(project.name, "test-app");
@@ -628,7 +649,7 @@ mod tests {
     #[test]
     fn test_project_main_source_returns_index_rts() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let main = project.main_source().unwrap();
@@ -683,7 +704,7 @@ mod tests {
     #[test]
     fn test_project_compile_produces_build_directory() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (result, build_dir) = project.compile().unwrap();
@@ -712,7 +733,7 @@ mod tests {
     #[test]
     fn test_project_compile_generates_correct_cargo_toml() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path()).unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (_, build_dir) = project.compile().unwrap();
@@ -732,7 +753,7 @@ mod tests {
     #[test]
     fn test_correctness_init_then_compile() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("hello-project", tmp.path()).unwrap();
+        let project_dir = init_project("hello-project", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (result, build_dir) = project.compile().unwrap();
@@ -761,7 +782,7 @@ mod tests {
     #[test]
     fn test_project_open_walks_up_directories() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("walkup", tmp.path()).unwrap();
+        let project_dir = init_project("walkup", tmp.path(), None).unwrap();
 
         // Open from a subdirectory
         let sub_dir = project_dir.join("src");
@@ -784,7 +805,7 @@ mod tests {
     #[test]
     fn test_compile_preserves_build_dir_target() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("preserve-test", tmp.path()).unwrap();
+        let project_dir = init_project("preserve-test", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
 
@@ -883,7 +904,7 @@ mod tests {
     #[test]
     fn test_project_compile_single_file_still_works() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("single-file", tmp.path()).unwrap();
+        let project_dir = init_project("single-file", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (result, _) = project.compile().unwrap();
@@ -936,7 +957,7 @@ mod tests {
     #[test]
     fn test_project_compile_local_imports_no_dependencies_section() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("local-only", tmp.path()).unwrap();
+        let project_dir = init_project("local-only", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (_, build_dir) = project.compile().unwrap();
@@ -1039,7 +1060,7 @@ mod tests {
     #[test]
     fn test_project_compile_cargo_toml_still_has_package_info() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("builder-test", tmp.path()).unwrap();
+        let project_dir = init_project("builder-test", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (_, build_dir) = project.compile().unwrap();
@@ -1114,7 +1135,7 @@ async function fetchData(): string {
     #[test]
     fn test_project_compile_non_async_cargo_toml_no_tokio() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("sync-app", tmp.path()).unwrap();
+        let project_dir = init_project("sync-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         let (_, build_dir) = project.compile().unwrap();
@@ -1163,11 +1184,266 @@ async function fetchData(): string {
     #[test]
     fn test_project_test_method_exists() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-exists", tmp.path()).unwrap();
+        let project_dir = init_project("test-exists", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
         // Verify the method signature compiles — this is a type-level assertion
         let _: fn(&Project, bool, &[String]) -> Result<std::process::ExitStatus> = Project::test;
         drop(project);
+    }
+
+    // ---------------------------------------------------------------
+    // Task 039: Project templates
+    // ---------------------------------------------------------------
+
+    // Test 1: Default init unchanged — produces same output as before
+    #[test]
+    fn test_init_project_default_template_unchanged() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-default", tmp.path(), None).unwrap();
+
+        assert!(project_dir.join("src/index.rts").is_file());
+        assert!(project_dir.join("cargo.toml").is_file());
+        assert!(!project_dir.join(".gitignore").exists());
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(cargo.contains("name = \"test-default\""));
+        assert!(cargo.contains("edition = \"2024\""));
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(source.contains("Hello, World!"));
+    }
+
+    // Test 2: CLI template creates cargo.toml with clap dependency
+    #[test]
+    fn test_init_project_cli_template_has_clap() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-cli", tmp.path(), Some("cli")).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("clap = { version = \"4\", features = [\"derive\"] }"),
+            "expected clap dependency in cargo.toml:\n{cargo}",
+        );
+        assert!(cargo.contains("name = \"test-cli\""));
+    }
+
+    // Test 3: Web server template creates cargo.toml with axum, tokio, serde
+    #[test]
+    fn test_init_project_web_server_template_has_deps() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-web", tmp.path(), Some("web-server")).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("axum"),
+            "expected axum in cargo.toml:\n{cargo}"
+        );
+        assert!(
+            cargo.contains("tokio"),
+            "expected tokio in cargo.toml:\n{cargo}"
+        );
+        assert!(
+            cargo.contains("serde"),
+            "expected serde in cargo.toml:\n{cargo}"
+        );
+        assert!(
+            cargo.contains("serde_json"),
+            "expected serde_json in cargo.toml:\n{cargo}"
+        );
+        assert!(cargo.contains("name = \"test-web\""));
+    }
+
+    // Test 4: WASM template creates cargo.toml with wasm-bindgen and [lib] section
+    #[test]
+    fn test_init_project_wasm_template_has_lib_and_wasm_bindgen() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-wasm", tmp.path(), Some("wasm")).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("wasm-bindgen"),
+            "expected wasm-bindgen in cargo.toml:\n{cargo}",
+        );
+        assert!(
+            cargo.contains("[lib]"),
+            "expected [lib] section in cargo.toml:\n{cargo}",
+        );
+        assert!(
+            cargo.contains("crate-type = [\"cdylib\"]"),
+            "expected cdylib crate-type in cargo.toml:\n{cargo}",
+        );
+    }
+
+    // Test 5: Invalid template returns InvalidTemplate error
+    #[test]
+    fn test_init_project_invalid_template_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let err = init_project("test-bad", tmp.path(), Some("invalid")).unwrap_err();
+        assert!(
+            matches!(err, DriverError::InvalidTemplate(ref t) if t == "invalid"),
+            "expected InvalidTemplate, got: {err:?}",
+        );
+    }
+
+    // Test 6: CLI, web-server, and wasm templates create .gitignore
+    #[test]
+    fn test_init_project_templates_create_gitignore() {
+        let tmp = TempDir::new().unwrap();
+
+        let cli_dir = init_project("t-cli", tmp.path(), Some("cli")).unwrap();
+        assert!(cli_dir.join(".gitignore").is_file());
+
+        let web_dir = init_project("t-web", tmp.path(), Some("web-server")).unwrap();
+        assert!(web_dir.join(".gitignore").is_file());
+
+        let wasm_dir = init_project("t-wasm", tmp.path(), Some("wasm")).unwrap();
+        assert!(wasm_dir.join(".gitignore").is_file());
+    }
+
+    // Test 7: Default template does not create .gitignore
+    #[test]
+    fn test_init_project_default_no_gitignore() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("t-default", tmp.path(), None).unwrap();
+        assert!(!project_dir.join(".gitignore").exists());
+    }
+
+    // Test 8: Template starter code contains expected patterns
+    #[test]
+    fn test_init_project_cli_template_starter_has_main() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("s-cli", tmp.path(), Some("cli")).unwrap();
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(
+            source.contains("function main()"),
+            "expected function main() in CLI starter:\n{source}",
+        );
+    }
+
+    // Test: Web server template starter has async main
+    #[test]
+    fn test_init_project_web_server_template_starter_has_async_main() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("s-web", tmp.path(), Some("web-server")).unwrap();
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(
+            source.contains("async function main()"),
+            "expected async function main() in web-server starter:\n{source}",
+        );
+    }
+
+    // Test: WASM template starter has greet function and main
+    #[test]
+    fn test_init_project_wasm_template_starter_has_greet() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("s-wasm", tmp.path(), Some("wasm")).unwrap();
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(
+            source.contains("function greet("),
+            "expected function greet() in WASM starter:\n{source}",
+        );
+        assert!(
+            source.contains("function main()"),
+            "expected function main() in WASM starter:\n{source}",
+        );
+    }
+
+    // Test: gitignore content contains .rsc-build
+    #[test]
+    fn test_init_project_gitignore_has_rsc_build() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("gi-cli", tmp.path(), Some("cli")).unwrap();
+
+        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.contains(".rsc-build"),
+            "expected .rsc-build in .gitignore:\n{gitignore}",
+        );
+        assert!(
+            gitignore.contains("/target"),
+            "expected /target in .gitignore:\n{gitignore}",
+        );
+    }
+
+    // Test: WASM gitignore also includes /pkg
+    #[test]
+    fn test_init_project_wasm_gitignore_has_pkg() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("gi-wasm", tmp.path(), Some("wasm")).unwrap();
+
+        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.contains("/pkg"),
+            "expected /pkg in WASM .gitignore:\n{gitignore}",
+        );
+    }
+
+    // Test: Invalid template does not create project directory
+    #[test]
+    fn test_init_project_invalid_template_no_directory_created() {
+        let tmp = TempDir::new().unwrap();
+        let _ = init_project("no-dir", tmp.path(), Some("nonexistent"));
+        assert!(!tmp.path().join("no-dir").exists());
+    }
+
+    // Correctness scenario 1: CLI template structure
+    #[test]
+    fn test_correctness_cli_template_structure() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("my-cli", tmp.path(), Some("cli")).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(cargo.contains("clap = { version = \"4\", features = [\"derive\"] }"));
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(source.contains("function main()"));
+
+        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert!(gitignore.contains(".rsc-build"));
+    }
+
+    // Correctness scenario 2: Web server template structure
+    #[test]
+    fn test_correctness_web_server_template_structure() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("my-api", tmp.path(), Some("web-server")).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        assert!(cargo.contains("axum"));
+        assert!(cargo.contains("tokio"));
+        assert!(cargo.contains("serde"));
+        assert!(cargo.contains("serde_json"));
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert!(source.contains("async function main()"));
+
+        assert!(project_dir.join(".gitignore").is_file());
+    }
+
+    // Correctness scenario 3: Default template backward compatibility
+    #[test]
+    fn test_correctness_default_template_backward_compat() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("my-app", tmp.path(), None).unwrap();
+
+        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        let expected_cargo =
+            "[package]\nname = \"my-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        assert_eq!(
+            cargo, expected_cargo,
+            "default cargo.toml should be identical to original behavior"
+        );
+
+        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        assert_eq!(
+            source, HELLO_WORLD_SOURCE,
+            "default index.rts should be identical to original hello world"
+        );
+
+        assert!(!project_dir.join(".gitignore").exists());
     }
 }

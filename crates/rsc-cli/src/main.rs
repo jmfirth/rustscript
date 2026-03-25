@@ -30,6 +30,9 @@ enum Command {
     Init {
         /// Project name (creates a directory with this name)
         name: String,
+        /// Project template: cli, web-server, wasm (default: none — bare project)
+        #[arg(long, short = 't')]
+        template: Option<String>,
     },
     /// Compile the project to a native binary
     Build {
@@ -81,7 +84,7 @@ fn main() {
 /// an exit code directly. Internal errors propagate as `anyhow::Error`.
 fn run(cli: Cli) -> Result<i32> {
     match cli.command {
-        Command::Init { name } => cmd_init(&name),
+        Command::Init { name, template } => cmd_init(&name, template.as_deref()),
         Command::Build { release } => cmd_build(release),
         Command::Run { args } => cmd_run(&args),
         Command::Test { release, args } => cmd_test(release, &args),
@@ -91,11 +94,15 @@ fn run(cli: Cli) -> Result<i32> {
 }
 
 /// Create a new `RustScript` project.
-fn cmd_init(name: &str) -> Result<i32> {
+fn cmd_init(name: &str, template: Option<&str>) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
-    match init_project(name, &cwd) {
+    match init_project(name, &cwd, template) {
         Ok(_) => {
-            println!("Created project '{name}'");
+            if let Some(t) = template {
+                println!("Created project '{name}' from template '{t}'");
+            } else {
+                println!("Created project '{name}'");
+            }
             Ok(0)
         }
         Err(DriverError::ProjectExists(path)) => {
@@ -103,6 +110,10 @@ fn cmd_init(name: &str) -> Result<i32> {
                 "error: project directory already exists: {}",
                 path.display()
             );
+            Ok(EXIT_USER_ERROR)
+        }
+        Err(DriverError::InvalidTemplate(t)) => {
+            eprintln!("error: unknown template '{t}'. Available: cli, web-server, wasm");
             Ok(EXIT_USER_ERROR)
         }
         Err(e) => Err(e).context("failed to create project"),

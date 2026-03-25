@@ -25,6 +25,10 @@ pub enum DriverError {
     #[error("project directory already exists: {0}")]
     ProjectExists(PathBuf),
 
+    /// An invalid template name was provided.
+    #[error("unknown template: {0}")]
+    InvalidTemplate(String),
+
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),
