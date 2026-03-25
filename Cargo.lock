@@ -783,6 +783,7 @@ dependencies = [
  "rsc-fmt",
  "rsc-parser",
  "rsc-syntax",
+ "serde_json",
  "thiserror",
  "tokio",
  "tower-lsp",
