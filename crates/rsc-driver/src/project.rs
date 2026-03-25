@@ -3,12 +3,14 @@
 //! Handles the on-disk project structure: locating source files, managing the
 //! `.rsc-build/` build directory, and invoking Cargo for compilation and execution.
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rsc_lower::CrateDependency;
 use rsc_syntax::diagnostic::{Severity, render_diagnostics};
-
 use rsc_syntax::rust_ir::RustModDecl;
 
 use crate::error::{DriverError, Result};
@@ -25,6 +27,98 @@ const HELLO_WORLD_SOURCE: &str = r#"function main() {
   console.log("Hello, World!");
 }
 "#;
+
+/// A dependency version specification for `Cargo.toml`.
+#[derive(Debug, Clone)]
+enum DependencySpec {
+    /// A simple version string, e.g. `"*"` or `"1"`.
+    Simple(String),
+    /// A version with additional features, e.g. `{ version = "1", features = ["full"] }`.
+    Detailed {
+        version: String,
+        features: Vec<String>,
+    },
+}
+
+/// Structured builder for generating `Cargo.toml` content.
+///
+/// Uses `BTreeMap` for deterministic alphabetical ordering of dependencies.
+struct CargoTomlBuilder {
+    name: String,
+    edition: String,
+    dependencies: BTreeMap<String, DependencySpec>,
+}
+
+impl CargoTomlBuilder {
+    /// Create a new builder with the given project name and edition.
+    fn new(name: &str, edition: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            edition: edition.to_owned(),
+            dependencies: BTreeMap::new(),
+        }
+    }
+
+    /// Add a dependency. If the dependency already exists, the existing entry
+    /// is kept (first-wins deduplication).
+    fn add_dependency(&mut self, name: &str, spec: DependencySpec) {
+        self.dependencies.entry(name.to_owned()).or_insert(spec);
+    }
+
+    /// Add tokio with the async runtime configuration.
+    fn add_tokio_runtime(&mut self) {
+        // Tokio always gets the detailed spec with version + features.
+        // Override any existing `"*"` version if tokio was also imported explicitly.
+        self.dependencies.insert(
+            "tokio".to_owned(),
+            DependencySpec::Detailed {
+                version: "1".to_owned(),
+                features: vec!["full".to_owned()],
+            },
+        );
+    }
+
+    /// Build the `Cargo.toml` content string.
+    fn build(&self) -> String {
+        let mut out = String::new();
+
+        // [package] section
+        let _ = writeln!(out, "[package]");
+        let _ = writeln!(out, "name = \"{}\"", self.name);
+        let _ = writeln!(out, "version = \"0.1.0\"");
+        let _ = writeln!(out, "edition = \"{}\"", self.edition);
+
+        // [dependencies] section (only if there are dependencies)
+        if !self.dependencies.is_empty() {
+            let _ = writeln!(out);
+            let _ = writeln!(out, "[dependencies]");
+            for (name, spec) in &self.dependencies {
+                match spec {
+                    DependencySpec::Simple(version) => {
+                        let _ = writeln!(out, "{name} = \"{version}\"");
+                    }
+                    DependencySpec::Detailed { version, features } => {
+                        let features_str = features
+                            .iter()
+                            .map(|f| format!("\"{f}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let _ = writeln!(
+                            out,
+                            "{name} = {{ version = \"{version}\", features = [{features_str}] }}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // [workspace] section to prevent Cargo from walking up
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[workspace]");
+
+        out
+    }
+}
 
 /// A `RustScript` project rooted at a directory.
 #[derive(Debug)]
@@ -141,15 +235,8 @@ impl Project {
         let src_dir = build_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
-        // Write Cargo.toml (always overwrite).
-        // The [workspace] section prevents Cargo from walking up and discovering
-        // the project root's cargo.toml as a workspace root (which would fail
-        // because that manifest has no targets).
-        let cargo_toml = format!(
-            "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
-            self.name
-        );
-        fs::write(build_dir.join("Cargo.toml"), cargo_toml)?;
+        // Collect all crate dependencies from all compiled modules
+        let mut all_crate_deps: Vec<CrateDependency> = Vec::new();
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -162,6 +249,9 @@ impl Project {
                 .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
 
             let module_result = compile_source(&module_source, module_file_name);
+
+            // Collect dependencies even from modules with errors (the imports are still valid)
+            all_crate_deps.extend(module_result.crate_dependencies.iter().cloned());
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -199,6 +289,30 @@ impl Project {
         } else {
             compile_source_with_mods(&source, file_name, mod_decls)
         };
+
+        // Collect main file dependencies
+        all_crate_deps.extend(result.crate_dependencies.iter().cloned());
+
+        // Build Cargo.toml with collected dependencies
+        let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
+
+        // Add tokio if async runtime is needed
+        if result.needs_async_runtime {
+            cargo_builder.add_tokio_runtime();
+        }
+
+        // Add all external crate dependencies (deduplicated by BTreeMap)
+        for dep in &all_crate_deps {
+            cargo_builder.add_dependency(&dep.name, DependencySpec::Simple("*".to_owned()));
+        }
+
+        // If tokio was also imported explicitly, the runtime spec takes priority
+        // (add_tokio_runtime uses insert which overwrites)
+        if result.needs_async_runtime {
+            cargo_builder.add_tokio_runtime();
+        }
+
+        fs::write(build_dir.join("Cargo.toml"), cargo_builder.build())?;
 
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
@@ -689,6 +803,170 @@ mod tests {
             !result.has_errors,
             "expected no errors for single-file project, got: {:?}",
             result.diagnostics
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 031: Crate consumption — driver / CargoTomlBuilder tests
+    // ---------------------------------------------------------------
+
+    // Test 9: Generated Cargo.toml contains [dependencies] with crate entries
+    #[test]
+    fn test_project_compile_external_crate_cargo_toml_has_dependency() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("crate-dep");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"crate-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src_dir.join("index.rts"),
+            "import { get } from \"reqwest\";\nfunction main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[dependencies]"),
+            "expected [dependencies] section in Cargo.toml:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("reqwest = \"*\""),
+            "expected reqwest = \"*\" in Cargo.toml:\n{cargo_toml}"
+        );
+    }
+
+    // Test 10: Project with only local imports has no [dependencies] section
+    #[test]
+    fn test_project_compile_local_imports_no_dependencies_section() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("local-only", tmp.path()).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            !cargo_toml.contains("[dependencies]"),
+            "expected no [dependencies] section for local-only project:\n{cargo_toml}"
+        );
+    }
+
+    // Test 11: Two modules importing from same crate produce one dependency
+    #[test]
+    fn test_project_compile_multi_file_dedup_dependencies() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("multi-dep");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"multi-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        // Main file imports from reqwest
+        fs::write(
+            src_dir.join("index.rts"),
+            "import { get } from \"reqwest\";\nimport { helper } from \"./utils\";\nfunction main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        // Module also imports from reqwest
+        fs::write(
+            src_dir.join("utils.rts"),
+            "import { Client } from \"reqwest\";\nexport function helper(): void { return; }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        // reqwest should appear exactly once
+        let reqwest_count = cargo_toml.matches("reqwest").count();
+        assert_eq!(
+            reqwest_count, 1,
+            "expected reqwest to appear once in Cargo.toml, got {reqwest_count}:\n{cargo_toml}"
+        );
+    }
+
+    // Test 12: Dependencies are sorted alphabetically in output
+    #[test]
+    fn test_cargo_toml_builder_deps_sorted_alphabetically() {
+        let mut builder = CargoTomlBuilder::new("test-app", "2024");
+        builder.add_dependency("serde", DependencySpec::Simple("*".to_owned()));
+        builder.add_dependency("axum", DependencySpec::Simple("*".to_owned()));
+        builder.add_dependency("reqwest", DependencySpec::Simple("*".to_owned()));
+        let output = builder.build();
+
+        let axum_pos = output.find("axum").unwrap();
+        let reqwest_pos = output.find("reqwest").unwrap();
+        let serde_pos = output.find("serde").unwrap();
+        assert!(
+            axum_pos < reqwest_pos && reqwest_pos < serde_pos,
+            "dependencies should be sorted alphabetically:\n{output}"
+        );
+    }
+
+    // Test: CargoTomlBuilder with detailed dependency (tokio with features)
+    #[test]
+    fn test_cargo_toml_builder_detailed_dependency() {
+        let mut builder = CargoTomlBuilder::new("test-app", "2024");
+        builder.add_tokio_runtime();
+        let output = builder.build();
+
+        assert!(
+            output.contains("tokio = { version = \"1\", features = [\"full\"] }"),
+            "expected tokio with features in Cargo.toml:\n{output}"
+        );
+    }
+
+    // Test: CargoTomlBuilder without dependencies omits [dependencies] section
+    #[test]
+    fn test_cargo_toml_builder_no_deps_no_section() {
+        let builder = CargoTomlBuilder::new("empty-app", "2024");
+        let output = builder.build();
+
+        assert!(
+            !output.contains("[dependencies]"),
+            "expected no [dependencies] section:\n{output}"
+        );
+        assert!(
+            output.contains("[workspace]"),
+            "expected [workspace] section:\n{output}"
+        );
+    }
+
+    // Test: Existing Cargo.toml test still works with CargoTomlBuilder
+    #[test]
+    fn test_project_compile_cargo_toml_still_has_package_info() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("builder-test", tmp.path()).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("name = \"builder-test\""),
+            "expected name in Cargo.toml:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("edition = \"2024\""),
+            "expected edition in Cargo.toml:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("[workspace]"),
+            "expected [workspace] section in Cargo.toml:\n{cargo_toml}"
         );
     }
 }

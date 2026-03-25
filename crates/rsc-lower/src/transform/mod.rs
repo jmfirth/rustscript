@@ -8,6 +8,8 @@ mod class_lower;
 mod match_lower;
 mod use_collector;
 
+use std::collections::HashSet;
+
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
@@ -19,6 +21,9 @@ use rsc_syntax::rust_ir::{
     RustUseDecl, RustWhileStmt,
 };
 
+use rsc_syntax::span::Span;
+
+use crate::CrateDependency;
 use crate::builtins::BuiltinRegistry;
 use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
@@ -66,8 +71,12 @@ impl Transform {
     /// Lower a complete `RustScript` module to a Rust file.
     ///
     /// Performs a pre-pass to register all type definitions, then lowers
-    /// each item.
-    pub fn lower_module(&mut self, module: &ast::Module) -> (RustFile, Vec<Diagnostic>) {
+    /// each item. Returns the Rust IR, diagnostics, and any external crate
+    /// dependencies discovered from import statements.
+    pub fn lower_module(
+        &mut self,
+        module: &ast::Module,
+    ) -> (RustFile, Vec<Diagnostic>, HashSet<CrateDependency>) {
         let mut ctx = LoweringContext::new();
 
         // Pre-pass: register all type definitions so they can be resolved
@@ -93,6 +102,7 @@ impl Transform {
 
         let mut items: Vec<RustItem> = Vec::new();
         let mut import_uses: Vec<RustUseDecl> = Vec::new();
+        let mut crate_deps: HashSet<CrateDependency> = HashSet::new();
 
         for item in &module.items {
             let exported = item.exported;
@@ -122,24 +132,24 @@ impl Transform {
                     items.extend(lowered);
                 }
                 ast::ItemKind::Import(import) => {
-                    let module_path = resolve_import_path(&import.source.value);
-                    for name in &import.names {
-                        import_uses.push(RustUseDecl {
-                            path: format!("{}::{}", module_path, name.name),
-                            public: false,
-                            span: Some(import.span),
-                        });
-                    }
+                    classify_import(
+                        &import.source.value,
+                        &import.names,
+                        false,
+                        import.span,
+                        &mut import_uses,
+                        &mut crate_deps,
+                    );
                 }
                 ast::ItemKind::ReExport(reexport) => {
-                    let module_path = resolve_import_path(&reexport.source.value);
-                    for name in &reexport.names {
-                        import_uses.push(RustUseDecl {
-                            path: format!("{}::{}", module_path, name.name),
-                            public: true,
-                            span: Some(reexport.span),
-                        });
-                    }
+                    classify_import(
+                        &reexport.source.value,
+                        &reexport.names,
+                        true,
+                        reexport.span,
+                        &mut import_uses,
+                        &mut crate_deps,
+                    );
                 }
             }
         }
@@ -158,6 +168,7 @@ impl Transform {
                 items,
             },
             diagnostics,
+            crate_deps,
         )
     }
 
@@ -1871,13 +1882,74 @@ impl Transform {
     }
 }
 
-/// Resolve a `RustScript` import path to a Rust module path.
+/// Resolve a `RustScript` local import path to a Rust module path.
 ///
 /// Maps `"./models"` to `crate::models`, `"./utils/helpers"` to `crate::utils::helpers`.
+/// Only used for local imports (`"./"` or `"../"`).
 fn resolve_import_path(source: &str) -> String {
     let stripped = source.strip_prefix("./").unwrap_or(source);
     let module_path = stripped.replace('/', "::");
     format!("crate::{module_path}")
+}
+
+/// Classify an import source path and produce appropriate `use` declarations
+/// and crate dependencies.
+///
+/// Import paths fall into four categories:
+/// 1. **Local** (`"./"` or `"../"`) — existing module imports → `use crate::module::Name;`
+/// 2. **Builtin** (`"std/concurrent"`) — compiler-handled, no `use` or dependency
+/// 3. **Standard library** (`"std/..."`) — `use std::...::Name;`, no Cargo.toml entry
+/// 4. **External crate** (everything else) — `use crate_name::Name;` + dependency
+fn classify_import(
+    source: &str,
+    names: &[ast::Ident],
+    public: bool,
+    span: Span,
+    import_uses: &mut Vec<RustUseDecl>,
+    crate_deps: &mut HashSet<CrateDependency>,
+) {
+    if source.starts_with("./") || source.starts_with("../") {
+        // Local module import (existing behavior)
+        let module_path = resolve_import_path(source);
+        for name in names {
+            import_uses.push(RustUseDecl {
+                path: format!("{}::{}", module_path, name.name),
+                public,
+                span: Some(span),
+            });
+        }
+    } else if source == "std/concurrent" {
+        // Builtin module — no use declaration, no dependency (Task 030)
+    } else if source.starts_with("std/") {
+        // Standard library import
+        let rust_path = source.replace('/', "::");
+        for name in names {
+            import_uses.push(RustUseDecl {
+                path: format!("{}::{}", rust_path, name.name),
+                public,
+                span: Some(span),
+            });
+        }
+    } else {
+        // External crate import
+        let parts: Vec<&str> = source.split('/').collect();
+        let crate_name = parts[0].replace('-', "_");
+        let rust_path = parts
+            .iter()
+            .map(|p| p.replace('-', "_"))
+            .collect::<Vec<_>>()
+            .join("::");
+
+        for name in names {
+            import_uses.push(RustUseDecl {
+                path: format!("{}::{}", rust_path, name.name),
+                public,
+                span: Some(span),
+            });
+        }
+
+        crate_deps.insert(CrateDependency { name: crate_name });
+    }
 }
 
 /// Map a `RustScript` binary operator to a Rust binary operator.
@@ -2094,7 +2166,9 @@ mod tests {
             parse_diags.is_empty(),
             "unexpected parse diagnostics: {parse_diags:?}"
         );
-        let (ir, lower_diags) = crate::lower(&module);
+        let lower_result = crate::lower(&module);
+        let ir = lower_result.ir;
+        let lower_diags = lower_result.diagnostics;
         assert!(
             lower_diags.is_empty(),
             "unexpected lowering diagnostics: {lower_diags:?}"
@@ -2110,7 +2184,9 @@ mod tests {
             parse_diags.is_empty(),
             "unexpected parse diagnostics: {parse_diags:?}"
         );
-        let (ir, lower_diags) = crate::lower(&module);
+        let lower_result = crate::lower(&module);
+        let ir = lower_result.ir;
+        let lower_diags = lower_result.diagnostics;
         assert!(
             lower_diags.is_empty(),
             "unexpected lowering diagnostics: {lower_diags:?}"
@@ -2195,7 +2271,7 @@ mod tests {
         let f = make_fn("main", vec![], None, vec![]);
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         assert_eq!(file.items.len(), 1);
@@ -2223,7 +2299,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -2257,7 +2333,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2299,7 +2375,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2341,7 +2417,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2375,7 +2451,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2414,7 +2490,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2461,7 +2537,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2499,7 +2575,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2527,7 +2603,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2561,7 +2637,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (_, diags) = transform.lower_module(&module);
+        let (_, diags, _) = transform.lower_module(&module);
 
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("unknown type"));
@@ -2650,7 +2726,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -2724,7 +2800,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2796,7 +2872,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2894,7 +2970,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2953,7 +3029,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2994,7 +3070,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -3026,7 +3102,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -3067,7 +3143,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -3107,7 +3183,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -3144,7 +3220,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -3200,7 +3276,7 @@ mod tests {
             span: span(0, 50),
         };
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         assert_eq!(file.items.len(), 1);
         let RustItem::Struct(s) = &file.items[0] else {
@@ -3287,7 +3363,7 @@ mod tests {
             span: span(0, 100),
         };
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         // The function is the second item
         let RustItem::Function(func) = &file.items[1] else {
@@ -3331,7 +3407,7 @@ mod tests {
         ];
         let module = make_module(vec![fn_item(make_fn("main", vec![], None, body))]);
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected Function item");
         };
@@ -3386,7 +3462,7 @@ mod tests {
         };
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Function(func) = &file.items[0] else {
@@ -3449,7 +3525,7 @@ mod tests {
         };
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Function(func) = &file.items[0] else {
@@ -3489,7 +3565,7 @@ mod tests {
             span: span(0, 30),
         }]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Struct(s) = &file.items[0] else {
@@ -3531,7 +3607,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -3577,7 +3653,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -3626,7 +3702,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -3678,7 +3754,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -3720,7 +3796,7 @@ mod tests {
         };
 
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
         assert_eq!(file.items.len(), 1);
         match &file.items[0] {
             RustItem::Enum(e) => {
@@ -3788,7 +3864,7 @@ mod tests {
         };
 
         let mut transform = Transform::new();
-        let (file, _) = transform.lower_module(&module);
+        let (file, _, _) = transform.lower_module(&module);
         match &file.items[0] {
             RustItem::Enum(e) => {
                 assert_eq!(e.name, "Shape");
@@ -3831,7 +3907,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3884,7 +3960,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3920,7 +3996,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3960,7 +4036,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -4015,7 +4091,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
 
         assert!(!file.uses.is_empty(), "expected use declarations");
         assert!(
@@ -4063,7 +4139,7 @@ mod tests {
         })]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4094,7 +4170,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4139,7 +4215,7 @@ mod tests {
         })]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4186,7 +4262,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4227,7 +4303,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4267,7 +4343,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new();
-        let (file, _diags) = transform.lower_module(&module);
+        let (file, _diags, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4316,7 +4392,7 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let (file, _) = crate::lower(&module);
+        let file = crate::lower(&module).ir;
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4361,7 +4437,7 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let (file, _) = crate::lower(&module);
+        let file = crate::lower(&module).ir;
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4411,7 +4487,7 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(f)]);
-        let (file, _) = crate::lower(&module);
+        let file = crate::lower(&module).ir;
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -4496,7 +4572,7 @@ mod tests {
         };
 
         let module = make_module(vec![fn_item(inner_fn), fn_item(outer_fn)]);
-        let (file, _) = crate::lower(&module);
+        let file = crate::lower(&module).ir;
 
         // Check outer function
         let func = match &file.items[1] {
@@ -4633,7 +4709,7 @@ mod tests {
         };
 
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert_eq!(file.items.len(), 1);
         match &file.items[0] {
@@ -4677,7 +4753,7 @@ mod tests {
         };
 
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         match &file.items[0] {
             RustItem::Trait(t) => {
@@ -4785,7 +4861,7 @@ mod tests {
         };
 
         let mut transform = Transform::new();
-        let (file, diags) = transform.lower_module(&module);
+        let (file, diags, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
         // The function should have a generated type parameter T with bounds
@@ -4868,7 +4944,7 @@ mod tests {
 function main() {}"#;
         let file_id = rsc_syntax::source::FileId(0);
         let (module, _) = rsc_parser::parse(source, file_id);
-        let (ir, _) = crate::lower(&module);
+        let ir = crate::lower(&module).ir;
         let use_paths: Vec<&str> = ir.uses.iter().map(|u| u.path.as_str()).collect();
         assert!(
             use_paths.contains(&"crate::models::User"),
@@ -4882,7 +4958,7 @@ function main() {}"#;
         let source = "export function greet(): void { return; }";
         let file_id = rsc_syntax::source::FileId(0);
         let (module, _) = rsc_parser::parse(source, file_id);
-        let (ir, _) = crate::lower(&module);
+        let ir = crate::lower(&module).ir;
         assert_eq!(ir.items.len(), 1);
         match &ir.items[0] {
             RustItem::Function(f) => {
@@ -4899,7 +4975,7 @@ function main() {}"#;
         let source = "function helper(): i32 { return 42; }";
         let file_id = rsc_syntax::source::FileId(0);
         let (module, _) = rsc_parser::parse(source, file_id);
-        let (ir, _) = crate::lower(&module);
+        let ir = crate::lower(&module).ir;
         assert_eq!(ir.items.len(), 1);
         match &ir.items[0] {
             RustItem::Function(f) => {
@@ -4915,7 +4991,7 @@ function main() {}"#;
         let source = "export { User } from \"./models\";";
         let file_id = rsc_syntax::source::FileId(0);
         let (module, _) = rsc_parser::parse(source, file_id);
-        let (ir, _) = crate::lower(&module);
+        let ir = crate::lower(&module).ir;
         let pub_uses: Vec<&RustUseDecl> = ir.uses.iter().filter(|u| u.public).collect();
         assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
         assert_eq!(pub_uses[0].path, "crate::models::User");
@@ -4927,7 +5003,7 @@ function main() {}"#;
         let source = "export type User = { name: string, age: u32 }";
         let file_id = rsc_syntax::source::FileId(0);
         let (module, _) = rsc_parser::parse(source, file_id);
-        let (ir, _) = crate::lower(&module);
+        let ir = crate::lower(&module).ir;
         match &ir.items[0] {
             RustItem::Struct(s) => {
                 assert!(s.public, "exported type should be public");
@@ -5193,5 +5269,163 @@ class Foo {
             },
             other => panic!("expected Function, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 031: Crate consumption — external dependency import mapping
+    // ---------------------------------------------------------------
+
+    // Test 1: Local import unchanged — "./module" → use crate::module::X
+    #[test]
+    fn test_lower_local_import_unchanged() {
+        let source = r#"import { User } from "./models";
+function main() {}"#;
+        let ir = crate::lower(&parse_module(source)).ir;
+        let use_paths: Vec<&str> = ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"crate::models::User"),
+            "expected use crate::models::User, got: {use_paths:?}"
+        );
+    }
+
+    // Test 2: Std import — "std/collections" → use std::collections::HashMap, no dependency
+    #[test]
+    fn test_lower_std_import_produces_std_use_path() {
+        let source = r#"import { HashMap } from "std/collections";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"std::collections::HashMap"),
+            "expected use std::collections::HashMap, got: {use_paths:?}"
+        );
+        assert!(
+            result.crate_dependencies.is_empty(),
+            "std imports should not produce crate dependencies, got: {:?}",
+            result.crate_dependencies
+        );
+    }
+
+    // Test 3: External crate import — "reqwest" → use reqwest::get + dependency
+    #[test]
+    fn test_lower_external_crate_import_produces_use_and_dependency() {
+        let source = r#"import { get } from "reqwest";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"reqwest::get"),
+            "expected use reqwest::get, got: {use_paths:?}"
+        );
+        assert_eq!(result.crate_dependencies.len(), 1);
+        assert_eq!(result.crate_dependencies[0].name, "reqwest");
+    }
+
+    // Test 4: Nested crate import — "tokio/sync" → use tokio::sync::channel
+    #[test]
+    fn test_lower_nested_crate_import() {
+        let source = r#"import { channel } from "tokio/sync";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"tokio::sync::channel"),
+            "expected use tokio::sync::channel, got: {use_paths:?}"
+        );
+        assert_eq!(result.crate_dependencies.len(), 1);
+        assert_eq!(result.crate_dependencies[0].name, "tokio");
+    }
+
+    // Test 5: Multiple imports from same crate → one dependency entry
+    #[test]
+    fn test_lower_multiple_imports_same_crate_one_dependency() {
+        let source = r#"import { Serialize } from "serde";
+import { Deserialize } from "serde";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"serde::Serialize"),
+            "expected use serde::Serialize, got: {use_paths:?}"
+        );
+        assert!(
+            use_paths.contains(&"serde::Deserialize"),
+            "expected use serde::Deserialize, got: {use_paths:?}"
+        );
+        assert_eq!(
+            result.crate_dependencies.len(),
+            1,
+            "expected one dependency for two imports from serde, got: {:?}",
+            result.crate_dependencies
+        );
+    }
+
+    // Test 6: Multiple different crates → multiple dependency entries
+    #[test]
+    fn test_lower_multiple_crates_multiple_dependencies() {
+        let source = r#"import { get } from "reqwest";
+import { Serialize } from "serde";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        assert_eq!(result.crate_dependencies.len(), 2);
+        let dep_names: Vec<&str> = result
+            .crate_dependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert!(dep_names.contains(&"reqwest"));
+        assert!(dep_names.contains(&"serde"));
+    }
+
+    // Test 7: Re-export from external crate → pub use + dependency
+    #[test]
+    fn test_lower_re_export_from_external_crate() {
+        let source = r#"export { Value } from "serde_json";"#;
+        let result = crate::lower(&parse_module(source));
+        let pub_uses: Vec<&RustUseDecl> = result.ir.uses.iter().filter(|u| u.public).collect();
+        assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
+        assert_eq!(pub_uses[0].path, "serde_json::Value");
+        assert_eq!(result.crate_dependencies.len(), 1);
+        assert_eq!(result.crate_dependencies[0].name, "serde_json");
+    }
+
+    // Test 8: Crate name normalization — hyphens to underscores
+    #[test]
+    fn test_lower_crate_name_normalization_hyphen_to_underscore() {
+        let source = r#"import { Value } from "serde-json";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            use_paths.contains(&"serde_json::Value"),
+            "expected use serde_json::Value, got: {use_paths:?}"
+        );
+        assert_eq!(result.crate_dependencies.len(), 1);
+        assert_eq!(result.crate_dependencies[0].name, "serde_json");
+    }
+
+    // Test 13: std/concurrent builtin — no use declaration, no dependency
+    #[test]
+    fn test_lower_std_concurrent_builtin_no_use_no_dependency() {
+        let source = r#"import { spawn } from "std/concurrent";
+function main() {}"#;
+        let result = crate::lower(&parse_module(source));
+        let use_paths: Vec<&str> = result.ir.uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            !use_paths.iter().any(|p| p.contains("concurrent")),
+            "std/concurrent should not produce a use declaration, got: {use_paths:?}"
+        );
+        assert!(
+            result.crate_dependencies.is_empty(),
+            "std/concurrent should not produce a dependency, got: {:?}",
+            result.crate_dependencies
+        );
+    }
+
+    // Helper for Task 031 tests
+    fn parse_module(source: &str) -> rsc_syntax::ast::Module {
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        module
     }
 }
