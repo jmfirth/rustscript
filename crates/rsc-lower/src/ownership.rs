@@ -314,6 +314,12 @@ pub(crate) fn find_reassigned_variables(body: &ast::Block) -> HashSet<String> {
 
 /// Check whether a Rust type implements `Copy`.
 ///
+/// **Tier 1 only.** Currently covers primitive numeric types, `bool`, and `()`.
+/// Tier 2 ownership inference (Phase 4) will expand this to handle:
+/// - User-defined types that derive `Copy`
+/// - `Option<T>` where `T: Copy`
+/// - Named types that happen to be `Copy` (e.g., simple enums)
+///
 /// Type parameters (`TypeParam`) are conservatively assumed non-Copy.
 /// Generic types are also assumed non-Copy.
 fn is_copy_type(ty: &RustType) -> bool {

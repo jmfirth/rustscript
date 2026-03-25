@@ -58,9 +58,9 @@ pub(crate) type CollectionMethodLowering =
 ///
 /// Maps `(object_name, method_name)` pairs to their lowering functions.
 /// Uses a nested `HashMap` to avoid allocating on every lookup.
-/// Phase 0 registers `console.log` -> `println!`.
-/// Phase 2 adds string method mappings (e.g., `.toUpperCase()` -> `.to_uppercase()`)
-/// and collection method mappings (e.g., `.map()` -> `.iter().map().collect()`).
+/// Registers `console.log` -> `println!`, string method mappings
+/// (e.g., `.toUpperCase()` -> `.to_uppercase()`), and collection method
+/// mappings (e.g., `.map()` -> `.iter().map().collect()`).
 pub(crate) struct BuiltinRegistry {
     methods: HashMap<String, HashMap<String, BuiltinEntry>>,
     string_methods: HashMap<String, StringMethodLowering>,
@@ -157,10 +157,10 @@ impl BuiltinRegistry {
 
 /// Register default builtins.
 fn register_defaults(registry: &mut BuiltinRegistry) {
-    // Phase 0: console.log
+    // console.log -> println!
     registry.register_method("console", "log", lower_console_log, true);
 
-    // Phase 2: string methods
+    // String methods
     registry.register_string_method("toUpperCase", lower_to_upper_case);
     registry.register_string_method("toLowerCase", lower_to_lower_case);
     registry.register_string_method("startsWith", lower_starts_with);

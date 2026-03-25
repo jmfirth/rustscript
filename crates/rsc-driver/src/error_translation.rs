@@ -47,6 +47,7 @@ struct TranslationPatterns {
     file_reference: Regex,
 }
 
+// SAFETY: All regex literals below are compile-time constants; these never fail.
 static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPatterns {
     vec_type: Regex::new(r"\bVec<").expect("valid regex"),
     hashmap_type: Regex::new(r"\bHashMap<").expect("valid regex"),

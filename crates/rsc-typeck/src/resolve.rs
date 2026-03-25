@@ -1,8 +1,7 @@
 //! Type name resolution and literal type inference.
 //!
 //! Maps `RustScript` type names to [`Type`] values and infers types from
-//! literal expressions. This module was extracted from `rsc-lower/src/types.rs`
-//! during Phase 1.
+//! literal expressions. Originally extracted from `rsc-lower/src/types.rs`.
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
@@ -38,7 +37,7 @@ pub fn resolve_type_name(name: &str) -> Option<Type> {
 
 /// Resolve a union type annotation (`T | null`) to `Option<T>`.
 ///
-/// Only `T | null` unions are supported in Phase 1. The resolver identifies
+/// Only `T | null` unions are currently supported. The resolver identifies
 /// which member is `null` and wraps the other member in `Type::Option`.
 /// Multi-member non-null unions are not supported and resolve to the first
 /// non-null member.

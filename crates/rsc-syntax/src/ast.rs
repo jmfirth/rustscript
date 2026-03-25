@@ -1,8 +1,9 @@
 //! `RustScript` AST type definitions.
 //!
-//! Covers the full language surface through Phase 2: functions, types, enums,
+//! Covers the full language surface through Phase 3: functions, types, enums,
 //! interfaces, classes, async/await, closures, template literals, imports/exports,
-//! try/catch, switch/match, optional types, and array/string method calls.
+//! try/catch, switch/match, optional types, array/string method calls, and all
+//! syntax supported by the formatter and LSP.
 //!
 //! The parser produces this AST from `.rts` source. The lowering pass consumes
 //! it and produces Rust IR. Each node carries a [`Span`] for diagnostic reporting.
@@ -25,8 +26,8 @@ pub struct Module {
 /// A top-level item in a `RustScript` module.
 ///
 /// Wraps an [`ItemKind`] with metadata common to all items (export status,
-/// source span). Phase 0 supports only function declarations; Phase 1 will
-/// add type definitions, enums, interfaces, classes, and imports.
+/// source span). Supports function declarations, type definitions, enums,
+/// interfaces, classes, imports, and re-exports.
 #[derive(Debug, Clone)]
 pub struct Item {
     /// The kind of item.
@@ -40,8 +41,8 @@ pub struct Item {
 
 /// The kinds of top-level items in a `RustScript` module.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds type definitions,
-/// enum definitions, interface definitions, imports, and re-exports.
+/// Supports function declarations, type definitions, enum definitions,
+/// interface definitions, class definitions, imports, and re-exports.
 #[derive(Debug, Clone)]
 pub enum ItemKind {
     /// A function declaration (`function name(...) { ... }`).
@@ -380,7 +381,7 @@ pub struct TypeAnnotation {
 /// `Named` covers primitive types (`i32`, `i64`, `f64`, `bool`, `string`) and
 /// user-defined types. `Void` represents the absence of a return value.
 /// `Generic` represents parameterized types like `Array<string>`.
-/// `Union` represents `T | null` syntax (only `T | null` supported in Phase 1).
+/// `Union` represents `T | null` syntax (only `T | null` is currently supported).
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     /// A named type (e.g., `i32`, `bool`, `string`, or a user-defined name).
@@ -390,7 +391,7 @@ pub enum TypeKind {
     /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
     /// The `Ident` is the base type name; the `Vec` is the type arguments.
     Generic(Ident, Vec<TypeAnnotation>),
-    /// Union type: `T | null`. Only `T | null` is supported in Phase 1.
+    /// Union type: `T | null`. Only `T | null` is currently supported.
     /// Lowers to `Option<T>` in Rust.
     Union(Vec<TypeAnnotation>),
     /// Function type: `(i32, i32) => i32`.
@@ -659,7 +660,7 @@ pub struct Expr {
     pub span: Span,
 }
 
-/// The kinds of expressions in Phase 0 `RustScript`.
+/// The kinds of expressions in `RustScript`.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     /// An integer literal (e.g., `42`).
@@ -740,7 +741,7 @@ pub struct BinaryExpr {
 
 /// Binary operators in `RustScript`.
 ///
-/// Arithmetic, comparison, and logical operators available in Phase 0.
+/// Arithmetic, comparison, and logical operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     /// Addition (`+`).
@@ -836,11 +837,11 @@ pub struct MethodCallExpr {
 
 /// An assignment expression.
 ///
-/// Corresponds to `target = value`. Only simple identifier targets are
-/// supported in Phase 0.
+/// Corresponds to `target = value`. Supports simple identifier targets,
+/// field access targets, and indexed targets.
 #[derive(Debug, Clone)]
 pub struct AssignExpr {
-    /// The assignment target (an identifier in Phase 0).
+    /// The assignment target.
     pub target: Ident,
     /// The value being assigned.
     pub value: Box<Expr>,

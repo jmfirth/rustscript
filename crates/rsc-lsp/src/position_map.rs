@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use rsc_syntax::source::compute_line_starts;
 use rsc_syntax::span::Span;
 use tower_lsp::lsp_types::{Position, Range, Url};
 
@@ -147,19 +148,6 @@ impl PositionMap {
     pub fn rs_source(&self) -> &str {
         &self.source_generated
     }
-}
-
-/// Compute the byte offset of each line start in a source string.
-fn compute_line_starts(source: &str) -> Vec<u32> {
-    let mut starts = vec![0u32];
-    for (i, c) in source.char_indices() {
-        if c == '\n' {
-            #[allow(clippy::cast_possible_truncation)]
-            // Source files larger than 4 GiB are not supported.
-            starts.push((i + 1) as u32);
-        }
-    }
-    starts
 }
 
 /// Find the 0-based line number for a byte offset given pre-computed line starts.

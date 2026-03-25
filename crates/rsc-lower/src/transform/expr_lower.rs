@@ -312,7 +312,7 @@ impl Transform {
                     )
                 } else {
                     // General field assignment: lower the value only.
-                    // Non-`this` field assignments are not yet supported in Phase 1.
+                    // Non-`this` field assignments lower to simple assignment.
                     let value = self.lower_expr(&fa.value, ctx, use_map, stmt_index);
                     RustExpr::new(
                         RustExprKind::Assign {

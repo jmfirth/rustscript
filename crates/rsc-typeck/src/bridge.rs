@@ -1,9 +1,7 @@
 //! Bridging between the typeck [`Type`] and the IR [`RustType`].
 //!
 //! Converts the canonical type representation to the Rust IR type used
-//! by the lowering pass and emitter. This bridge exists because the IR
-//! predates the full type system and will be extended as Phase 1 tasks
-//! add new IR node types.
+//! by the lowering pass and emitter.
 
 use rsc_syntax::rust_ir::RustType;
 
@@ -11,8 +9,6 @@ use crate::types::{PrimitiveType, Type};
 
 /// Convert a typeck [`Type`] to a [`RustType`] for the IR.
 ///
-/// This bridges the new type system with the existing Phase 0 IR.
-/// Phase 1 tasks that add new IR node types will extend `RustType` as needed.
 /// Types that don't yet have IR representations produce `RustType::Unit` as
 /// a placeholder.
 #[must_use]
