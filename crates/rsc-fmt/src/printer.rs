@@ -8,11 +8,11 @@ use rsc_syntax::ast::{
     ArrayDestructureStmt, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef, ClassMember,
     ClosureBody, ClosureExpr, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl,
-    IndexExpr, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
-    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt,
+    IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr,
+    Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
+    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
+    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
+    UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -143,6 +143,7 @@ impl Printer {
             ItemKind::Import(imp) => self.print_import(imp),
             ItemKind::ReExport(re) => self.print_re_export(re),
             ItemKind::Class(c) => self.print_class_def(c),
+            ItemKind::RustBlock(rb) => self.print_rust_block(rb),
         }
     }
 
@@ -483,6 +484,22 @@ impl Printer {
         self.write("}");
     }
 
+    /// Print a `rust { ... }` block, preserving the raw contents.
+    fn print_rust_block(&mut self, rb: &InlineRustBlock) {
+        self.writeln("rust {");
+        self.indent();
+        for line in rb.code.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                self.newline();
+            } else {
+                self.writeln(trimmed);
+            }
+        }
+        self.dedent();
+        self.writeln("}");
+    }
+
     /// Print a statement.
     fn print_stmt(&mut self, stmt: &rsc_syntax::ast::Stmt) {
         use rsc_syntax::ast::Stmt;
@@ -502,6 +519,7 @@ impl Printer {
             Stmt::ArrayDestructure(a) => self.print_array_destructure_stmt(a),
             Stmt::Break(_) => self.writeln("break;"),
             Stmt::Continue(_) => self.writeln("continue;"),
+            Stmt::RustBlock(rb) => self.print_rust_block(rb),
         }
     }
 

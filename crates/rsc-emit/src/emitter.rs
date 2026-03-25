@@ -153,6 +153,7 @@ impl Emitter {
             RustItem::Trait(t) => self.emit_trait(t),
             RustItem::Impl(imp) => self.emit_impl_block(imp),
             RustItem::TraitImpl(ti) => self.emit_trait_impl_block(ti),
+            RustItem::RawRust(code) => self.emit_raw_rust(code, false),
         }
     }
 
@@ -421,6 +422,31 @@ impl Emitter {
         }
     }
 
+    /// Emit a raw Rust code block verbatim.
+    ///
+    /// Each line of the raw code is trimmed of leading whitespace and re-indented
+    /// to the current emitter indentation level (when `indented` is true).
+    /// For top-level items (`indented` is false), lines are emitted at zero indent.
+    /// Leading and trailing blank lines are stripped to avoid spurious newlines
+    /// from the `rust { ... }` brace layout.
+    fn emit_raw_rust(&mut self, code: &str, indented: bool) {
+        let trimmed_code = code.trim();
+        if trimmed_code.is_empty() {
+            return;
+        }
+        for line in trimmed_code.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                self.newline();
+            } else {
+                if indented {
+                    self.write_indent();
+                }
+                self.writeln(trimmed);
+            }
+        }
+    }
+
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
         self.set_span(f.span);
@@ -672,6 +698,7 @@ impl Emitter {
                 self.write_indent();
                 self.writeln("continue;");
             }
+            RustStmt::RawRust(code) => self.emit_raw_rust(code, true),
         }
     }
 

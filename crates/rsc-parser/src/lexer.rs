@@ -686,6 +686,7 @@ impl<'a> Lexer<'a> {
             "implements" => TokenKind::Implements,
             "async" => TokenKind::Async,
             "await" => TokenKind::Await,
+            "rust" => TokenKind::Rust,
             _ => TokenKind::Ident(text.to_owned()),
         };
 

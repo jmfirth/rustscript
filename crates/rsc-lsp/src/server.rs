@@ -585,6 +585,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::ArrayDestructure(a) => a.span,
         Stmt::Break(b) => b.span,
         Stmt::Continue(c) => c.span,
+        Stmt::RustBlock(rb) => rb.span,
     }
 }
 

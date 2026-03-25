@@ -207,8 +207,8 @@ impl UseMap {
                     uses,
                 );
             }
-            ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {
-                // No variable uses in break/continue
+            ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {
+                // No variable uses in break/continue/inline rust
             }
         }
     }
@@ -653,7 +653,8 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
         | ast::Stmt::Destructure(_)
         | ast::Stmt::ArrayDestructure(_)
         | ast::Stmt::Break(_)
-        | ast::Stmt::Continue(_) => {}
+        | ast::Stmt::Continue(_)
+        | ast::Stmt::RustBlock(_) => {}
         ast::Stmt::For(for_of) => {
             for inner in &for_of.body.stmts {
                 collect_assignments(inner, reassigned);
@@ -934,7 +935,7 @@ fn collect_param_usage_stmt(
         ast::Stmt::ArrayDestructure(adestr) => {
             collect_param_usage_expr(&adestr.init, param_set, is_ref_call, result);
         }
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {}
+        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {}
     }
 }
 
@@ -1288,7 +1289,7 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
         }
         ast::Stmt::Destructure(d) => collect_idents_in_expr(&d.init, names),
         ast::Stmt::ArrayDestructure(ad) => collect_idents_in_expr(&ad.init, names),
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {}
+        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {}
     }
 }
 

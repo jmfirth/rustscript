@@ -9,11 +9,12 @@ use rsc_syntax::ast::{
     ClassConstructor, ClassDef, ClassField, ClassMember, ClassMethod, ClosureBody, ClosureExpr,
     ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
-    ImportDecl, IndexExpr, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module,
-    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef,
+    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility,
+    WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -50,23 +51,27 @@ fn capitalize_first(s: &str) -> String {
 ///
 /// Created with a token stream from the lexer and a file identifier.
 /// Call [`Parser::parse_module`] to produce the AST.
-pub(crate) struct Parser {
+pub(crate) struct Parser<'src> {
     tokens: Vec<Token>,
     pos: usize,
     diagnostics: Vec<Diagnostic>,
     file_id: FileId,
     expr_depth: usize,
+    /// The original source text, needed for extracting raw content from
+    /// inline Rust blocks (where we need the verbatim text between braces).
+    source: &'src str,
 }
 
-impl Parser {
+impl<'src> Parser<'src> {
     /// Create a new parser from a token stream.
-    pub(crate) fn new(tokens: Vec<Token>, file_id: FileId) -> Self {
+    pub(crate) fn new(tokens: Vec<Token>, file_id: FileId, source: &'src str) -> Self {
         Self {
             tokens,
             pos: 0,
             diagnostics: Vec::new(),
             file_id,
             expr_depth: 0,
+            source,
         }
     }
 
@@ -234,6 +239,7 @@ impl Parser {
             TokenKind::Implements => "`implements`",
             TokenKind::Async => "`async`",
             TokenKind::Await => "`await`",
+            TokenKind::Rust => "`rust`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -357,6 +363,7 @@ impl Parser {
             }),
             TokenKind::Import => self.parse_import_decl(),
             TokenKind::Export => self.parse_export_decl(),
+            TokenKind::Rust => self.parse_rust_block_item(),
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -1514,6 +1521,7 @@ impl Parser {
             TokenKind::For => self.parse_for_of_stmt().map(Stmt::For),
             TokenKind::Break => Some(Stmt::Break(self.parse_break_stmt())),
             TokenKind::Continue => Some(Stmt::Continue(self.parse_continue_stmt())),
+            TokenKind::Rust => self.parse_rust_block_stmt(),
             _ => self.parse_expr_stmt(),
         }
     }
@@ -3068,6 +3076,111 @@ impl Parser {
                 }
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Inline Rust blocks
+    // ---------------------------------------------------------------
+
+    /// Parse a `rust { ... }` block as a top-level item.
+    ///
+    /// The `rust` keyword has already been peeked. Consumes `rust {`,
+    /// captures the raw contents with brace balancing, and returns an item.
+    fn parse_rust_block_item(&mut self) -> Option<Item> {
+        let rust_block = self.parse_inline_rust_block()?;
+        let span = rust_block.span;
+        Some(Item {
+            kind: ItemKind::RustBlock(rust_block),
+            exported: false,
+            span,
+        })
+    }
+
+    /// Parse a `rust { ... }` block as a statement.
+    ///
+    /// The `rust` keyword has already been peeked. Consumes `rust {`,
+    /// captures the raw contents with brace balancing, and returns a statement.
+    fn parse_rust_block_stmt(&mut self) -> Option<Stmt> {
+        let rust_block = self.parse_inline_rust_block()?;
+        Some(Stmt::RustBlock(rust_block))
+    }
+
+    /// Parse the shared `rust { ... }` block, returning an [`InlineRustBlock`].
+    ///
+    /// Expects the current token to be `rust`. Consumes `rust`, expects `{`,
+    /// then scans with brace-depth tracking until depth returns to 0.
+    /// The raw text between the outer `{ }` is captured as-is from the source.
+    ///
+    /// Limitation: brace balancing is simplified — braces inside Rust string
+    /// literals or comments within the block are counted. If a user has
+    /// unbalanced braces inside a string literal, they will get a parse error.
+    fn parse_inline_rust_block(&mut self) -> Option<InlineRustBlock> {
+        let rust_token = self.advance(); // consume `rust`
+        let start = rust_token.span;
+
+        if !self.check(&TokenKind::LBrace) {
+            self.diagnostics
+                .push(Diagnostic::error("expected `{` after `rust`").with_label(
+                    self.current_token().span,
+                    self.file_id,
+                    "expected `{`",
+                ));
+            self.synchronize();
+            return None;
+        }
+
+        let open_token = self.advance(); // consume `{`
+        let content_start = open_token.span.end.0 as usize;
+
+        // Track brace depth: we just consumed the opening `{`, so depth starts at 1.
+        // Scan tokens and count braces to find the matching `}`.
+        let mut depth: usize = 1;
+
+        while depth > 0 && !self.at_end() {
+            match self.peek() {
+                TokenKind::LBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    self.advance();
+                }
+                TokenKind::Eof => {
+                    break;
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+
+        if depth > 0 {
+            self.diagnostics
+                .push(Diagnostic::error("unclosed `rust` block").with_label(
+                    start,
+                    self.file_id,
+                    "`rust` block starts here",
+                ));
+            return None;
+        }
+
+        // The closing `}` is at current position — extract the source text between
+        // the opening `{` and closing `}`.
+        let content_end = self.current_token().span.start.0 as usize;
+        let close_token = self.advance(); // consume closing `}`
+
+        // Extract the raw text from the original source using byte positions.
+        let code = self.source[content_start..content_end].to_owned();
+        let block_span = start.merge(close_token.span);
+
+        Some(InlineRustBlock {
+            code,
+            span: block_span,
+        })
     }
 }
 
@@ -5586,5 +5699,122 @@ class Foo implements Bar, Baz {
             },
             other => panic!("expected Function, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Inline Rust block tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_rust_block_simple() {
+        let source = r#"function main(): void {
+  rust {
+    println!("hello");
+  }
+}"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::RustBlock(rb) => {
+                    assert!(
+                        rb.code.contains("println!"),
+                        "expected rust block code to contain println!, got: {:?}",
+                        rb.code
+                    );
+                }
+                other => panic!("expected RustBlock statement, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_rust_block_nested_braces() {
+        let source = r#"function main(): void {
+  rust {
+    if true {
+      if false {
+        println!("deeply nested");
+      }
+    }
+  }
+}"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::RustBlock(rb) => {
+                    assert!(
+                        rb.code.contains("deeply nested"),
+                        "expected deeply nested content, got: {:?}",
+                        rb.code
+                    );
+                }
+                other => panic!("expected RustBlock, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_rust_block_empty() {
+        let source = r#"function main(): void {
+  rust { }
+}"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::RustBlock(rb) => {
+                    assert!(
+                        rb.code.trim().is_empty(),
+                        "expected empty rust block, got: {:?}",
+                        rb.code
+                    );
+                }
+                other => panic!("expected RustBlock, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_rust_block_module_level() {
+        let source = r#"rust {
+  type Pair = (i32, i32);
+}
+
+function main(): void {
+  console.log("hello");
+}"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::RustBlock(rb) => {
+                assert!(
+                    rb.code.contains("Pair"),
+                    "expected type alias in rust block, got: {:?}",
+                    rb.code
+                );
+            }
+            other => panic!("expected RustBlock item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_rust_block_unclosed_produces_diagnostic() {
+        let source = r#"function main(): void {
+  rust {
+    let x = 1;
+}"#;
+        let (_, diagnostics) = parse_source(source);
+        assert!(
+            !diagnostics.is_empty(),
+            "expected diagnostic for unclosed rust block"
+        );
+        let has_unclosed = diagnostics
+            .iter()
+            .any(|d| d.message.contains("unclosed") || d.message.contains("unterminated"));
+        assert!(
+            has_unclosed,
+            "expected unclosed rust block diagnostic, got: {diagnostics:?}"
+        );
     }
 }
