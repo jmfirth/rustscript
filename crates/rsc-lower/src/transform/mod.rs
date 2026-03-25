@@ -17,9 +17,9 @@ use std::collections::HashSet;
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustEnumDef, RustEnumVariant, RustFieldDef,
-    RustFile, RustFnDecl, RustItem, RustParam, RustStructDef, RustTraitDef, RustTraitMethod,
-    RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+    ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustEnumDef, RustEnumVariant,
+    RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam, RustStructDef, RustTraitDef,
+    RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -32,15 +32,19 @@ use rsc_typeck::types::Type;
 
 /// Information about a function's signature, collected in a pre-pass.
 ///
-/// Used by call-site lowering to determine whether to insert `?`.
-/// Phase 4 (Tier 2 ownership) will extend this with `param_modes: Vec<ParamMode>`
-/// to record per-parameter ownership requirements for borrow inference.
+/// Used by call-site lowering to determine whether to insert `?`, and
+/// by Tier 2 ownership inference to record per-parameter borrow modes.
 #[derive(Debug, Clone)]
 struct FnSignature {
     /// Whether this function has a `throws` annotation.
     throws: bool,
     /// Resolved parameter types for enum variant resolution at call sites.
     param_types: Vec<RustType>,
+    /// Inferred parameter modes from Tier 2 borrow analysis.
+    /// `None` means analysis hasn't run (e.g., external functions).
+    #[allow(dead_code)]
+    // Populated by Task 045; consumed by Task 046 emitter changes.
+    param_modes: Option<Vec<ParamMode>>,
 }
 
 /// Map from function name to its throws signature.
@@ -364,6 +368,7 @@ impl Transform {
                         RustParam {
                             name: p.name.name.clone(),
                             ty: rust_ty,
+                            mode: ParamMode::Owned,
                             span: Some(p.span),
                         }
                     })
@@ -484,11 +489,30 @@ impl Transform {
             })
             .collect();
 
+        // Tier 2: analyze parameter usage to determine borrow modes
+        let param_names: Vec<String> = f.params.iter().map(|p| p.name.name.clone()).collect();
+        let builtins = &self.builtins;
+        let usage_map = ownership::analyze_param_usage(&f.body, &param_names, |obj, method| {
+            builtins.is_ref_args(obj, method)
+        });
+        let param_modes: Vec<ParamMode> = param_names
+            .iter()
+            .zip(param_types.iter())
+            .map(|(name, ty)| {
+                let usage = usage_map
+                    .get(name.as_str())
+                    .copied()
+                    .unwrap_or(ownership::ParamUsage::ReadOnly);
+                ownership::usage_to_mode(usage, ty)
+            })
+            .collect();
+
         self.fn_signatures.insert(
             f.name.name.clone(),
             FnSignature {
                 throws,
                 param_types,
+                param_modes: Some(param_modes),
             },
         );
     }
@@ -558,6 +582,7 @@ impl Transform {
                     return RustParam {
                         name: p.name.name.clone(),
                         ty,
+                        mode: ParamMode::Owned,
                         span: Some(p.span),
                     };
                 }
@@ -576,6 +601,7 @@ impl Transform {
                 RustParam {
                     name: p.name.name.clone(),
                     ty,
+                    mode: ParamMode::Owned,
                     span: Some(p.span),
                 }
             })

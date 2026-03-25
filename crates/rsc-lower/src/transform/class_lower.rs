@@ -5,8 +5,8 @@
 
 use rsc_syntax::ast;
 use rsc_syntax::rust_ir::{
-    RustBlock, RustExpr, RustExprKind, RustFieldDef, RustImplBlock, RustItem, RustMethod,
-    RustParam, RustSelfParam, RustStructDef, RustTraitImplBlock, RustType,
+    ParamMode, RustBlock, RustExpr, RustExprKind, RustFieldDef, RustImplBlock, RustItem,
+    RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitImplBlock, RustType,
 };
 
 use crate::context::LoweringContext;
@@ -214,6 +214,7 @@ impl Transform {
                 RustParam {
                     name: p.name.name.clone(),
                     ty: rust_ty,
+                    mode: ParamMode::Owned,
                     span: Some(p.span),
                 }
             })
@@ -316,6 +317,7 @@ impl Transform {
                 RustParam {
                     name: p.name.name.clone(),
                     ty: rust_ty,
+                    mode: ParamMode::Owned,
                     span: Some(p.span),
                 }
             })

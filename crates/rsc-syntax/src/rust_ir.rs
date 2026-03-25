@@ -277,18 +277,35 @@ pub struct RustFnDecl {
     pub span: Option<Span>,
 }
 
+/// How a function parameter is passed — owned or borrowed.
+///
+/// Tier 1 uses `Owned` for everything. Tier 2 analysis may upgrade
+/// parameters to `Borrowed` or `BorrowedStr` when safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamMode {
+    /// Parameter takes ownership: `name: String`, `items: Vec<T>`.
+    Owned,
+    /// Parameter borrows immutably: `name: &String`, `items: &Vec<T>`.
+    Borrowed,
+    /// String parameter borrows as str slice: `name: &str`.
+    /// This is the most impactful optimization — avoids allocation.
+    BorrowedStr,
+}
+
 /// A Rust function parameter.
 ///
-/// Phase 4 (Tier 2 ownership) will add a `borrow_mode: Option<BorrowMode>` field
-/// to indicate whether the parameter should be `T`, `&T`, or `&mut T` in the
-/// emitted Rust. The emitter will check this field and emit the appropriate
-/// reference prefix. Until then, all parameters are emitted as owned `T`.
+/// The `mode` field indicates whether this parameter should be emitted as
+/// owned (`T`), borrowed (`&T`), or as a str slice (`&str`). The emitter
+/// in Task 046 will use `mode` to emit the appropriate reference prefix.
+/// Until then, the emitter ignores `mode` and always emits `T`.
 #[derive(Debug, Clone)]
 pub struct RustParam {
     /// The parameter name.
     pub name: String,
     /// The parameter type.
     pub ty: RustType,
+    /// How this parameter is passed (owned vs borrowed).
+    pub mode: ParamMode,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -1084,11 +1101,13 @@ mod tests {
                 RustParam {
                     name: "a".to_owned(),
                     ty: RustType::I32,
+                    mode: ParamMode::Owned,
                     span: Some(span(4, 10)),
                 },
                 RustParam {
                     name: "b".to_owned(),
                     ty: RustType::I32,
+                    mode: ParamMode::Owned,
                     span: Some(span(12, 18)),
                 },
             ],
