@@ -850,12 +850,7 @@ fn detect_compound_assign<'a>(
 mod tests {
     use super::*;
     use rsc_syntax::ast::*;
-    use rsc_syntax::rust_ir::{
-        RustBlock, RustClosureBody, RustClosureParam, RustDestructureStmt, RustElse, RustExpr,
-        RustExprKind, RustForInStmt, RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt,
-        RustMatchResultStmt, RustReturnStmt, RustSelfParam, RustStmt, RustTupleDestructureStmt,
-        RustWhileStmt,
-    };
+    use rsc_syntax::rust_ir::{RustExprKind, RustSelfParam, RustStmt};
     use rsc_syntax::span::Span;
 
     fn span(start: u32, end: u32) -> Span {
