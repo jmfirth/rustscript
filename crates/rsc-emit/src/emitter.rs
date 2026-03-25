@@ -278,7 +278,11 @@ impl Emitter {
     /// Emit a single method within an impl block.
     fn emit_method(&mut self, method: &RustMethod) {
         self.write_indent();
-        self.write("fn ");
+        if method.is_async {
+            self.write("async fn ");
+        } else {
+            self.write("fn ");
+        }
         self.write(&method.name);
         self.write("(");
 
@@ -363,8 +367,12 @@ impl Emitter {
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
         self.write_indent();
-        if f.public {
+        if f.public && f.is_async {
+            self.write("pub async fn ");
+        } else if f.public {
             self.write("pub fn ");
+        } else if f.is_async {
+            self.write("async fn ");
         } else {
             self.write("fn ");
         }
@@ -708,11 +716,22 @@ impl Emitter {
             RustExprKind::MethodCall {
                 receiver,
                 method,
+                type_args,
                 args,
             } => {
                 self.emit_expr(receiver);
                 self.write(".");
                 self.write(method);
+                if !type_args.is_empty() {
+                    self.write("::<");
+                    for (i, ty) in type_args.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.write(&ty.to_string());
+                    }
+                    self.write(">");
+                }
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
@@ -865,11 +884,15 @@ impl Emitter {
                 self.write(")");
             }
             RustExprKind::Closure {
+                is_async,
                 is_move,
                 params,
                 return_type,
                 body,
             } => {
+                if *is_async {
+                    self.write("async ");
+                }
                 if *is_move {
                     self.write("move ");
                 }
@@ -906,6 +929,10 @@ impl Emitter {
                         self.emit_block(block);
                     }
                 }
+            }
+            RustExprKind::Await(inner) => {
+                self.emit_expr(inner);
+                self.write(".await");
             }
             RustExprKind::SelfRef => {
                 self.write("self");
@@ -946,12 +973,12 @@ pub fn emit(file: &RustFile) -> String {
 #[cfg(test)]
 mod tests {
     use rsc_syntax::rust_ir::{
-        RustBinaryOp, RustBlock, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant,
-        RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
-        RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt,
-        RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt,
-        RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod,
-        RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+        RustBinaryOp, RustBlock, RustClosureBody, RustDestructureStmt, RustElse, RustEnumDef,
+        RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt,
+        RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm,
+        RustMatchResultStmt, RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern,
+        RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
+        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -977,6 +1004,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: name.to_owned(),
                 type_params: vec![],
@@ -1006,6 +1034,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "add".to_owned(),
                 type_params: vec![],
@@ -1275,6 +1304,7 @@ fn main() {
             vec![RustStmt::Semi(syn(RustExprKind::MethodCall {
                 receiver: Box::new(ident("receiver")),
                 method: "method".to_owned(),
+                type_args: vec![],
                 args: vec![ident("a"), ident("b")],
             }))],
             None,
@@ -1449,6 +1479,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![
                 RustItem::Function(RustFnDecl {
+                    is_async: false,
                     public: false,
                     name: "foo".to_owned(),
                     type_params: vec![],
@@ -1461,6 +1492,7 @@ fn main() {
                     span: None,
                 }),
                 RustItem::Function(RustFnDecl {
+                    is_async: false,
                     public: false,
                     name: "bar".to_owned(),
                     type_params: vec![],
@@ -1486,6 +1518,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "answer".to_owned(),
                 type_params: vec![],
@@ -1520,6 +1553,7 @@ fn answer() -> i32 {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "fibonacci".to_owned(),
                 type_params: vec![],
@@ -1711,6 +1745,7 @@ fn complex() {
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
@@ -1751,6 +1786,7 @@ fn main() {
                 },
             ],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
@@ -1781,6 +1817,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
@@ -1962,6 +1999,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "id".to_owned(),
                 type_params: vec![RustTypeParam {
@@ -1995,6 +2033,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "merge".to_owned(),
                 type_params: vec![RustTypeParam {
@@ -2175,6 +2214,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "test".to_owned(),
                 type_params: vec![],
@@ -2225,6 +2265,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "area".to_owned(),
                 type_params: vec![],
@@ -2364,6 +2405,7 @@ fn main() {
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "main".to_owned(),
                 type_params: vec![],
@@ -2392,6 +2434,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "find".to_owned(),
                 type_params: vec![],
@@ -2485,6 +2528,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "fetch".to_owned(),
                 type_params: vec![],
@@ -2619,6 +2663,7 @@ fn main() {
                 name: "double".to_owned(),
                 ty: None,
                 init: syn(RustExprKind::Closure {
+                    is_async: false,
                     is_move: false,
                     params: vec![RustClosureParam {
                         name: "x".to_owned(),
@@ -2653,6 +2698,7 @@ fn main() {
                 name: "greet".to_owned(),
                 ty: None,
                 init: syn(RustExprKind::Closure {
+                    is_async: false,
                     is_move: false,
                     params: vec![],
                     return_type: None,
@@ -2686,6 +2732,7 @@ fn main() {
                 name: "handler".to_owned(),
                 ty: None,
                 init: syn(RustExprKind::Closure {
+                    is_async: false,
                     is_move: true,
                     params: vec![],
                     return_type: None,
@@ -2715,6 +2762,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "apply".to_owned(),
                 type_params: vec![],
@@ -2783,6 +2831,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "process".to_owned(),
                 type_params: vec![RustTypeParam {
@@ -2899,6 +2948,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: true,
                 name: "greet".to_owned(),
                 type_params: vec![],
@@ -2925,6 +2975,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "helper".to_owned(),
                 type_params: vec![],
@@ -3063,6 +3114,7 @@ fn main() {
                 type_name: "Counter".to_owned(),
                 type_params: vec![],
                 methods: vec![RustMethod {
+                    is_async: false,
                     name: "new".to_owned(),
                     self_param: None,
                     params: vec![RustParam {
@@ -3110,6 +3162,7 @@ fn main() {
                 type_name: "User".to_owned(),
                 type_params: vec![],
                 methods: vec![RustMethod {
+                    is_async: false,
                     name: "describe".to_owned(),
                     self_param: Some(RustSelfParam::Ref),
                     params: vec![],
@@ -3152,6 +3205,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                is_async: false,
                 public: false,
                 name: "test".to_owned(),
                 type_params: vec![],
@@ -3180,6 +3234,7 @@ fn main() {
                 type_name: "Foo".to_owned(),
                 type_params: vec![],
                 methods: vec![RustMethod {
+                    is_async: false,
                     name: "mutate".to_owned(),
                     self_param: Some(RustSelfParam::RefMut),
                     params: vec![],
@@ -3197,6 +3252,206 @@ fn main() {
         assert!(
             output.contains("fn mutate(&mut self)"),
             "expected `fn mutate(&mut self)` in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Async/await emission tests (Task 028)
+    // ---------------------------------------------------------------
+
+    // 11. Emitter — async fn: RustFnDecl { is_async: true } emits "async fn"
+    #[test]
+    fn test_emit_async_fn_declaration() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                is_async: true,
+                public: false,
+                name: "foo".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Some(RustType::String),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Return(RustReturnStmt {
+                        value: Some(syn(RustExprKind::ToString(Box::new(syn(
+                            RustExprKind::StringLit("hello".to_owned()),
+                        ))))),
+                        span: None,
+                    })],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("async fn foo()"),
+            "expected `async fn foo()` in output:\n{output}"
+        );
+    }
+
+    // 12. Emitter — await: RustExprKind::Await emits "expr.await"
+    #[test]
+    fn test_emit_await_expression() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::Await(Box::new(ident(
+                "result",
+            )))))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("result.await;"),
+            "expected `result.await;` in output:\n{output}"
+        );
+    }
+
+    // Await of a function call
+    #[test]
+    fn test_emit_await_function_call() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::Await(Box::new(syn(
+                RustExprKind::Call {
+                    func: "get_data".to_owned(),
+                    args: vec![],
+                },
+            )))))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("get_data().await;"),
+            "expected `get_data().await;` in output:\n{output}"
+        );
+    }
+
+    // 13. Emitter — async closure: Closure with is_async emits "async |params| body"
+    #[test]
+    fn test_emit_async_closure() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::Closure {
+                is_async: true,
+                is_move: false,
+                params: vec![],
+                return_type: None,
+                body: RustClosureBody::Block(RustBlock {
+                    stmts: vec![RustStmt::Semi(syn(RustExprKind::Await(Box::new(syn(
+                        RustExprKind::Call {
+                            func: "process_request".to_owned(),
+                            args: vec![],
+                        },
+                    )))))],
+                    expr: None,
+                }),
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("async ||"),
+            "expected `async ||` in output:\n{output}"
+        );
+    }
+
+    // 14. Emitter — async method: RustMethod { is_async: true } emits "async fn method_name"
+    #[test]
+    fn test_emit_async_method() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Impl(RustImplBlock {
+                type_name: "Server".to_owned(),
+                type_params: vec![],
+                methods: vec![RustMethod {
+                    is_async: true,
+                    name: "handle".to_owned(),
+                    self_param: Some(RustSelfParam::Ref),
+                    params: vec![],
+                    return_type: None,
+                    body: RustBlock {
+                        stmts: vec![],
+                        expr: None,
+                    },
+                    span: None,
+                }],
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("async fn handle(&self)"),
+            "expected `async fn handle(&self)` in output:\n{output}"
+        );
+    }
+
+    // Pub async fn
+    #[test]
+    fn test_emit_pub_async_fn() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                is_async: true,
+                public: true,
+                name: "handler".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("pub async fn handler()"),
+            "expected `pub async fn handler()` in output:\n{output}"
+        );
+    }
+
+    // Method call with type_args (turbofish)
+    #[test]
+    fn test_emit_method_call_with_type_args() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::MethodCall {
+                receiver: Box::new(ident("response")),
+                method: "json".to_owned(),
+                type_args: vec![RustType::Named("User".to_owned())],
+                args: vec![],
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("response.json::<User>()"),
+            "expected `response.json::<User>()` in output:\n{output}"
+        );
+    }
+
+    // Method call without type_args (no turbofish)
+    #[test]
+    fn test_emit_method_call_without_type_args() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Semi(syn(RustExprKind::MethodCall {
+                receiver: Box::new(ident("v")),
+                method: "push".to_owned(),
+                type_args: vec![],
+                args: vec![int_lit(1)],
+            }))],
+            None,
+        );
+        let output = emit(&file);
+        assert!(
+            output.contains("v.push(1)"),
+            "expected `v.push(1)` in output:\n{output}"
         );
     }
 }

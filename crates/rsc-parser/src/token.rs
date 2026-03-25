@@ -96,6 +96,10 @@ pub(crate) enum TokenKind {
     Public,
     /// `implements`
     Implements,
+    /// `async`
+    Async,
+    /// `await`
+    Await,
 
     // Operators
     /// `+`

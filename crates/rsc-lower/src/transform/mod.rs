@@ -629,6 +629,7 @@ impl Transform {
         ctx.pop_scope();
 
         RustFnDecl {
+            is_async: f.is_async,
             public: false,
             name: f.name.name.clone(),
             type_params,
@@ -1505,6 +1506,7 @@ impl Transform {
                                             RustExprKind::Ident("v".to_owned()),
                                         )),
                                         method: method.name.clone(),
+                                        type_args: vec![],
                                         args: lowered_args,
                                     },
                                 )),
@@ -1531,6 +1533,10 @@ impl Transform {
             }
             ast::ExprKind::Closure(closure) => {
                 self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::Await(inner) => {
+                let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
+                RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span)
             }
             ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),
             ast::ExprKind::FieldAssign(fa) => {
@@ -1627,6 +1633,7 @@ impl Transform {
 
         RustExpr::new(
             RustExprKind::Closure {
+                is_async: closure.is_async,
                 is_move: closure.is_move,
                 params,
                 return_type,
@@ -1696,6 +1703,7 @@ impl Transform {
             RustExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: mc.method.name.clone(),
+                type_args: vec![],
                 args,
             },
             span,
@@ -2129,6 +2137,7 @@ mod tests {
         body: Vec<Stmt>,
     ) -> FnDecl {
         FnDecl {
+            is_async: false,
             name: ident(name, 0, name.len() as u32),
             type_params: None,
             params,
@@ -2539,6 +2548,7 @@ mod tests {
         //   return fib(n - 1) + fib(n - 2);
         // }
         let f = FnDecl {
+            is_async: false,
             name: ident("fib", 0, 3),
             type_params: None,
             params: vec![make_param("n", "i32")],
@@ -2652,6 +2662,7 @@ mod tests {
         //   console.log(name);   // stmt 1: NOT a move position
         // }
         let f = FnDecl {
+            is_async: false,
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
@@ -2724,6 +2735,7 @@ mod tests {
         //   console.log(name);    // stmt 1: not a move position, no clone
         // }
         let f = FnDecl {
+            is_async: false,
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
@@ -2808,6 +2820,7 @@ mod tests {
         //   x = x + 1;
         // }
         let f = FnDecl {
+            is_async: false,
             name: ident("counter", 0, 7),
             type_params: None,
             params: vec![],
@@ -3312,6 +3325,7 @@ mod tests {
     #[test]
     fn test_lower_generic_fn_produces_type_params() {
         let f = FnDecl {
+            is_async: false,
             name: ident("id", 0, 2),
             type_params: Some(ast::TypeParams {
                 params: vec![ast::TypeParam {
@@ -3361,6 +3375,7 @@ mod tests {
     #[test]
     fn test_lower_constrained_generic_produces_bounds() {
         let f = FnDecl {
+            is_async: false,
             name: ident("merge", 0, 5),
             type_params: Some(ast::TypeParams {
                 params: vec![ast::TypeParam {
@@ -3989,6 +4004,7 @@ mod tests {
     #[test]
     fn test_lower_option_return_type() {
         let module = make_module(vec![fn_item(FnDecl {
+            is_async: false,
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
@@ -4067,6 +4083,7 @@ mod tests {
     #[test]
     fn test_lower_return_some_wrapping() {
         let module = make_module(vec![fn_item(FnDecl {
+            is_async: false,
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
@@ -4245,6 +4262,7 @@ mod tests {
     #[test]
     fn test_lower_throws_function_produces_result_return_type() {
         let f = FnDecl {
+            is_async: false,
             name: ident("divide", 0, 6),
             type_params: None,
             params: vec![make_param("a", "f64"), make_param("b", "f64")],
@@ -4289,6 +4307,7 @@ mod tests {
     #[test]
     fn test_lower_return_in_throws_function_wraps_in_ok() {
         let f = FnDecl {
+            is_async: false,
             name: ident("get", 0, 3),
             type_params: None,
             params: vec![],
@@ -4338,6 +4357,7 @@ mod tests {
     #[test]
     fn test_lower_throw_expression_produces_return_err() {
         let f = FnDecl {
+            is_async: false,
             name: ident("fail", 0, 4),
             type_params: None,
             params: vec![],
@@ -4387,6 +4407,7 @@ mod tests {
     #[test]
     fn test_lower_call_to_throws_function_inserts_question_mark() {
         let inner_fn = FnDecl {
+            is_async: false,
             name: ident("inner", 0, 5),
             type_params: None,
             params: vec![],
@@ -4412,6 +4433,7 @@ mod tests {
         };
 
         let outer_fn = FnDecl {
+            is_async: false,
             name: ident("outer", 0, 5),
             type_params: None,
             params: vec![],
@@ -4680,6 +4702,7 @@ mod tests {
                 },
                 Item {
                     kind: ItemKind::Function(FnDecl {
+                        is_async: false,
                         name: ident("process", 65, 72),
                         type_params: None,
                         params: vec![Param {
@@ -5053,6 +5076,94 @@ class Foo {
                 assert!(s.fields[1].public, "public field should be pub");
             }
             other => panic!("expected Struct, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Async/await lowering tests (Task 028)
+    // ---------------------------------------------------------------
+
+    // 9. Lowering passthrough: async function AST → RustFnDecl { is_async: true }
+    #[test]
+    fn test_lower_async_function_produces_async_rust_fn() {
+        let source = r#"async function greet(): string { return "hello"; }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                assert!(f.is_async, "expected is_async to be true");
+                assert_eq!(f.name, "greet");
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Non-async function stays is_async: false
+    #[test]
+    fn test_lower_non_async_function_has_is_async_false() {
+        let source = "function add(a: i32, b: i32): i32 { return a + b; }";
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                assert!(!f.is_async, "expected is_async to be false");
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 10. Lowering await: Await(expr) → RustExprKind::Await(lowered_expr)
+    #[test]
+    fn test_lower_await_expression_produces_rust_await() {
+        let source = r#"async function fetchData(): string {
+            const result = await getData();
+            return result;
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                assert!(f.is_async);
+                // First statement should be a let binding with await init
+                match &f.body.stmts[0] {
+                    RustStmt::Let(let_stmt) => {
+                        match &let_stmt.init.kind {
+                            RustExprKind::Await(inner) => {
+                                // Inner should be a function call to getData
+                                match &inner.kind {
+                                    RustExprKind::Call { func, .. } => {
+                                        assert_eq!(func, "getData");
+                                    }
+                                    other => panic!("expected Call inside Await, got {other:?}"),
+                                }
+                            }
+                            other => panic!("expected Await, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Async closure lowering: is_async passthrough
+    #[test]
+    fn test_lower_async_closure_produces_async_rust_closure() {
+        let source = r#"function test() {
+            const handler = async () => {
+                await processRequest();
+            };
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[0] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::Closure { is_async, .. } => {
+                        assert!(*is_async, "expected closure is_async to be true");
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
         }
     }
 }

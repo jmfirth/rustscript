@@ -232,6 +232,8 @@ impl Parser {
             TokenKind::Private => "`private`",
             TokenKind::Public => "`public`",
             TokenKind::Implements => "`implements`",
+            TokenKind::Async => "`async`",
+            TokenKind::Await => "`await`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -305,7 +307,30 @@ impl Parser {
     /// Parse a top-level item: function, type definition, interface, import, or export.
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek() {
-            TokenKind::Function => self.parse_function_decl().map(|f| {
+            TokenKind::Async => {
+                let async_token = self.advance();
+                if !self.check(&TokenKind::Function) {
+                    self.diagnostics.push(
+                        Diagnostic::error("expected `function` after `async`").with_label(
+                            self.current_token().span,
+                            self.file_id,
+                            "expected `function`",
+                        ),
+                    );
+                    self.synchronize();
+                    return None;
+                }
+                self.parse_function_decl(true, Some(async_token.span))
+                    .map(|f| {
+                        let span = f.span;
+                        Item {
+                            kind: ItemKind::Function(f),
+                            exported: false,
+                            span,
+                        }
+                    })
+            }
+            TokenKind::Function => self.parse_function_decl(false, None).map(|f| {
                 let span = f.span;
                 Item {
                     kind: ItemKind::Function(f),
@@ -397,8 +422,29 @@ impl Parser {
         let start = export_token.span;
 
         match self.peek() {
+            TokenKind::Async => {
+                let async_token = self.advance();
+                if !self.check(&TokenKind::Function) {
+                    self.diagnostics.push(
+                        Diagnostic::error("expected `function` after `async`").with_label(
+                            self.current_token().span,
+                            self.file_id,
+                            "expected `function`",
+                        ),
+                    );
+                    self.synchronize();
+                    return None;
+                }
+                let f = self.parse_function_decl(true, Some(async_token.span))?;
+                let span = start.merge(f.span);
+                Some(Item {
+                    kind: ItemKind::Function(f),
+                    exported: true,
+                    span,
+                })
+            }
             TokenKind::Function => {
-                let f = self.parse_function_decl()?;
+                let f = self.parse_function_decl(false, None)?;
                 let span = start.merge(f.span);
                 Some(Item {
                     kind: ItemKind::Function(f),
@@ -538,10 +584,14 @@ impl Parser {
     // Function declarations
     // ---------------------------------------------------------------
 
-    /// Parse a function declaration: `function IDENT<T>( params ) : type { body }`.
-    fn parse_function_decl(&mut self) -> Option<FnDecl> {
+    /// Parse a function declaration: `[async] function IDENT<T>( params ) : type { body }`.
+    ///
+    /// The `is_async` flag indicates whether an `async` keyword was consumed
+    /// before calling this method. `async_span` is the span of that keyword
+    /// (used to extend the overall function span).
+    fn parse_function_decl(&mut self, is_async: bool, async_span: Option<Span>) -> Option<FnDecl> {
         let fn_token = self.advance(); // consume `function`
-        let start = fn_token.span;
+        let start = async_span.unwrap_or(fn_token.span);
 
         // Function name
         let name = self.parse_ident()?;
@@ -574,6 +624,7 @@ impl Parser {
 
         let span = start.merge(body.span);
         Some(FnDecl {
+            is_async,
             name,
             type_params,
             params,
@@ -1058,6 +1109,7 @@ impl Parser {
         let span = member_start.merge(body.span);
 
         Some(ClassMember::Method(ClassMethod {
+            is_async: false,
             visibility,
             name,
             type_params,
@@ -2097,7 +2149,7 @@ impl Parser {
         Some(left)
     }
 
-    /// Parse unary: `("-" | "!") unary | "throw" expr | call`.
+    /// Parse unary: `("-" | "!") unary | "throw" expr | "await" unary | call`.
     fn parse_unary(&mut self) -> Option<Expr> {
         match self.peek() {
             TokenKind::Minus => {
@@ -2130,6 +2182,15 @@ impl Parser {
                 let span = throw_token.span.merge(value.span);
                 Some(Expr {
                     kind: ExprKind::Throw(Box::new(value)),
+                    span,
+                })
+            }
+            TokenKind::Await => {
+                let await_token = self.advance();
+                let value = self.parse_unary()?;
+                let span = await_token.span.merge(value.span);
+                Some(Expr {
+                    kind: ExprKind::Await(Box::new(value)),
                     span,
                 })
             }
@@ -2345,8 +2406,8 @@ impl Parser {
     /// `: ReturnType` and then `=>`. Never calls recursive parse functions
     /// to avoid stack overflow on deeply nested parenthesized expressions.
     fn is_arrow_function_ahead(&self) -> bool {
-        // If we see `move`, it's always an arrow function
-        if self.check(&TokenKind::Move) {
+        // If we see `move` or `async`, it's always an arrow function
+        if self.check(&TokenKind::Move) || self.check(&TokenKind::Async) {
             return true;
         }
 
@@ -2499,8 +2560,13 @@ impl Parser {
     /// - `(params): ReturnType => expr`
     /// - `(params): ReturnType => { block }`
     /// - `move (params) => expr`
+    /// - `async (params) => expr`
+    /// - `async move (params) => expr`
     fn parse_arrow_function(&mut self) -> Option<Expr> {
         let start = self.current_token().span;
+
+        // Optional `async` keyword
+        let is_async = self.eat(&TokenKind::Async);
 
         // Optional `move` keyword
         let is_move = self.eat(&TokenKind::Move);
@@ -2537,6 +2603,7 @@ impl Parser {
 
         Some(Expr {
             kind: ExprKind::Closure(ClosureExpr {
+                is_async,
                 is_move,
                 params,
                 return_type,
@@ -2639,6 +2706,10 @@ impl Parser {
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
             TokenKind::Move => {
                 // `move` keyword in expression position — must be a move closure
+                self.parse_arrow_function()
+            }
+            TokenKind::Async => {
+                // `async` keyword in expression position — must be an async closure
                 self.parse_arrow_function()
             }
             TokenKind::LParen => {
@@ -5153,6 +5224,167 @@ class Foo implements Bar, Baz {
                 assert_eq!(cls.implements[1].name, "Baz");
             }
             other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Async/await tests (Task 028)
+    // ---------------------------------------------------------------
+
+    // 2. Parser — async function: parses as FnDecl { is_async: true }
+    #[test]
+    fn test_parser_async_function_produces_async_fn_decl() {
+        let module = parse_ok("async function foo(): string { return \"hi\"; }");
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert!(f.is_async);
+                assert_eq!(f.name.name, "foo");
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 3. Parser — await expression: `await fetchData()` parses as Await(Call { ... })
+    #[test]
+    fn test_parser_await_expression_produces_await_node() {
+        let module = parse_ok("async function test() { const x = await fetchData(); }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert!(f.is_async);
+                match &f.body.stmts[0] {
+                    Stmt::VarDecl(decl) => match &decl.init.kind {
+                        ExprKind::Await(inner) => match &inner.kind {
+                            ExprKind::Call(call) => {
+                                assert_eq!(call.callee.name, "fetchData");
+                                assert!(call.args.is_empty());
+                            }
+                            other => panic!("expected Call inside Await, got {other:?}"),
+                        },
+                        other => panic!("expected Await, got {other:?}"),
+                    },
+                    other => panic!("expected VarDecl, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 4. Parser — await precedence: `await a + b` parses as Binary(Await(a), Add, b)
+    #[test]
+    fn test_parser_await_precedence_lower_than_binary() {
+        let module = parse_ok("async function test() { const x = await a + b; }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(decl) => match &decl.init.kind {
+                    ExprKind::Binary(bin) => {
+                        assert!(matches!(bin.op, BinaryOp::Add));
+                        match &bin.left.kind {
+                            ExprKind::Await(inner) => match &inner.kind {
+                                ExprKind::Ident(ident) => assert_eq!(ident.name, "a"),
+                                other => panic!("expected Ident, got {other:?}"),
+                            },
+                            other => panic!("expected Await, got {other:?}"),
+                        }
+                        match &bin.right.kind {
+                            ExprKind::Ident(ident) => assert_eq!(ident.name, "b"),
+                            other => panic!("expected Ident, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Binary, got {other:?}"),
+                },
+                other => panic!("expected VarDecl, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 5. Parser — await with method call: `await obj.fetch()` parses as Await(MethodCall { ... })
+    #[test]
+    fn test_parser_await_with_method_call() {
+        let module = parse_ok("async function test() { const x = await obj.fetch(); }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(decl) => match &decl.init.kind {
+                    ExprKind::Await(inner) => match &inner.kind {
+                        ExprKind::MethodCall(mc) => {
+                            assert_eq!(mc.method.name, "fetch");
+                        }
+                        other => panic!("expected MethodCall inside Await, got {other:?}"),
+                    },
+                    other => panic!("expected Await, got {other:?}"),
+                },
+                other => panic!("expected VarDecl, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 6. Parser — async closure: `async (x: i32) => x`
+    #[test]
+    fn test_parser_async_closure_produces_async_closure_expr() {
+        let module = parse_ok("function test() { const f = async (x: i32) => x; }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(decl) => match &decl.init.kind {
+                    ExprKind::Closure(closure) => {
+                        assert!(closure.is_async);
+                        assert!(!closure.is_move);
+                        assert_eq!(closure.params.len(), 1);
+                        assert_eq!(closure.params[0].name.name, "x");
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                },
+                other => panic!("expected VarDecl, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 7. Parser — async move closure: `async move () => { process(); }`
+    #[test]
+    fn test_parser_async_move_closure_produces_both_flags() {
+        let module = parse_ok("function test() { const f = async move () => { process(); }; }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::VarDecl(decl) => match &decl.init.kind {
+                    ExprKind::Closure(closure) => {
+                        assert!(closure.is_async);
+                        assert!(closure.is_move);
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                },
+                other => panic!("expected VarDecl, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // 8. Parser — non-async function still parses with is_async: false
+    #[test]
+    fn test_parser_non_async_function_has_is_async_false() {
+        let module = parse_ok("function foo() { }");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert!(!f.is_async);
+                assert_eq!(f.name.name, "foo");
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Extra: export async function
+    #[test]
+    fn test_parser_export_async_function() {
+        let module = parse_ok("export async function handler(): string { return \"ok\"; }");
+        assert_eq!(module.items.len(), 1);
+        assert!(module.items[0].exported);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert!(f.is_async);
+                assert_eq!(f.name.name, "handler");
+            }
+            other => panic!("expected Function, got {other:?}"),
         }
     }
 }

@@ -684,6 +684,8 @@ impl<'a> Lexer<'a> {
             "private" => TokenKind::Private,
             "public" => TokenKind::Public,
             "implements" => TokenKind::Implements,
+            "async" => TokenKind::Async,
+            "await" => TokenKind::Await,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -1348,5 +1350,40 @@ mod tests {
         let tokens = tokenize("continue");
         assert_eq!(tokens.len(), 2); // Continue + Eof
         assert_eq!(tokens[0].kind, TokenKind::Continue);
+    }
+
+    // 47. `async` is tokenized as a keyword, not an identifier
+    #[test]
+    fn test_lexer_async_keyword_produces_async_token() {
+        let tokens = tokenize("async");
+        assert_eq!(tokens.len(), 2); // Async + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Async);
+        assert_eq!(tokens[0].span, Span::new(0, 5));
+    }
+
+    // 48. `await` is tokenized as a keyword, not an identifier
+    #[test]
+    fn test_lexer_await_keyword_produces_await_token() {
+        let tokens = tokenize("await");
+        assert_eq!(tokens.len(), 2); // Await + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Await);
+        assert_eq!(tokens[0].span, Span::new(0, 5));
+    }
+
+    // 49. `async function` tokenizes as two keyword tokens
+    #[test]
+    fn test_lexer_async_function_produces_two_keyword_tokens() {
+        let tokens = tokenize("async function");
+        assert_eq!(tokens.len(), 3); // Async + Function + Eof
+        assert_eq!(tokens[0].kind, TokenKind::Async);
+        assert_eq!(tokens[1].kind, TokenKind::Function);
+    }
+
+    // 50. `await fetchData()` tokenizes await as keyword
+    #[test]
+    fn test_lexer_await_in_expression_context() {
+        let tokens = tokenize("await fetchData()");
+        assert_eq!(tokens[0].kind, TokenKind::Await);
+        assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "fetchData"));
     }
 }

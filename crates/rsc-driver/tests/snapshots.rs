@@ -1987,3 +1987,77 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("p1_integration_destructuring", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: Async/await correctness scenarios (Task 028)
+// ---------------------------------------------------------------------------
+
+// Correctness scenario 1: Async function declaration
+#[test]
+fn test_snapshot_async_function_declaration() {
+    let source = r#"async function greet(): string {
+  return "hello";
+}"#;
+
+    let expected = r#"async fn greet() -> String {
+    return "hello".to_string();
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("async_function_declaration", &actual, expected);
+}
+
+// Correctness scenario 2: Await expression
+#[test]
+fn test_snapshot_await_expression() {
+    let source = r#"async function fetchData(): string {
+  const result = await getData();
+  return result;
+}"#;
+
+    let expected = r#"async fn fetchData() -> String {
+    let result = getData().await;
+    return result;
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("await_expression", &actual, expected);
+}
+
+// Correctness scenario 3: Async closure
+#[test]
+fn test_snapshot_async_closure() {
+    let source = r#"function main() {
+  const handler = async () => {
+    await processRequest();
+  };
+}"#;
+
+    let expected = r#"fn main() {
+    let handler = async || {
+        processRequest().await;
+    };
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("async_closure", &actual, expected);
+}
+
+// Correctness scenario 4: Non-async function unchanged (regression)
+#[test]
+fn test_snapshot_non_async_function_unchanged() {
+    let source = r#"function add(a: i32, b: i32): i32 {
+  return a + b;
+}"#;
+
+    let expected = r#"fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("non_async_function_unchanged", &actual, expected);
+}

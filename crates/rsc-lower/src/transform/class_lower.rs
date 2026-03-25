@@ -278,6 +278,7 @@ impl Transform {
         ctx.pop_scope();
 
         RustMethod {
+            is_async: false,
             name: "new".to_owned(),
             self_param: None,
             params,
@@ -356,6 +357,7 @@ impl Transform {
         ctx.pop_scope();
 
         RustMethod {
+            is_async: method.is_async,
             name: method.name.name.clone(),
             self_param,
             params,
