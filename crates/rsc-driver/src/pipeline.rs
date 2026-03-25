@@ -76,7 +76,7 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
-        needs_async_runtime: false,
+        needs_async_runtime: lower_result.needs_async_runtime,
         crate_dependencies: lower_result.crate_dependencies,
     }
 }
@@ -140,7 +140,7 @@ pub fn compile_source_with_mods(
         diagnostics: all_diagnostics,
         source_map,
         has_errors,
-        needs_async_runtime: false,
+        needs_async_runtime: lower_result.needs_async_runtime,
         crate_dependencies: lower_result.crate_dependencies,
     }
 }
@@ -726,5 +726,136 @@ function main() {
             "expected 1 dependency (serde_json only), got: {:?}",
             result.crate_dependencies
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 029: Async lowering and tokio runtime integration
+    // ---------------------------------------------------------------
+
+    // Correctness scenario 1: Async main with tokio
+    #[test]
+    fn test_compile_source_async_main_with_tokio() {
+        let source = r#"async function main() {
+  const data = await fetchData();
+  console.log(data);
+}
+
+async function fetchData(): string {
+  return "hello from async";
+}"#;
+        let result = compile_source(source, "async_main.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("#[tokio::main]"),
+            "expected #[tokio::main] in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("async fn main()"),
+            "expected async fn main() in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".await"),
+            "expected .await in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("async fn fetchData()"),
+            "expected async fn fetchData() in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.needs_async_runtime,
+            "expected needs_async_runtime to be true"
+        );
+    }
+
+    // Correctness scenario 2: Non-async main unchanged
+    #[test]
+    fn test_compile_source_non_async_main_no_tokio() {
+        let source = r#"function main() {
+  console.log("hello");
+}"#;
+        let result = compile_source(source, "sync_main.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.rust_source.contains("#[tokio::main]"),
+            "expected no #[tokio::main] in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            !result.rust_source.contains("async fn"),
+            "expected no async fn in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            !result.needs_async_runtime,
+            "expected needs_async_runtime to be false"
+        );
+    }
+
+    // Correctness scenario 3: Async function with throws
+    #[test]
+    fn test_compile_source_async_function_with_throws() {
+        let source = r#"async function loadUser(id: string): string throws string {
+  const data = await fetch(id);
+  return data;
+}"#;
+        let result = compile_source(source, "async_throws.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("async fn loadUser(id: String) -> Result<String, String>"),
+            "expected async fn loadUser with Result return type in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".await"),
+            "expected .await in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.needs_async_runtime,
+            "expected needs_async_runtime to be true"
+        );
+    }
+
+    // Pipeline integration test: Full pipeline for async function produces expected Rust
+    #[test]
+    fn test_compile_source_async_pipeline_integration() {
+        let source = r#"async function main() {
+  const result = await getData();
+  console.log(result);
+}
+
+async function getData(): string {
+  return "data";
+}"#;
+        let result = compile_source(source, "async_pipeline.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        // Verify the full structure
+        assert!(result.rust_source.contains("#[tokio::main]"));
+        assert!(result.rust_source.contains("async fn main()"));
+        assert!(result.rust_source.contains("getData().await"));
+        assert!(result.rust_source.contains("async fn getData() -> String"));
+        assert!(result.needs_async_runtime);
     }
 }

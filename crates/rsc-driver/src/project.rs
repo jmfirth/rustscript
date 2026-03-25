@@ -237,6 +237,8 @@ impl Project {
 
         // Collect all crate dependencies from all compiled modules
         let mut all_crate_deps: Vec<CrateDependency> = Vec::new();
+        // Track whether any module uses async (OR across all modules)
+        let mut any_needs_async_runtime = false;
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -252,6 +254,7 @@ impl Project {
 
             // Collect dependencies even from modules with errors (the imports are still valid)
             all_crate_deps.extend(module_result.crate_dependencies.iter().cloned());
+            any_needs_async_runtime |= module_result.needs_async_runtime;
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -292,12 +295,13 @@ impl Project {
 
         // Collect main file dependencies
         all_crate_deps.extend(result.crate_dependencies.iter().cloned());
+        any_needs_async_runtime |= result.needs_async_runtime;
 
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
 
-        // Add tokio if async runtime is needed
-        if result.needs_async_runtime {
+        // Add tokio if async runtime is needed (from any module)
+        if any_needs_async_runtime {
             cargo_builder.add_tokio_runtime();
         }
 
@@ -308,7 +312,7 @@ impl Project {
 
         // If tokio was also imported explicitly, the runtime spec takes priority
         // (add_tokio_runtime uses insert which overwrites)
-        if result.needs_async_runtime {
+        if any_needs_async_runtime {
             cargo_builder.add_tokio_runtime();
         }
 
@@ -967,6 +971,77 @@ mod tests {
         assert!(
             cargo_toml.contains("[workspace]"),
             "expected [workspace] section in Cargo.toml:\n{cargo_toml}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 029: Async lowering and tokio runtime integration — driver tests
+    // ---------------------------------------------------------------
+
+    // Test 1: Driver — async Cargo.toml includes tokio
+    #[test]
+    fn test_project_compile_async_main_cargo_toml_has_tokio() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("async-app");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"async-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src_dir.join("index.rts"),
+            r#"async function main() {
+  const data = await fetchData();
+  console.log(data);
+}
+
+async function fetchData(): string {
+  return "hello";
+}
+"#,
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, build_dir) = project.compile().unwrap();
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[dependencies]"),
+            "expected [dependencies] section in Cargo.toml:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("tokio = { version = \"1\", features = [\"full\"] }"),
+            "expected tokio dependency in Cargo.toml:\n{cargo_toml}"
+        );
+    }
+
+    // Test 2: Driver — non-async Cargo.toml does NOT include tokio
+    #[test]
+    fn test_project_compile_non_async_cargo_toml_no_tokio() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("sync-app", tmp.path()).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            !cargo_toml.contains("tokio"),
+            "expected no tokio in Cargo.toml for non-async project:\n{cargo_toml}"
+        );
+        assert!(
+            !cargo_toml.contains("[dependencies]"),
+            "expected no [dependencies] section for non-async project:\n{cargo_toml}"
         );
     }
 }
