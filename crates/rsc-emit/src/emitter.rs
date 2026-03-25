@@ -160,6 +160,12 @@ impl Emitter {
     /// Emit a struct definition.
     fn emit_struct(&mut self, s: &RustStructDef) {
         self.set_span(s.span);
+        if !s.derives.is_empty() {
+            self.write_indent();
+            self.write("#[derive(");
+            self.write(&s.derives.join(", "));
+            self.writeln(")]");
+        }
         self.write_indent();
         if s.public {
             self.write("pub struct ");
@@ -191,6 +197,12 @@ impl Emitter {
     /// Emit an enum definition.
     fn emit_enum(&mut self, e: &RustEnumDef) {
         self.set_span(e.span);
+        if !e.derives.is_empty() {
+            self.write_indent();
+            self.write("#[derive(");
+            self.write(&e.derives.join(", "));
+            self.writeln(")]");
+        }
         self.write_indent();
         if e.public {
             self.write("pub enum ");
@@ -2212,6 +2224,7 @@ fn main() {
                         span: None,
                     },
                 ],
+                derives: vec![],
                 span: None,
             })],
         };
@@ -2395,6 +2408,7 @@ fn main() {
                     ty: RustType::TypeParam("T".to_owned()),
                     span: None,
                 }],
+                derives: vec![],
                 span: None,
             })],
         };
@@ -2451,6 +2465,7 @@ fn main() {
                         span: None,
                     },
                 ],
+                derives: vec![],
                 span: None,
             })],
         };
@@ -2501,6 +2516,7 @@ fn main() {
                         span: None,
                     },
                 ],
+                derives: vec![],
                 span: None,
             })],
         };
@@ -3409,6 +3425,7 @@ fn main() {
                     ty: RustType::String,
                     span: None,
                 }],
+                derives: vec![],
                 span: None,
             })],
         };

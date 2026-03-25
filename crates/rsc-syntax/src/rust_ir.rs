@@ -98,6 +98,8 @@ pub struct RustStructDef {
     pub type_params: Vec<RustTypeParam>,
     /// The fields of the struct.
     pub fields: Vec<RustFieldDef>,
+    /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
+    pub derives: Vec<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -129,6 +131,8 @@ pub struct RustEnumDef {
     pub name: String,
     /// The variants of the enum.
     pub variants: Vec<RustEnumVariant>,
+    /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
+    pub derives: Vec<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }

@@ -650,7 +650,8 @@ async function main() {
   console.log(user.name);
 }"#;
 
-    let expected = r#"struct User {
+    let expected = r#"#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
     pub name: String,
     pub age: u32,
 }

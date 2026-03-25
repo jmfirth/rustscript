@@ -7,6 +7,7 @@
 
 mod builtins;
 mod context;
+mod derive_inference;
 pub mod error;
 mod ownership;
 mod transform;
