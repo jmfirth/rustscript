@@ -17,11 +17,43 @@ use rsc_syntax::rust_ir::RustFile;
 
 use transform::Transform;
 
+/// An external crate dependency discovered during lowering.
+///
+/// Collected when an import path references an external crate (not `"./"` local
+/// or `"std/"` standard library). The driver uses these to populate the
+/// generated `Cargo.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CrateDependency {
+    /// The crate name as it appears in `use` statements (underscored form).
+    pub name: String,
+}
+
+/// Result of lowering a single module.
+///
+/// Groups the Rust IR, diagnostics, and any external crate dependencies
+/// discovered from import statements.
+pub struct LowerResult {
+    /// The generated Rust IR.
+    pub ir: RustFile,
+    /// Diagnostics accumulated during lowering.
+    pub diagnostics: Vec<Diagnostic>,
+    /// External crate dependencies referenced by import statements.
+    /// Deduplicated by crate name.
+    pub crate_dependencies: Vec<CrateDependency>,
+}
+
 /// Lower a `RustScript` AST to Rust IR.
 ///
-/// Returns the Rust IR and any diagnostics encountered during lowering.
+/// Returns a [`LowerResult`] containing the IR, diagnostics, and any external
+/// crate dependencies discovered from import statements.
 #[must_use]
-pub fn lower(module: &ast::Module) -> (RustFile, Vec<Diagnostic>) {
+pub fn lower(module: &ast::Module) -> LowerResult {
     let mut transform = Transform::new();
-    transform.lower_module(module)
+    let (ir, diagnostics, crate_deps) = transform.lower_module(module);
+    let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
+    LowerResult {
+        ir,
+        diagnostics,
+        crate_dependencies,
+    }
 }

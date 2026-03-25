@@ -6,17 +6,6 @@
 use rsc_syntax::diagnostic::{Diagnostic, Severity};
 use rsc_syntax::source::SourceMap;
 
-/// A crate dependency discovered during compilation.
-#[derive(Debug, Clone)]
-pub struct CrateDependency {
-    /// Crate name as it appears in Cargo.toml (e.g., "tokio", "serde").
-    pub name: String,
-    /// Version requirement (e.g., "1", "0.12").
-    pub version: String,
-    /// Features to enable (e.g., `["full"]` for tokio).
-    pub features: Vec<String>,
-}
-
 /// Result of compiling a single `RustScript` source file.
 pub struct CompileResult {
     /// The generated Rust source code (empty if compilation failed).
@@ -32,7 +21,7 @@ pub struct CompileResult {
     pub needs_async_runtime: bool,
     /// External crate dependencies discovered from import statements.
     /// The driver adds these to the generated Cargo.toml.
-    pub crate_dependencies: Vec<CrateDependency>,
+    pub crate_dependencies: Vec<rsc_lower::CrateDependency>,
 }
 
 /// Compile a single `RustScript` source string to Rust source code.
@@ -62,9 +51,9 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
     }
 
     // Stage 2: Lower
-    let (ir, lower_diagnostics) = rsc_lower::lower(&module);
+    let lower_result = rsc_lower::lower(&module);
 
-    all_diagnostics.extend(lower_diagnostics);
+    all_diagnostics.extend(lower_result.diagnostics);
 
     if has_errors(&all_diagnostics) {
         return CompileResult {
@@ -78,7 +67,7 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
     }
 
     // Stage 3: Emit
-    let rust_source = rsc_emit::emit(&ir);
+    let rust_source = rsc_emit::emit(&lower_result.ir);
 
     let has_errors = has_errors(&all_diagnostics);
 
@@ -88,7 +77,7 @@ pub fn compile_source(source: &str, file_name: &str) -> CompileResult {
         source_map,
         has_errors,
         needs_async_runtime: false,
-        crate_dependencies: Vec::new(),
+        crate_dependencies: lower_result.crate_dependencies,
     }
 }
 
@@ -122,9 +111,9 @@ pub fn compile_source_with_mods(
     }
 
     // Stage 2: Lower
-    let (mut ir, lower_diagnostics) = rsc_lower::lower(&module);
+    let lower_result = rsc_lower::lower(&module);
 
-    all_diagnostics.extend(lower_diagnostics);
+    all_diagnostics.extend(lower_result.diagnostics);
 
     if has_errors(&all_diagnostics) {
         return CompileResult {
@@ -138,6 +127,7 @@ pub fn compile_source_with_mods(
     }
 
     // Inject mod declarations
+    let mut ir = lower_result.ir;
     ir.mod_decls = mod_decls;
 
     // Stage 3: Emit
@@ -151,7 +141,7 @@ pub fn compile_source_with_mods(
         source_map,
         has_errors,
         needs_async_runtime: false,
-        crate_dependencies: Vec::new(),
+        crate_dependencies: lower_result.crate_dependencies,
     }
 }
 
@@ -615,6 +605,126 @@ function process(input: Serializable & Printable): string {
             result.rust_source.contains("fn clone(&self) -> Self;"),
             "expected fn clone(&self) -> Self; in output:\n{}",
             result.rust_source
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 031: Crate consumption — correctness scenarios
+    // ---------------------------------------------------------------
+
+    // Correctness scenario 1: External crate import + std import
+    #[test]
+    fn test_compile_source_external_crate_import_and_std() {
+        let source = r#"import { HashMap } from "std/collections";
+import { Value } from "serde_json";
+
+function main() {
+  console.log("created map");
+}"#;
+        let result = compile_source(source, "crate_import.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("use std::collections::HashMap;"),
+            "expected use std::collections::HashMap in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use serde_json::Value;"),
+            "expected use serde_json::Value in output:\n{}",
+            result.rust_source
+        );
+        // serde_json should be in dependencies, std should not
+        assert_eq!(
+            result.crate_dependencies.len(),
+            1,
+            "expected 1 dependency, got: {:?}",
+            result.crate_dependencies
+        );
+        assert_eq!(result.crate_dependencies[0].name, "serde_json");
+    }
+
+    // Correctness scenario 2: Multiple crate imports
+    #[test]
+    fn test_compile_source_multiple_crate_imports() {
+        let source = r#"import { get } from "reqwest";
+import { Serialize, Deserialize } from "serde";
+
+function main() {
+  console.log("ready");
+}"#;
+        let result = compile_source(source, "multi_crate.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use reqwest::get;"),
+            "expected use reqwest::get in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use serde::Serialize;"),
+            "expected use serde::Serialize in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use serde::Deserialize;"),
+            "expected use serde::Deserialize in output:\n{}",
+            result.rust_source
+        );
+        // Both reqwest and serde as dependencies
+        assert_eq!(
+            result.crate_dependencies.len(),
+            2,
+            "expected 2 dependencies, got: {:?}",
+            result.crate_dependencies
+        );
+        let dep_names: Vec<&str> = result
+            .crate_dependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert!(dep_names.contains(&"reqwest"));
+        assert!(dep_names.contains(&"serde"));
+    }
+
+    // Correctness scenario 3: Local + external mixed (regression)
+    #[test]
+    fn test_compile_source_local_and_external_imports_mixed() {
+        let source = r#"import { helper } from "./utils";
+import { Value } from "serde_json";
+
+function main() {
+  console.log("mixed");
+}"#;
+        let result = compile_source(source, "mixed_imports.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use crate::utils::helper;"),
+            "expected use crate::utils::helper in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains("use serde_json::Value;"),
+            "expected use serde_json::Value in output:\n{}",
+            result.rust_source
+        );
+        assert_eq!(
+            result.crate_dependencies.len(),
+            1,
+            "expected 1 dependency (serde_json only), got: {:?}",
+            result.crate_dependencies
         );
     }
 }
