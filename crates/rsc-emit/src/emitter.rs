@@ -894,12 +894,24 @@ impl Emitter {
                 self.emit_expr(inner);
                 self.write(")");
             }
-            RustExprKind::ClosureCall { body, return_type } => {
-                self.write("(|| -> ");
+            RustExprKind::ClosureCall {
+                is_async,
+                body,
+                return_type,
+            } => {
+                if *is_async {
+                    self.write("(async || -> ");
+                } else {
+                    self.write("(|| -> ");
+                }
                 self.write(&return_type.to_string());
                 self.write(" ");
                 self.emit_block(body);
-                self.write(")()");
+                if *is_async {
+                    self.write(")().await");
+                } else {
+                    self.write(")()");
+                }
             }
             RustExprKind::OptionMap {
                 expr,
@@ -1031,11 +1043,21 @@ impl Emitter {
                 self.emit_expr(body);
                 self.write(")");
             }
+            IteratorOp::MapFnRef(fn_expr) => {
+                self.write(".map(");
+                self.emit_expr(fn_expr);
+                self.write(")");
+            }
             IteratorOp::Filter(param, body) => {
                 self.write(".filter(|");
                 self.write(&param.name);
                 self.write("| ");
                 self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorOp::FilterFnRef(fn_expr) => {
+                self.write(".filter(");
+                self.emit_expr(fn_expr);
                 self.write(")");
             }
             IteratorOp::Cloned => {

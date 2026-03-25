@@ -512,23 +512,31 @@ fn extract_closure_ref(arg: &RustExpr) -> Option<(RustClosureParam, RustExpr)> {
 ///
 /// `arr.map(x => x * 2)` → `arr.iter().map(|x| x * 2).collect::<Vec<_>>()`
 fn lower_array_map(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
-    let (param, body) = args
-        .into_iter()
-        .next()
-        .and_then(extract_closure_owned)
-        .unwrap_or_else(|| {
-            (
-                RustClosureParam {
-                    name: "_".into(),
-                    ty: None,
-                },
-                RustExpr::synthetic(RustExprKind::Ident("_".into())),
-            )
-        });
+    let mut arg_iter = args.into_iter();
+    let first_arg = arg_iter.next();
+
+    // Try to extract as closure; if not, treat as function reference
+    let ops = if let Some(arg) = first_arg {
+        if let Some((param, body)) = extract_closure_owned(arg.clone()) {
+            vec![IteratorOp::Map(param, Box::new(body))]
+        } else {
+            // Function reference: `.map(fn_name)`
+            vec![IteratorOp::MapFnRef(Box::new(arg))]
+        }
+    } else {
+        vec![IteratorOp::Map(
+            RustClosureParam {
+                name: "_".into(),
+                ty: None,
+            },
+            Box::new(RustExpr::synthetic(RustExprKind::Ident("_".into()))),
+        )]
+    };
+
     RustExpr::new(
         RustExprKind::IteratorChain {
             source: Box::new(receiver),
-            ops: vec![IteratorOp::Map(param, Box::new(body))],
+            ops,
             terminal: IteratorTerminal::CollectVec,
         },
         span,
@@ -539,26 +547,32 @@ fn lower_array_map(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustE
 ///
 /// `arr.filter(x => x > 0)` → `arr.iter().filter(|x| *x > 0).cloned().collect::<Vec<_>>()`
 fn lower_array_filter(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
-    let (param, body) = args
-        .into_iter()
-        .next()
-        .and_then(extract_closure_owned)
-        .unwrap_or_else(|| {
-            (
-                RustClosureParam {
-                    name: "_".into(),
-                    ty: None,
-                },
-                RustExpr::synthetic(RustExprKind::BoolLit(true)),
-            )
-        });
+    let mut arg_iter = args.into_iter();
+    let first_arg = arg_iter.next();
+
+    // Try to extract as closure; if not, treat as function reference
+    let mut ops = if let Some(arg) = first_arg {
+        if let Some((param, body)) = extract_closure_owned(arg.clone()) {
+            vec![IteratorOp::Filter(param, Box::new(body))]
+        } else {
+            // Function reference: `.filter(fn_name)`
+            vec![IteratorOp::FilterFnRef(Box::new(arg))]
+        }
+    } else {
+        vec![IteratorOp::Filter(
+            RustClosureParam {
+                name: "_".into(),
+                ty: None,
+            },
+            Box::new(RustExpr::synthetic(RustExprKind::BoolLit(true))),
+        )]
+    };
+    ops.push(IteratorOp::Cloned);
+
     RustExpr::new(
         RustExprKind::IteratorChain {
             source: Box::new(receiver),
-            ops: vec![
-                IteratorOp::Filter(param, Box::new(body)),
-                IteratorOp::Cloned,
-            ],
+            ops,
             terminal: IteratorTerminal::CollectVec,
         },
         span,
@@ -755,8 +769,13 @@ pub(crate) fn merge_into_chain(
         // Build the outer operation as the new terminal.
         match outer_method {
             "map" => {
-                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
-                ops.push(IteratorOp::Map(param, Box::new(body)));
+                if let Some((param, body)) = outer_args.first().and_then(extract_closure_ref) {
+                    ops.push(IteratorOp::Map(param, Box::new(body)));
+                } else if let Some(fn_ref) = outer_args.first() {
+                    ops.push(IteratorOp::MapFnRef(Box::new(fn_ref.clone())));
+                } else {
+                    return None;
+                }
                 Some(RustExpr::new(
                     RustExprKind::IteratorChain {
                         source,
@@ -772,8 +791,13 @@ pub(crate) fn merge_into_chain(
                 if matches!(ops.last(), Some(IteratorOp::Cloned)) {
                     ops.pop();
                 }
-                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
-                ops.push(IteratorOp::Filter(param, Box::new(body)));
+                if let Some((param, body)) = outer_args.first().and_then(extract_closure_ref) {
+                    ops.push(IteratorOp::Filter(param, Box::new(body)));
+                } else if let Some(fn_ref) = outer_args.first() {
+                    ops.push(IteratorOp::FilterFnRef(Box::new(fn_ref.clone())));
+                } else {
+                    return None;
+                }
                 ops.push(IteratorOp::Cloned);
                 Some(RustExpr::new(
                     RustExprKind::IteratorChain {

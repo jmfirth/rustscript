@@ -396,6 +396,9 @@ pub enum TypeKind {
     /// Used for trait bounds in function parameters.
     /// Lowers to generic type parameters with multiple bounds: `T: A + B`.
     Intersection(Vec<TypeAnnotation>),
+    /// An inferred type — the type annotation was omitted.
+    /// Only valid in closure parameters (e.g., `(n) => n * 2`).
+    Inferred,
 }
 
 /// An identifier with its source span.

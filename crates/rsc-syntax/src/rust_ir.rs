@@ -799,7 +799,10 @@ pub enum RustExprKind {
     Err(Box<RustExpr>),
     /// An immediately-invoked closure: `(|| -> ReturnType { body })()`.
     /// Used for lowering multi-statement `try` blocks.
+    /// When `is_async` is true, emits `(async || -> ReturnType { body })().await`.
     ClosureCall {
+        /// Whether this is an async closure (needed when body contains `.await`).
+        is_async: bool,
         /// The closure body.
         body: RustBlock,
         /// The return type of the closure.
@@ -888,8 +891,12 @@ pub enum RustExprKind {
 pub enum IteratorOp {
     /// `.map(|param| body)` — transform each element.
     Map(RustClosureParam, Box<RustExpr>),
+    /// `.map(fn_ref)` — transform using a function reference.
+    MapFnRef(Box<RustExpr>),
     /// `.filter(|param| body)` — keep elements matching predicate.
     Filter(RustClosureParam, Box<RustExpr>),
+    /// `.filter(fn_ref)` — filter using a function reference.
+    FilterFnRef(Box<RustExpr>),
     /// `.cloned()` — clone referenced elements to produce owned values.
     Cloned,
 }
