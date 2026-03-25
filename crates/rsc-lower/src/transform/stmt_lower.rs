@@ -91,6 +91,7 @@ impl Transform {
             }
             ast::Stmt::Break(brk) => RustStmt::Break(Some(brk.span)),
             ast::Stmt::Continue(cont) => RustStmt::Continue(Some(cont.span)),
+            ast::Stmt::RustBlock(rb) => RustStmt::RawRust(rb.code.clone()),
         }
     }
 

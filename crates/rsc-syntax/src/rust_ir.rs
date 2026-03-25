@@ -70,6 +70,8 @@ pub enum RustItem {
     Impl(RustImplBlock),
     /// A trait impl block: `impl TraitName for TypeName { ... }`.
     TraitImpl(RustTraitImplBlock),
+    /// A raw Rust code block at the top level. The contents are emitted verbatim.
+    RawRust(String),
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
@@ -459,6 +461,8 @@ pub enum RustStmt {
     Break(Option<Span>),
     /// A `continue;` statement.
     Continue(Option<Span>),
+    /// A raw Rust code block in a function body. The contents are emitted verbatim.
+    RawRust(String),
 }
 
 /// A Rust `let` binding.

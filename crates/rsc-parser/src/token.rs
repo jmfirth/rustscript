@@ -100,6 +100,8 @@ pub(crate) enum TokenKind {
     Async,
     /// `await`
     Await,
+    /// `rust` (introduces an inline Rust block)
+    Rust,
 
     // Operators
     /// `+`

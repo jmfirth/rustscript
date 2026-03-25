@@ -27,7 +27,7 @@ pub fn parse(source: &str, file_id: FileId) -> (ast::Module, Vec<Diagnostic>) {
     let lexer = Lexer::new(source, file_id);
     let (tokens, lexer_diagnostics) = lexer.tokenize();
 
-    let mut parser = Parser::new(tokens, file_id);
+    let mut parser = Parser::new(tokens, file_id, source);
     let module = parser.parse_module();
     let mut diagnostics = lexer_diagnostics;
     diagnostics.extend(parser.into_diagnostics());

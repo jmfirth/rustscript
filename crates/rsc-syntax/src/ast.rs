@@ -65,6 +65,9 @@ pub enum ItemKind {
     /// A class definition (`class Name { fields; constructor() { }; methods() { } }`).
     /// Lowers to a Rust `struct` + `impl` block.
     Class(ClassDef),
+    /// A raw Rust code block at module level (`rust { ... }`).
+    /// The contents are passed through to the generated `.rs` file unchanged.
+    RustBlock(InlineRustBlock),
 }
 
 /// An import declaration: `import { User, Post } from "./models"`.
@@ -458,6 +461,9 @@ pub enum Stmt {
     Break(BreakStmt),
     /// A `continue;` statement.
     Continue(ContinueStmt),
+    /// A raw Rust code block in a function body (`rust { ... }`).
+    /// The contents are passed through to the generated `.rs` file unchanged.
+    RustBlock(InlineRustBlock),
 }
 
 /// A variable declaration with an initializer.
@@ -646,6 +652,19 @@ pub struct BreakStmt {
 #[derive(Debug, Clone)]
 pub struct ContinueStmt {
     /// The span covering the `continue;` keyword and semicolon.
+    pub span: Span,
+}
+
+/// A raw Rust code block that passes through to the generated `.rs` file unchanged.
+///
+/// Syntax: `rust { <raw rust code> }`
+/// The contents are not parsed as `RustScript` — they are preserved as-is.
+/// Appears both as a statement in function bodies and as a top-level item.
+#[derive(Debug, Clone)]
+pub struct InlineRustBlock {
+    /// The raw Rust source code inside the block (excluding the outer braces).
+    pub code: String,
+    /// The span covering the entire `rust { ... }` block.
     pub span: Span,
 }
 

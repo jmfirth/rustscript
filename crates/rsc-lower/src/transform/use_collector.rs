@@ -80,6 +80,9 @@ fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_ha
                 scan_method_for_collections(method, needs_hashmap, needs_hashset);
             }
         }
+        RustItem::RawRust(_) => {
+            // Raw Rust is opaque — we don't scan it for collection usage.
+        }
     }
 }
 
@@ -215,7 +218,7 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
         RustStmt::TupleDestructure(td) => {
             scan_expr_for_collections(&td.init, needs_hashmap, needs_hashset);
         }
-        RustStmt::Break(_) | RustStmt::Continue(_) => {}
+        RustStmt::Break(_) | RustStmt::Continue(_) | RustStmt::RawRust(_) => {}
     }
 }
 

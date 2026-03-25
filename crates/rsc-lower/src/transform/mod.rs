@@ -91,7 +91,8 @@ impl Transform {
                 ast::ItemKind::Class(cls) => self.register_class_def(cls, &mut ctx),
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
-                | ast::ItemKind::ReExport(_) => {}
+                | ast::ItemKind::ReExport(_)
+                | ast::ItemKind::RustBlock(_) => {}
             }
         }
 
@@ -156,6 +157,9 @@ impl Transform {
                         &mut import_uses,
                         &mut crate_deps,
                     );
+                }
+                ast::ItemKind::RustBlock(rb) => {
+                    items.push(RustItem::RawRust(rb.code.clone()));
                 }
             }
         }
