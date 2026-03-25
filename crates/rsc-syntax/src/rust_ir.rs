@@ -235,11 +235,25 @@ pub enum RustSelfParam {
     RefMut,
 }
 
+/// A Rust attribute: `#[name]` or `#[name(args)]`.
+///
+/// Used for outer attributes on function declarations, such as `#[tokio::main]`.
+#[derive(Debug, Clone)]
+pub struct RustAttribute {
+    /// The attribute path (e.g., `"tokio::main"`).
+    pub path: String,
+    /// Optional parenthesized arguments (e.g., `"flavor = \"current_thread\""` for
+    /// `#[tokio::main(flavor = "current_thread")]`).
+    pub args: Option<String>,
+}
+
 /// A Rust function declaration.
 ///
 /// Produced by lowering a `RustScript` [`FnDecl`](crate::ast::FnDecl).
 #[derive(Debug, Clone)]
 pub struct RustFnDecl {
+    /// Outer attributes on the function (e.g., `#[tokio::main]`).
+    pub attributes: Vec<RustAttribute>,
     /// Whether this is an `async fn`.
     pub is_async: bool,
     /// Whether this function is `pub` (exported from the module).
@@ -956,6 +970,7 @@ mod tests {
     #[test]
     fn test_rust_fn_decl_complete_construction() {
         let decl = RustFnDecl {
+            attributes: vec![],
             is_async: false,
             public: false,
             name: "add".to_owned(),

@@ -30,8 +30,8 @@ pub struct CrateDependency {
 
 /// Result of lowering a single module.
 ///
-/// Groups the Rust IR, diagnostics, and any external crate dependencies
-/// discovered from import statements.
+/// Groups the Rust IR, diagnostics, external crate dependencies, and
+/// whether the module needs an async runtime.
 pub struct LowerResult {
     /// The generated Rust IR.
     pub ir: RustFile,
@@ -40,6 +40,8 @@ pub struct LowerResult {
     /// External crate dependencies referenced by import statements.
     /// Deduplicated by crate name.
     pub crate_dependencies: Vec<CrateDependency>,
+    /// Whether the source contains async functions that need a tokio runtime.
+    pub needs_async_runtime: bool,
 }
 
 /// Lower a `RustScript` AST to Rust IR.
@@ -49,11 +51,12 @@ pub struct LowerResult {
 #[must_use]
 pub fn lower(module: &ast::Module) -> LowerResult {
     let mut transform = Transform::new();
-    let (ir, diagnostics, crate_deps) = transform.lower_module(module);
+    let (ir, diagnostics, crate_deps, needs_async_runtime) = transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {
         ir,
         diagnostics,
         crate_dependencies,
+        needs_async_runtime,
     }
 }

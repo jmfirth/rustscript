@@ -366,6 +366,18 @@ impl Emitter {
 
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
+        // Emit attributes before the function declaration
+        for attr in &f.attributes {
+            self.write_indent();
+            self.write("#[");
+            self.write(&attr.path);
+            if let Some(ref args) = attr.args {
+                self.write("(");
+                self.write(args);
+                self.write(")");
+            }
+            self.writeln("]");
+        }
         self.write_indent();
         if f.public && f.is_async {
             self.write("pub async fn ");
@@ -1004,6 +1016,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: name.to_owned(),
@@ -1034,6 +1047,7 @@ mod tests {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "add".to_owned(),
@@ -1479,6 +1493,7 @@ fn main() {
             mod_decls: vec![],
             items: vec![
                 RustItem::Function(RustFnDecl {
+                    attributes: vec![],
                     is_async: false,
                     public: false,
                     name: "foo".to_owned(),
@@ -1492,6 +1507,7 @@ fn main() {
                     span: None,
                 }),
                 RustItem::Function(RustFnDecl {
+                    attributes: vec![],
                     is_async: false,
                     public: false,
                     name: "bar".to_owned(),
@@ -1518,6 +1534,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "answer".to_owned(),
@@ -1553,6 +1570,7 @@ fn answer() -> i32 {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "fibonacci".to_owned(),
@@ -1745,6 +1763,7 @@ fn complex() {
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "main".to_owned(),
@@ -1786,6 +1805,7 @@ fn main() {
                 },
             ],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "main".to_owned(),
@@ -1817,6 +1837,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "main".to_owned(),
@@ -1999,6 +2020,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "id".to_owned(),
@@ -2033,6 +2055,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "merge".to_owned(),
@@ -2214,6 +2237,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "test".to_owned(),
@@ -2265,6 +2289,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "area".to_owned(),
@@ -2405,6 +2430,7 @@ fn main() {
             }],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "main".to_owned(),
@@ -2434,6 +2460,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "find".to_owned(),
@@ -2528,6 +2555,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "fetch".to_owned(),
@@ -2762,6 +2790,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "apply".to_owned(),
@@ -2831,6 +2860,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "process".to_owned(),
@@ -2948,6 +2978,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: true,
                 name: "greet".to_owned(),
@@ -2975,6 +3006,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "helper".to_owned(),
@@ -3205,6 +3237,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: false,
                 public: false,
                 name: "test".to_owned(),
@@ -3266,6 +3299,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: true,
                 public: false,
                 name: "foo".to_owned(),
@@ -3395,6 +3429,7 @@ fn main() {
             uses: vec![],
             mod_decls: vec![],
             items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
                 is_async: true,
                 public: true,
                 name: "handler".to_owned(),
@@ -3452,6 +3487,119 @@ fn main() {
         assert!(
             output.contains("v.push(1)"),
             "expected `v.push(1)` in output:\n{output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 029: Async lowering and tokio runtime integration — emitter tests
+    // ---------------------------------------------------------------
+
+    // Test 7: Emitter — #[tokio::main] is emitted above async fn main()
+    #[test]
+    fn test_emit_tokio_main_attribute_on_async_main() {
+        use rsc_syntax::rust_ir::RustAttribute;
+
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![RustAttribute {
+                    path: "tokio::main".to_owned(),
+                    args: None,
+                }],
+                is_async: true,
+                public: false,
+                name: "main".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("#[tokio::main]"),
+            "expected #[tokio::main] in output:\n{output}"
+        );
+        assert!(
+            output.contains("async fn main()"),
+            "expected async fn main() in output:\n{output}"
+        );
+        // Verify attribute is on the line BEFORE the function
+        let attr_pos = output.find("#[tokio::main]").unwrap();
+        let fn_pos = output.find("async fn main()").unwrap();
+        assert!(
+            attr_pos < fn_pos,
+            "expected #[tokio::main] before async fn main()"
+        );
+    }
+
+    // Test 8: Emitter — no attribute on non-main async fn
+    #[test]
+    fn test_emit_no_attribute_on_non_main_async_fn() {
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
+                is_async: true,
+                public: false,
+                name: "fetch_data".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: Some(RustType::String),
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            !output.contains("#["),
+            "expected no attributes on non-main async fn:\n{output}"
+        );
+        assert!(
+            output.contains("async fn fetch_data()"),
+            "expected async fn fetch_data() in output:\n{output}"
+        );
+    }
+
+    // Test: Emitter — attribute with args emits correctly
+    #[test]
+    fn test_emit_attribute_with_args() {
+        use rsc_syntax::rust_ir::RustAttribute;
+
+        let file = RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![RustAttribute {
+                    path: "tokio::main".to_owned(),
+                    args: Some("flavor = \"current_thread\"".to_owned()),
+                }],
+                is_async: true,
+                public: false,
+                name: "main".to_owned(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+                span: None,
+            })],
+        };
+        let output = emit(&file);
+        assert!(
+            output.contains("#[tokio::main(flavor = \"current_thread\")]"),
+            "expected attribute with args in output:\n{output}"
         );
     }
 }
