@@ -10,6 +10,7 @@ use rsc_syntax::rust_ir::{
 };
 
 use crate::context::LoweringContext;
+use crate::derive_inference;
 use crate::ownership::{self, UseMap};
 
 use super::{Transform, collect_generic_param_names, lower_type_params};
@@ -83,11 +84,15 @@ impl Transform {
             })
             .collect();
 
+        let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
+        let has_type_params = !type_params.is_empty();
+        let derives = derive_inference::infer_struct_derives(&field_types, has_type_params);
         items.push(RustItem::Struct(RustStructDef {
             public: exported,
             name: cls.name.name.clone(),
             type_params: type_params.clone(),
             fields,
+            derives,
             span: Some(cls.span),
         }));
 

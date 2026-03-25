@@ -25,6 +25,7 @@ use rsc_syntax::rust_ir::{
 use crate::CrateDependency;
 use crate::builtins::BuiltinRegistry;
 use crate::context::LoweringContext;
+use crate::derive_inference;
 use crate::ownership::{self, UseMap};
 use rsc_typeck::registry::TypeRegistry;
 use rsc_typeck::resolve;
@@ -215,7 +216,7 @@ impl Transform {
         let mut diags = Vec::new();
         let generic_names = collect_generic_param_names(td.type_params.as_ref());
         let type_params = lower_type_params(td.type_params.as_ref());
-        let fields = td
+        let fields: Vec<RustFieldDef> = td
             .fields
             .iter()
             .map(|f| {
@@ -237,11 +238,15 @@ impl Transform {
         for d in diags {
             ctx.emit_diagnostic(d);
         }
+        let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
+        let has_type_params = !type_params.is_empty();
+        let derives = derive_inference::infer_struct_derives(&field_types, has_type_params);
         RustStructDef {
             public: false,
             name: td.name.name.clone(),
             type_params,
             fields,
+            derives,
             span: Some(td.span),
         }
     }
@@ -420,7 +425,7 @@ impl Transform {
     /// Lower an enum definition to a Rust enum.
     fn lower_enum_def(&self, ed: &ast::EnumDef, ctx: &mut LoweringContext) -> RustEnumDef {
         let mut diags = Vec::new();
-        let variants = ed
+        let variants: Vec<RustEnumVariant> = ed
             .variants
             .iter()
             .map(|v| match v {
@@ -461,10 +466,12 @@ impl Transform {
         for d in diags {
             ctx.emit_diagnostic(d);
         }
+        let derives = derive_inference::infer_enum_derives(&variants);
         RustEnumDef {
             public: false,
             name: ed.name.name.clone(),
             variants,
+            derives,
             span: Some(ed.span),
         }
     }

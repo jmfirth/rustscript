@@ -572,6 +572,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq)]
 struct Point {
     pub x: f64,
     pub y: f64,
@@ -603,6 +604,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct User {
     pub name: String,
     pub age: u32,
@@ -635,10 +637,12 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Address {
     pub city: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Person {
     pub name: String,
     pub address: Address,
@@ -731,6 +735,7 @@ fn test_snapshot_simple_enum_definition() {
     let source = r#"type Direction = "north" | "south" | "east" | "west""#;
 
     let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Direction {
     North,
     South,
@@ -763,6 +768,7 @@ function opposite(dir: Direction): Direction {
 "#;
 
     let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Direction {
     North,
     South,
@@ -805,6 +811,7 @@ type Shape =
 "#;
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Circle {
         pub radius: f64,
@@ -838,6 +845,7 @@ function area(shape: Shape): f64 {
 "#;
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Circle {
         pub radius: f64,
@@ -879,6 +887,7 @@ function main() {
 "#;
 
     let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Direction {
     North,
     South,
@@ -1222,6 +1231,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Counter {
     count: i32,
 }
@@ -1393,6 +1403,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone)]
 struct Pair<T> {
     pub first: T,
     pub second: T,
@@ -1653,6 +1664,7 @@ function main() {
 }"#;
 
     let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Direction {
     North,
     South,
@@ -1698,6 +1710,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Person {
     pub name: String,
     pub age: u32,
@@ -1795,6 +1808,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Counter {
     count: i32,
 }
@@ -1928,6 +1942,7 @@ trait Greetable {
     fn greet(&self) -> String;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Person {
     pub name: String,
 }
@@ -1971,6 +1986,7 @@ function main() {
 }";
 
     let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Point {
     pub x: i32,
     pub y: i32,
