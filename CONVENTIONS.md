@@ -81,6 +81,7 @@ These are two fundamentally different things. Never conflate them.
 | `codespan-reporting` | Diagnostic rendering with source spans | Diagnostic infrastructure |
 | `tempfile` | Test temp files | dev-dependency |
 | `insta` | Snapshot testing | dev-dependency |
+| `regex` | Error translation (rustc → RustScript type names) | `rsc-driver` |
 
 Parser/lexer crate selection (e.g., `logos`, `winnow`, `chumsky`, or hand-written) is a Phase 0 design decision. The choice will be added to this table when made.
 
