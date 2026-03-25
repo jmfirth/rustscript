@@ -3,10 +3,11 @@
 //! Walks the Rust IR tree and produces formatted `.rs` source text.
 
 use rsc_syntax::rust_ir::{
-    RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile,
-    RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt,
-    RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
-    RustStructDef, RustTraitDef, RustTraitImplBlock, RustType, RustTypeParam,
+    IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustElse, RustEnumDef, RustExpr,
+    RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock,
+    RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern,
+    RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock, RustType,
+    RustTypeParam,
 };
 
 /// Walks Rust IR and builds a formatted `.rs` source string.
@@ -971,6 +972,94 @@ impl Emitter {
                 self.write(" = ");
                 self.emit_expr(value);
             }
+            RustExprKind::IteratorChain {
+                source,
+                ops,
+                terminal,
+            } => {
+                self.emit_expr(source);
+                self.write(".iter()");
+                for op in ops {
+                    self.emit_iterator_op(op);
+                }
+                self.emit_iterator_terminal(terminal);
+            }
+        }
+    }
+
+    /// Emit a single intermediate iterator operation.
+    fn emit_iterator_op(&mut self, op: &IteratorOp) {
+        match op {
+            IteratorOp::Map(param, body) => {
+                self.write(".map(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorOp::Filter(param, body) => {
+                self.write(".filter(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorOp::Cloned => {
+                self.write(".cloned()");
+            }
+        }
+    }
+
+    /// Emit the terminal operation of an iterator chain.
+    fn emit_iterator_terminal(&mut self, terminal: &IteratorTerminal) {
+        match terminal {
+            IteratorTerminal::CollectVec => {
+                self.write(".collect::<Vec<_>>()");
+            }
+            IteratorTerminal::Fold {
+                init,
+                acc_param,
+                item_param,
+                body,
+            } => {
+                self.write(".fold(");
+                self.emit_expr(init);
+                self.write(", |");
+                self.write(acc_param);
+                self.write(", ");
+                self.write(item_param);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorTerminal::Find(param, body) => {
+                self.write(".find(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(").cloned()");
+            }
+            IteratorTerminal::Any(param, body) => {
+                self.write(".any(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorTerminal::All(param, body) => {
+                self.write(".all(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
+            IteratorTerminal::ForEach(param, body) => {
+                self.write(".for_each(|");
+                self.write(&param.name);
+                self.write("| ");
+                self.emit_expr(body);
+                self.write(")");
+            }
         }
     }
 }
@@ -985,12 +1074,13 @@ pub fn emit(file: &RustFile) -> String {
 #[cfg(test)]
 mod tests {
     use rsc_syntax::rust_ir::{
-        RustBinaryOp, RustBlock, RustClosureBody, RustDestructureStmt, RustElse, RustEnumDef,
-        RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt,
-        RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm,
-        RustMatchResultStmt, RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern,
-        RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
-        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+        IteratorOp, IteratorTerminal, RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam,
+        RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
+        RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
+        RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
+        RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt, RustSelfParam, RustStmt,
+        RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam,
+        RustUnaryOp, RustUseDecl, RustWhileStmt,
     };
 
     use super::emit;
@@ -3601,5 +3691,211 @@ fn main() {
             output.contains("#[tokio::main(flavor = \"current_thread\")]"),
             "expected attribute with args in output:\n{output}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 033: Iterator chain emission tests
+    // ---------------------------------------------------------------
+
+    // Test 12: emit IteratorChain with map and collect
+    #[test]
+    fn test_emit_iterator_chain_map_collect() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("arr")),
+            ops: vec![IteratorOp::Map(
+                RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                },
+                Box::new(syn(RustExprKind::Binary {
+                    op: RustBinaryOp::Mul,
+                    left: Box::new(ident("x")),
+                    right: Box::new(syn(RustExprKind::IntLit(2))),
+                })),
+            )],
+            terminal: IteratorTerminal::CollectVec,
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("arr.iter().map(|x| x * 2).collect::<Vec<_>>()"),
+            "expected iterator chain with map and collect in output:\n{output}"
+        );
+    }
+
+    // Test 13: emit IteratorChain with fold (correct argument order)
+    #[test]
+    fn test_emit_iterator_chain_fold() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("arr")),
+            ops: vec![],
+            terminal: IteratorTerminal::Fold {
+                init: Box::new(syn(RustExprKind::IntLit(0))),
+                acc_param: "acc".into(),
+                item_param: "x".into(),
+                body: Box::new(syn(RustExprKind::Binary {
+                    op: RustBinaryOp::Add,
+                    left: Box::new(ident("acc")),
+                    right: Box::new(ident("x")),
+                })),
+            },
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("arr.iter().fold(0, |acc, x| acc + x)"),
+            "expected fold with correct argument order in output:\n{output}"
+        );
+    }
+
+    // Test: emit filter with cloned
+    #[test]
+    fn test_emit_iterator_chain_filter_cloned_collect() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("items")),
+            ops: vec![
+                IteratorOp::Filter(
+                    RustClosureParam {
+                        name: "x".into(),
+                        ty: None,
+                    },
+                    Box::new(syn(RustExprKind::Binary {
+                        op: RustBinaryOp::Gt,
+                        left: Box::new(ident("x")),
+                        right: Box::new(syn(RustExprKind::IntLit(0))),
+                    })),
+                ),
+                IteratorOp::Cloned,
+            ],
+            terminal: IteratorTerminal::CollectVec,
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("items.iter().filter(|x| x > 0).cloned().collect::<Vec<_>>()"),
+            "expected filter with cloned and collect in output:\n{output}"
+        );
+    }
+
+    // Test: emit find with cloned
+    #[test]
+    fn test_emit_iterator_chain_find() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("items")),
+            ops: vec![],
+            terminal: IteratorTerminal::Find(
+                RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                },
+                Box::new(syn(RustExprKind::Binary {
+                    op: RustBinaryOp::Gt,
+                    left: Box::new(ident("x")),
+                    right: Box::new(syn(RustExprKind::IntLit(3))),
+                })),
+            ),
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("items.iter().find(|x| x > 3).cloned()"),
+            "expected find with cloned in output:\n{output}"
+        );
+    }
+
+    // Test: emit any (from some)
+    #[test]
+    fn test_emit_iterator_chain_any() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("items")),
+            ops: vec![],
+            terminal: IteratorTerminal::Any(
+                RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                },
+                Box::new(syn(RustExprKind::Binary {
+                    op: RustBinaryOp::Gt,
+                    left: Box::new(ident("x")),
+                    right: Box::new(syn(RustExprKind::IntLit(5))),
+                })),
+            ),
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("items.iter().any(|x| x > 5)"),
+            "expected any in output:\n{output}"
+        );
+    }
+
+    // Test: emit all (from every)
+    #[test]
+    fn test_emit_iterator_chain_all() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("items")),
+            ops: vec![],
+            terminal: IteratorTerminal::All(
+                RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                },
+                Box::new(syn(RustExprKind::Binary {
+                    op: RustBinaryOp::Gt,
+                    left: Box::new(ident("x")),
+                    right: Box::new(syn(RustExprKind::IntLit(0))),
+                })),
+            ),
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("items.iter().all(|x| x > 0)"),
+            "expected all in output:\n{output}"
+        );
+    }
+
+    // Test: emit for_each
+    #[test]
+    fn test_emit_iterator_chain_for_each() {
+        let chain = syn(RustExprKind::IteratorChain {
+            source: Box::new(ident("items")),
+            ops: vec![],
+            terminal: IteratorTerminal::ForEach(
+                RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                },
+                Box::new(syn(RustExprKind::Ident("x".into()))),
+            ),
+        });
+        let file = wrap_expr_in_file(chain);
+        let output = emit(&file);
+        assert!(
+            output.contains("items.iter().for_each(|x| x)"),
+            "expected for_each in output:\n{output}"
+        );
+    }
+
+    /// Helper to wrap an expression in a minimal RustFile for emission testing.
+    fn wrap_expr_in_file(expr: RustExpr) -> RustFile {
+        RustFile {
+            uses: vec![],
+            mod_decls: vec![],
+            items: vec![RustItem::Function(RustFnDecl {
+                attributes: vec![],
+                is_async: false,
+                public: false,
+                name: "test".into(),
+                type_params: vec![],
+                params: vec![],
+                return_type: None,
+                body: RustBlock {
+                    stmts: vec![RustStmt::Semi(expr)],
+                    expr: None,
+                },
+                span: None,
+            })],
+        }
     }
 }
