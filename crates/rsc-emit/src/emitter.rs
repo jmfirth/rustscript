@@ -1161,6 +1161,11 @@ impl Emitter {
                 }
                 self.emit_iterator_terminal(terminal);
             }
+            RustExprKind::ArcMutexNew(inner) => {
+                self.write("Arc::new(Mutex::new(");
+                self.emit_expr(inner);
+                self.write("))");
+            }
         }
     }
 

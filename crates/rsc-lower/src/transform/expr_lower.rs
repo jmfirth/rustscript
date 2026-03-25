@@ -356,6 +356,10 @@ impl Transform {
                     )
                 }
             }
+            ast::ExprKind::Shared(inner) => {
+                let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
+                RustExpr::new(RustExprKind::ArcMutexNew(Box::new(lowered)), expr.span)
+            }
         }
     }
 
@@ -538,6 +542,35 @@ impl Transform {
             if let Some(lowering_fn) = self.builtins.lookup_collection_method(&mc.method.name) {
                 return lowering_fn(receiver, lowered_args, span);
             }
+        }
+
+        // Check for `.lock()` on shared<T> (Arc<Mutex<T>>) — auto-unwrap
+        if mc.method.name == "lock"
+            && mc.args.is_empty()
+            && let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+            && matches!(var_info.ty, rsc_syntax::rust_ir::RustType::ArcMutex(_))
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            // .lock() → .lock().unwrap()
+            let lock_call = RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(receiver),
+                    method: "lock".to_owned(),
+                    type_args: vec![],
+                    args: vec![],
+                },
+                span,
+            );
+            return RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(lock_call),
+                    method: "unwrap".to_owned(),
+                    type_args: vec![],
+                    args: vec![],
+                },
+                span,
+            );
         }
 
         // Not a builtin — lower as a regular method call

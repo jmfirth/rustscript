@@ -33,6 +33,7 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             Box::new(type_to_rust_type(ok)),
             Box::new(type_to_rust_type(err)),
         ),
+        Type::ArcMutex(inner) => RustType::ArcMutex(Box::new(type_to_rust_type(inner))),
         Type::Unit | Type::Error => RustType::Unit,
     }
 }
@@ -176,6 +177,24 @@ mod tests {
         assert_eq!(
             type_to_rust_type(&Type::Function(vec![], Box::new(Type::Unit))),
             RustType::ImplFn(vec![], Box::new(RustType::Unit))
+        );
+    }
+
+    #[test]
+    fn test_bridge_arc_mutex_type_produces_arc_mutex() {
+        assert_eq!(
+            type_to_rust_type(&Type::ArcMutex(Box::new(Type::Primitive(
+                PrimitiveType::I32
+            )))),
+            RustType::ArcMutex(Box::new(RustType::I32))
+        );
+    }
+
+    #[test]
+    fn test_bridge_arc_mutex_string_produces_arc_mutex_string() {
+        assert_eq!(
+            type_to_rust_type(&Type::ArcMutex(Box::new(Type::String))),
+            RustType::ArcMutex(Box::new(RustType::String))
         );
     }
 }

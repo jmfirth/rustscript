@@ -8,14 +8,16 @@ use rsc_syntax::rust_ir::{
     RustType, RustUseDecl,
 };
 
-/// Scan generated items for usage of `HashMap` or `HashSet` types and produce
-/// the corresponding `use std::collections::...` declarations.
+/// Scan generated items for usage of `HashMap`, `HashSet`, `Arc`, and `Mutex`
+/// types and produce the corresponding `use` declarations.
 pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     let mut needs_hashmap = false;
     let mut needs_hashset = false;
+    let mut needs_arc_mutex = false;
 
     for item in items {
         scan_item_for_collections(item, &mut needs_hashmap, &mut needs_hashset);
+        scan_item_for_arc_mutex(item, &mut needs_arc_mutex);
     }
 
     let mut uses = Vec::new();
@@ -29,6 +31,18 @@ pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     if needs_hashset {
         uses.push(RustUseDecl {
             path: "std::collections::HashSet".to_owned(),
+            public: false,
+            span: None,
+        });
+    }
+    if needs_arc_mutex {
+        uses.push(RustUseDecl {
+            path: "std::sync::Arc".to_owned(),
+            public: false,
+            span: None,
+        });
+        uses.push(RustUseDecl {
+            path: "std::sync::Mutex".to_owned(),
             public: false,
             span: None,
         });
@@ -101,6 +115,162 @@ fn scan_method_for_collections(
     scan_block_for_collections(&method.body, needs_hashmap, needs_hashset);
 }
 
+/// Scan a single item for references to `Arc<Mutex<T>>`.
+fn scan_item_for_arc_mutex(item: &RustItem, needs_arc_mutex: &mut bool) {
+    match item {
+        RustItem::Function(f) => {
+            for p in &f.params {
+                scan_type_for_arc_mutex(&p.ty, needs_arc_mutex);
+            }
+            if let Some(ret) = &f.return_type {
+                scan_type_for_arc_mutex(ret, needs_arc_mutex);
+            }
+            scan_block_for_arc_mutex(&f.body, needs_arc_mutex);
+        }
+        RustItem::Struct(s) => {
+            for field in &s.fields {
+                scan_type_for_arc_mutex(&field.ty, needs_arc_mutex);
+            }
+        }
+        RustItem::Enum(e) => {
+            for variant in &e.variants {
+                for field in &variant.fields {
+                    scan_type_for_arc_mutex(&field.ty, needs_arc_mutex);
+                }
+            }
+        }
+        RustItem::Trait(t) => {
+            for method in &t.methods {
+                for p in &method.params {
+                    scan_type_for_arc_mutex(&p.ty, needs_arc_mutex);
+                }
+                if let Some(ret) = &method.return_type {
+                    scan_type_for_arc_mutex(ret, needs_arc_mutex);
+                }
+            }
+        }
+        RustItem::Impl(imp) => {
+            for method in &imp.methods {
+                scan_method_for_arc_mutex(method, needs_arc_mutex);
+            }
+        }
+        RustItem::TraitImpl(ti) => {
+            for method in &ti.methods {
+                scan_method_for_arc_mutex(method, needs_arc_mutex);
+            }
+        }
+        RustItem::RawRust(_) => {}
+    }
+}
+
+/// Scan a method for `Arc<Mutex<T>>` references.
+fn scan_method_for_arc_mutex(method: &RustMethod, needs_arc_mutex: &mut bool) {
+    for p in &method.params {
+        scan_type_for_arc_mutex(&p.ty, needs_arc_mutex);
+    }
+    if let Some(ret) = &method.return_type {
+        scan_type_for_arc_mutex(ret, needs_arc_mutex);
+    }
+    scan_block_for_arc_mutex(&method.body, needs_arc_mutex);
+}
+
+/// Scan a type for `ArcMutex` references.
+fn scan_type_for_arc_mutex(ty: &RustType, needs_arc_mutex: &mut bool) {
+    match ty {
+        RustType::ArcMutex(inner) => {
+            *needs_arc_mutex = true;
+            scan_type_for_arc_mutex(inner, needs_arc_mutex);
+        }
+        RustType::Generic(base, args) => {
+            scan_type_for_arc_mutex(base, needs_arc_mutex);
+            for arg in args {
+                scan_type_for_arc_mutex(arg, needs_arc_mutex);
+            }
+        }
+        RustType::Option(inner) => {
+            scan_type_for_arc_mutex(inner, needs_arc_mutex);
+        }
+        RustType::Result(ok, err) => {
+            scan_type_for_arc_mutex(ok, needs_arc_mutex);
+            scan_type_for_arc_mutex(err, needs_arc_mutex);
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block for `Arc<Mutex<T>>` usage.
+fn scan_block_for_arc_mutex(block: &RustBlock, needs_arc_mutex: &mut bool) {
+    for stmt in &block.stmts {
+        scan_stmt_for_arc_mutex(stmt, needs_arc_mutex);
+    }
+    if let Some(expr) = &block.expr {
+        scan_expr_for_arc_mutex(expr, needs_arc_mutex);
+    }
+}
+
+/// Scan a statement for `Arc<Mutex<T>>` usage.
+fn scan_stmt_for_arc_mutex(stmt: &RustStmt, needs_arc_mutex: &mut bool) {
+    match stmt {
+        RustStmt::Let(let_stmt) => {
+            if let Some(ty) = &let_stmt.ty {
+                scan_type_for_arc_mutex(ty, needs_arc_mutex);
+            }
+            scan_expr_for_arc_mutex(&let_stmt.init, needs_arc_mutex);
+        }
+        RustStmt::Expr(expr) | RustStmt::Semi(expr) => {
+            scan_expr_for_arc_mutex(expr, needs_arc_mutex);
+        }
+        RustStmt::Return(ret) => {
+            if let Some(val) = &ret.value {
+                scan_expr_for_arc_mutex(val, needs_arc_mutex);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan an expression for `ArcMutexNew` usage.
+fn scan_expr_for_arc_mutex(expr: &RustExpr, needs_arc_mutex: &mut bool) {
+    match &expr.kind {
+        RustExprKind::ArcMutexNew(inner) => {
+            *needs_arc_mutex = true;
+            scan_expr_for_arc_mutex(inner, needs_arc_mutex);
+        }
+        RustExprKind::Binary { left, right, .. } => {
+            scan_expr_for_arc_mutex(left, needs_arc_mutex);
+            scan_expr_for_arc_mutex(right, needs_arc_mutex);
+        }
+        RustExprKind::Call { args, .. } | RustExprKind::Macro { args, .. } => {
+            for arg in args {
+                scan_expr_for_arc_mutex(arg, needs_arc_mutex);
+            }
+        }
+        RustExprKind::MethodCall { receiver, args, .. } => {
+            scan_expr_for_arc_mutex(receiver, needs_arc_mutex);
+            for arg in args {
+                scan_expr_for_arc_mutex(arg, needs_arc_mutex);
+            }
+        }
+        RustExprKind::Paren(inner)
+        | RustExprKind::Clone(inner)
+        | RustExprKind::Borrow(inner)
+        | RustExprKind::ToString(inner)
+        | RustExprKind::Some(inner)
+        | RustExprKind::QuestionMark(inner)
+        | RustExprKind::Ok(inner)
+        | RustExprKind::Err(inner)
+        | RustExprKind::Await(inner) => {
+            scan_expr_for_arc_mutex(inner, needs_arc_mutex);
+        }
+        RustExprKind::Assign { value, .. }
+        | RustExprKind::CompoundAssign { value, .. }
+        | RustExprKind::SelfFieldAssign { value, .. } => {
+            scan_expr_for_arc_mutex(value, needs_arc_mutex);
+        }
+        _ => {}
+    }
+}
+
 /// Scan a type for `HashMap` or `HashSet` references.
 fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
     match ty {
@@ -117,7 +287,7 @@ fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hash
                 scan_type_for_collections(arg, needs_hashmap, needs_hashset);
             }
         }
-        RustType::Option(inner) => {
+        RustType::Option(inner) | RustType::ArcMutex(inner) => {
             scan_type_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustType::Result(ok, err) => {
@@ -274,7 +444,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::QuestionMark(inner)
         | RustExprKind::Ok(inner)
         | RustExprKind::Err(inner)
-        | RustExprKind::Await(inner) => {
+        | RustExprKind::Await(inner)
+        | RustExprKind::ArcMutexNew(inner) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustExprKind::Assign { value, .. }
@@ -358,5 +529,70 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rsc_syntax::rust_ir::{
+        RustBlock, RustExpr, RustExprKind, RustFnDecl, RustLetStmt, RustStmt, RustType,
+    };
+
+    /// Helper: make a minimal function item with the given body statements.
+    fn make_fn_with_stmts(stmts: Vec<RustStmt>) -> RustItem {
+        RustItem::Function(RustFnDecl {
+            attributes: vec![],
+            is_async: false,
+            public: false,
+            name: "test".to_owned(),
+            type_params: vec![],
+            params: vec![],
+            return_type: None,
+            body: RustBlock { stmts, expr: None },
+            span: None,
+        })
+    }
+
+    #[test]
+    fn test_use_collector_detects_arc_mutex_type_in_let_stmt() {
+        let items = vec![make_fn_with_stmts(vec![RustStmt::Let(RustLetStmt {
+            mutable: false,
+            name: "counter".to_owned(),
+            ty: Some(RustType::ArcMutex(Box::new(RustType::I32))),
+            init: RustExpr::synthetic(RustExprKind::ArcMutexNew(Box::new(RustExpr::synthetic(
+                RustExprKind::IntLit(0),
+            )))),
+            span: None,
+        })])];
+
+        let uses = collect_use_declarations(&items);
+        let paths: Vec<&str> = uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            paths.contains(&"std::sync::Arc"),
+            "expected Arc use, got: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"std::sync::Mutex"),
+            "expected Mutex use, got: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_use_collector_no_arc_mutex_when_not_used() {
+        let items = vec![make_fn_with_stmts(vec![RustStmt::Let(RustLetStmt {
+            mutable: false,
+            name: "x".to_owned(),
+            ty: Some(RustType::I32),
+            init: RustExpr::synthetic(RustExprKind::IntLit(42)),
+            span: None,
+        })])];
+
+        let uses = collect_use_declarations(&items);
+        let paths: Vec<&str> = uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            !paths.contains(&"std::sync::Arc"),
+            "unexpected Arc use when not needed"
+        );
     }
 }

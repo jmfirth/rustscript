@@ -407,6 +407,9 @@ pub enum TypeKind {
     /// An inferred type — the type annotation was omitted.
     /// Only valid in closure parameters (e.g., `(n) => n * 2`).
     Inferred,
+    /// A shared type: `shared<T>` in `RustScript`.
+    /// Lowers to `Arc<Mutex<T>>` in Rust.
+    Shared(Box<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
@@ -745,6 +748,8 @@ pub enum ExprKind {
     /// An `await` expression: `await expr`.
     /// Lowers to Rust's postfix `.await`: `expr.await`.
     Await(Box<Expr>),
+    /// A `shared(expr)` constructor: wraps a value in `Arc::new(Mutex::new(expr))`.
+    Shared(Box<Expr>),
 }
 
 /// A binary expression with an operator and two operands.
