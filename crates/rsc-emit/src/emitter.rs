@@ -1210,9 +1210,9 @@ pub fn emit(file: &RustFile) -> EmitResult {
 #[cfg(test)]
 mod tests {
     use rsc_syntax::rust_ir::{
-        IteratorOp, IteratorTerminal, RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam,
-        RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr, RustExprKind,
-        RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
+        IteratorOp, IteratorTerminal, ParamMode, RustBinaryOp, RustBlock, RustClosureBody,
+        RustClosureParam, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr,
+        RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
         RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
         RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt, RustSelfParam, RustStmt,
         RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam,
@@ -1287,11 +1287,13 @@ mod tests {
                     RustParam {
                         name: "a".to_owned(),
                         ty: RustType::I32,
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                     RustParam {
                         name: "b".to_owned(),
                         ty: RustType::I32,
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                 ],
@@ -1809,6 +1811,7 @@ fn answer() -> i32 {
                 params: vec![RustParam {
                     name: "n".to_owned(),
                     ty: RustType::I32,
+                    mode: ParamMode::Owned,
                     span: None,
                 }],
                 return_type: Some(RustType::I32),
@@ -2262,6 +2265,7 @@ fn main() {
                 params: vec![RustParam {
                     name: "x".to_owned(),
                     ty: RustType::TypeParam("T".to_owned()),
+                    mode: ParamMode::Owned,
                     span: None,
                 }],
                 return_type: Some(RustType::TypeParam("T".to_owned())),
@@ -2298,11 +2302,13 @@ fn main() {
                     RustParam {
                         name: "a".to_owned(),
                         ty: RustType::TypeParam("T".to_owned()),
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                     RustParam {
                         name: "b".to_owned(),
                         ty: RustType::TypeParam("T".to_owned()),
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                 ],
@@ -3030,11 +3036,13 @@ fn main() {
                     RustParam {
                         name: "x".to_owned(),
                         ty: RustType::I32,
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                     RustParam {
                         name: "f".to_owned(),
                         ty: RustType::ImplFn(vec![RustType::I32], Box::new(RustType::I32)),
+                        mode: ParamMode::Owned,
                         span: None,
                     },
                 ],
@@ -3102,6 +3110,7 @@ fn main() {
                 params: vec![RustParam {
                     name: "input".to_owned(),
                     ty: RustType::TypeParam("T".to_owned()),
+                    mode: ParamMode::Owned,
                     span: None,
                 }],
                 return_type: Some(RustType::String),
@@ -3383,6 +3392,7 @@ fn main() {
                     params: vec![RustParam {
                         name: "initial".to_owned(),
                         ty: RustType::I32,
+                        mode: ParamMode::Owned,
                         span: None,
                     }],
                     return_type: Some(RustType::SelfType),
