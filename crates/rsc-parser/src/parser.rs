@@ -5,15 +5,15 @@
 //! past syntax errors, accumulating diagnostics along the way.
 
 use rsc_syntax::ast::{
-    AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr, ClassConstructor, ClassDef,
-    ClassField, ClassMember, ClassMethod, ClosureBody, ClosureExpr, ContinueStmt, DestructureStmt,
-    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
-    FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InterfaceDef,
-    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
-    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt,
+    ArrayDestructureStmt, AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr,
+    ClassConstructor, ClassDef, ClassField, ClassMember, ClassMethod, ClosureBody, ClosureExpr,
+    ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
+    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
+    ImportDecl, IndexExpr, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module,
+    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
+    ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -1466,9 +1466,14 @@ impl Parser {
             _ => VarBinding::Let,
         };
 
-        // Check for destructuring: `const { ... } = expr;`
+        // Check for object destructuring: `const { ... } = expr;`
         if self.check(&TokenKind::LBrace) {
             return self.parse_destructure(binding, start);
+        }
+
+        // Check for array destructuring: `const [ ... ] = expr;`
+        if self.check(&TokenKind::LBracket) {
+            return self.parse_array_destructure(binding, start);
         }
 
         let Some(name) = self.parse_ident() else {
@@ -1841,6 +1846,61 @@ impl Parser {
         Some(Stmt::Destructure(DestructureStmt {
             binding,
             fields,
+            init,
+            span: start.merge(end),
+        }))
+    }
+
+    /// Parse an array destructuring statement: `const [a, b, c] = expr;`.
+    ///
+    /// Lowers to Rust tuple destructuring: `let (a, b, c) = expr;`.
+    fn parse_array_destructure(&mut self, binding: VarBinding, start: Span) -> Option<Stmt> {
+        self.advance(); // consume `[`
+
+        let mut elements = Vec::new();
+        if !self.check(&TokenKind::RBracket) && !self.at_end() {
+            loop {
+                let Some(elem_name) = self.parse_ident() else {
+                    self.synchronize();
+                    return None;
+                };
+                elements.push(elem_name);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
+            }
+        }
+
+        if self.expect(&TokenKind::RBracket).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        if self.expect(&TokenKind::Eq).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        let Some(init) = self.parse_expr() else {
+            self.synchronize();
+            return None;
+        };
+
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            init.span
+        };
+
+        Some(Stmt::ArrayDestructure(ArrayDestructureStmt {
+            binding,
+            elements,
             init,
             span: start.merge(end),
         }))
@@ -5384,6 +5444,52 @@ class Foo implements Bar, Baz {
                 assert!(f.is_async);
                 assert_eq!(f.name.name, "handler");
             }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 030: Array destructuring parser tests
+    // ---------------------------------------------------------------
+
+    // Test: const [a, b] = expr; parses as ArrayDestructure
+    #[test]
+    fn test_parse_array_destructure_two_elements() {
+        let source = r#"function test() {
+            const [user, posts] = getResults();
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::ArrayDestructure(adestr) => {
+                    assert_eq!(adestr.elements.len(), 2);
+                    assert_eq!(adestr.elements[0].name, "user");
+                    assert_eq!(adestr.elements[1].name, "posts");
+                    assert_eq!(adestr.binding, VarBinding::Const);
+                }
+                other => panic!("expected ArrayDestructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: let [a, b, c] = expr; with trailing comma
+    #[test]
+    fn test_parse_array_destructure_trailing_comma() {
+        let source = r#"function test() {
+            let [x, y, z,] = getData();
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::ArrayDestructure(adestr) => {
+                    assert_eq!(adestr.elements.len(), 3);
+                    assert_eq!(adestr.binding, VarBinding::Let);
+                }
+                other => panic!("expected ArrayDestructure, got {other:?}"),
+            },
             other => panic!("expected Function, got {other:?}"),
         }
     }

@@ -535,6 +535,23 @@ impl Emitter {
                 self.emit_expr(&destr.init);
                 self.writeln(";");
             }
+            RustStmt::TupleDestructure(td) => {
+                self.write_indent();
+                if td.mutable {
+                    self.write("let mut (");
+                } else {
+                    self.write("let (");
+                }
+                for (i, binding) in td.bindings.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(binding);
+                }
+                self.write(") = ");
+                self.emit_expr(&td.init);
+                self.writeln(";");
+            }
             RustStmt::Match(match_stmt) => {
                 self.write_indent();
                 self.emit_match(match_stmt);
@@ -971,6 +988,23 @@ impl Emitter {
                 self.write(field);
                 self.write(" = ");
                 self.emit_expr(value);
+            }
+            RustExprKind::AsyncBlock { is_move, body } => {
+                self.write("async ");
+                if *is_move {
+                    self.write("move ");
+                }
+                self.emit_block(body);
+            }
+            RustExprKind::TokioJoin(exprs) => {
+                self.write("tokio::join!(");
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(expr);
+                }
+                self.write(")");
             }
             RustExprKind::IteratorChain {
                 source,
@@ -3897,5 +3931,101 @@ fn main() {
                 span: None,
             })],
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 030: Emitter tests for concurrency nodes
+    // ---------------------------------------------------------------
+
+    // Test: Emitter — tokio::join!
+    #[test]
+    fn test_emit_tokio_join_macro_syntax() {
+        let join_expr = syn(RustExprKind::TokioJoin(vec![
+            syn(RustExprKind::Call {
+                func: "get_user".into(),
+                args: vec![],
+            }),
+            syn(RustExprKind::Call {
+                func: "get_posts".into(),
+                args: vec![],
+            }),
+        ]));
+        let file = simple_fn("test", vec![RustStmt::Semi(join_expr)], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("tokio::join!(get_user(), get_posts())"),
+            "expected tokio::join! macro, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tokio::spawn
+    #[test]
+    fn test_emit_tokio_spawn_function_call_syntax() {
+        let async_block = syn(RustExprKind::AsyncBlock {
+            is_move: true,
+            body: RustBlock {
+                stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
+                    func: "work".into(),
+                    args: vec![],
+                }))],
+                expr: None,
+            },
+        });
+        let spawn_call = syn(RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
+        });
+        let file = simple_fn("test", vec![RustStmt::Semi(spawn_call)], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("tokio::spawn(async move {"),
+            "expected tokio::spawn with async move block, got: {output}"
+        );
+        assert!(
+            output.contains("work()"),
+            "expected work() call inside async block, got: {output}"
+        );
+    }
+
+    // Test: Emitter — async block
+    #[test]
+    fn test_emit_async_block_with_move() {
+        let async_block = syn(RustExprKind::AsyncBlock {
+            is_move: true,
+            body: RustBlock {
+                stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
+                    func: "process".into(),
+                    args: vec![],
+                }))],
+                expr: None,
+            },
+        });
+        let file = simple_fn("test", vec![RustStmt::Semi(async_block)], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("async move {"),
+            "expected 'async move {{' in output, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tuple destructure
+    #[test]
+    fn test_emit_tuple_destructure_let_binding() {
+        use rsc_syntax::rust_ir::RustTupleDestructureStmt;
+        let td = RustStmt::TupleDestructure(RustTupleDestructureStmt {
+            bindings: vec!["a".into(), "b".into()],
+            init: syn(RustExprKind::Call {
+                func: "get_pair".into(),
+                args: vec![],
+            }),
+            mutable: false,
+            span: None,
+        });
+        let file = simple_fn("test", vec![td], None);
+        let output = emit(&file);
+        assert!(
+            output.contains("let (a, b) = get_pair();"),
+            "expected 'let (a, b) = get_pair();' in output, got: {output}"
+        );
     }
 }

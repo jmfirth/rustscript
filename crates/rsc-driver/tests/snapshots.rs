@@ -2189,3 +2189,78 @@ fn test_snapshot_string_length_property() {
     let actual = compile_to_rust(source);
     assert_snapshot("string_length_property", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 030: Promise.all concurrent execution (correctness scenario 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_promise_all_concurrent_execution() {
+    let source = r#"async function main() {
+  const [user, posts] = await Promise.all([
+    getUser(),
+    getPosts(),
+  ]);
+  console.log(user);
+}
+
+async function getUser(): string {
+  return "alice";
+}
+
+async function getPosts(): string {
+  return "posts";
+}"#;
+
+    let expected = r#"#[tokio::main]
+async fn main() {
+    let (user, posts) = tokio::join!(getUser(), getPosts());
+    println!("{}", user);
+}
+
+async fn getUser() -> String {
+    return "alice".to_string();
+}
+
+async fn getPosts() -> String {
+    return "posts".to_string();
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("promise_all_concurrent", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 030: spawn fire-and-forget (correctness scenario 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_spawn_fire_and_forget() {
+    let source = r#"async function main() {
+  spawn(async () => {
+    await doWork();
+  });
+  console.log("spawned");
+}
+
+async function doWork() {
+  console.log("working");
+}"#;
+
+    let expected = r#"#[tokio::main]
+async fn main() {
+    tokio::spawn(async move {
+        doWork().await;
+    });
+    println!("{}", "spawned");
+}
+
+async fn doWork() {
+    println!("{}", "working");
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("spawn_fire_and_forget", &actual, expected);
+}

@@ -425,6 +425,9 @@ pub enum RustStmt {
     /// Produced by lowering null-guard patterns where `if (x === null) { throw/return; }`
     /// narrows `x` to non-null in the continuation scope.
     LetElse(RustLetElseStmt),
+    /// Tuple destructuring: `let (a, b, c) = expr;`.
+    /// Produced by lowering `const [a, b] = await Promise.all([...])`.
+    TupleDestructure(RustTupleDestructureStmt),
     /// A `break;` statement.
     Break(Option<Span>),
     /// A `continue;` statement.
@@ -519,6 +522,21 @@ pub struct RustDestructureStmt {
     /// The field names to extract.
     pub fields: Vec<String>,
     /// The initializer expression.
+    pub init: RustExpr,
+    /// Whether the bindings are `mut`.
+    pub mutable: bool,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust tuple destructuring statement: `let (a, b, c) = expr;`.
+///
+/// Produced by lowering `const [a, b] = await Promise.all([...])`.
+#[derive(Debug, Clone)]
+pub struct RustTupleDestructureStmt {
+    /// The variable names to bind from the tuple.
+    pub bindings: Vec<String>,
+    /// The initializer expression (typically a `tokio::join!` call).
     pub init: RustExpr,
     /// Whether the bindings are `mut`.
     pub mutable: bool,
@@ -837,6 +855,17 @@ pub enum RustExprKind {
         /// The value being assigned.
         value: Box<RustExpr>,
     },
+    /// An async block: `async [move] { body }`.
+    /// Produced by lowering `spawn(async () => { ... })`.
+    AsyncBlock {
+        /// Whether this is a `move` async block (`async move { ... }`).
+        is_move: bool,
+        /// The body of the async block.
+        body: RustBlock,
+    },
+    /// `tokio::join!(expr1, expr2, ...)` — concurrent execution of futures.
+    /// Produced by lowering `await Promise.all([...])`.
+    TokioJoin(Vec<RustExpr>),
     /// An iterator chain: `source.iter().ops...terminal`.
     ///
     /// Produced by lowering TypeScript-style array method chains
