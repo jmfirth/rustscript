@@ -30,10 +30,11 @@ use rsc_typeck::registry::TypeRegistry;
 use rsc_typeck::resolve;
 use rsc_typeck::types::Type;
 
-/// Information about a function's throws signature.
+/// Information about a function's signature, collected in a pre-pass.
 ///
-/// Collected in a pre-pass before lowering bodies, so that call-site lowering
-/// can determine whether to insert `?`.
+/// Used by call-site lowering to determine whether to insert `?`.
+/// Phase 4 (Tier 2 ownership) will extend this with `param_modes: Vec<ParamMode>`
+/// to record per-parameter ownership requirements for borrow inference.
 #[derive(Debug, Clone)]
 struct FnSignature {
     /// Whether this function has a `throws` annotation.

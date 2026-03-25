@@ -1,6 +1,6 @@
 //! Formatter roundtrip and idempotency tests (Phase 3 integration).
 //!
-//! Verifies that `format(format(source)) == format(source)` for all Phase 0-2
+//! Verifies that `format(format(source)) == format(source)` for all
 //! syntax patterns. These are fast tests (string comparison only, no cargo).
 
 use rsc_fmt::format_source;

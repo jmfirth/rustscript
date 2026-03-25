@@ -116,7 +116,11 @@ impl SourceFile {
 }
 
 /// Compute byte offsets of each line start. The first line always starts at 0.
-fn compute_line_starts(source: &str) -> Vec<u32> {
+///
+/// This is used by `SourceMap::new()` and is also available for other crates
+/// (e.g., the LSP position mapper) that need the same line-start index.
+#[must_use]
+pub fn compute_line_starts(source: &str) -> Vec<u32> {
     let mut starts = vec![0u32];
     for (i, byte) in source.bytes().enumerate() {
         if byte == b'\n' {

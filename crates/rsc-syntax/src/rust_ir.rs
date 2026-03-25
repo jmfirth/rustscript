@@ -1,8 +1,8 @@
 //! Rust IR type definitions.
 //!
-//! Covers the full Rust output surface through Phase 2: functions (sync and async),
+//! Covers the full Rust output surface through Phase 3: functions (sync and async),
 //! structs, enums, traits, impl blocks, closures, iterator chains, Result/Option
-//! wrapping, match statements, and all expression/statement forms.
+//! wrapping, match statements, source map spans, and all expression/statement forms.
 //!
 //! The Rust IR is a separate type hierarchy closer to actual Rust syntax than
 //! the `RustScript` AST. The lowering pass transforms the AST into IR, and the
@@ -54,7 +54,8 @@ pub struct RustModDecl {
 
 /// A top-level item in a Rust file.
 ///
-/// Phase 0 supports function declarations; Phase 1 adds struct, enum, and trait definitions.
+/// Supports function declarations, struct definitions, enum definitions,
+/// trait definitions, and impl blocks.
 #[derive(Debug, Clone)]
 pub enum RustItem {
     /// A `fn` declaration.
@@ -277,6 +278,11 @@ pub struct RustFnDecl {
 }
 
 /// A Rust function parameter.
+///
+/// Phase 4 (Tier 2 ownership) will add a `borrow_mode: Option<BorrowMode>` field
+/// to indicate whether the parameter should be `T`, `&T`, or `&mut T` in the
+/// emitted Rust. The emitter will check this field and emit the appropriate
+/// reference prefix. Until then, all parameters are emitted as owned `T`.
 #[derive(Debug, Clone)]
 pub struct RustParam {
     /// The parameter name.
@@ -662,7 +668,7 @@ impl RustExpr {
     }
 }
 
-/// The kinds of Rust expressions in the Phase 0 IR.
+/// The kinds of Rust expressions in the IR.
 #[derive(Debug, Clone)]
 pub enum RustExprKind {
     /// An integer literal (e.g., `42`).
