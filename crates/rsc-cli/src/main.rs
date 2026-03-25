@@ -4,6 +4,8 @@
 //! compilation, build, and project management logic.
 #![warn(clippy::pedantic)]
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 
@@ -52,6 +54,14 @@ enum Command {
     },
     /// Check the project for errors without building
     Check,
+    /// Format `RustScript` source files
+    Fmt {
+        /// Check formatting without modifying files (exit 1 if unformatted)
+        #[arg(long)]
+        check: bool,
+        /// Specific files to format (default: all .rts in src/)
+        files: Vec<PathBuf>,
+    },
 }
 
 fn main() {
@@ -76,6 +86,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Run { args } => cmd_run(&args),
         Command::Test { release, args } => cmd_test(release, &args),
         Command::Check => cmd_check(),
+        Command::Fmt { check, files } => cmd_fmt(check, &files),
     }
 }
 
@@ -161,6 +172,80 @@ fn cmd_check() -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Format `RustScript` source files.
+fn cmd_fmt(check: bool, files: &[PathBuf]) -> Result<i32> {
+    let sources = if files.is_empty() {
+        discover_rts_files()?
+    } else {
+        files.to_vec()
+    };
+
+    if sources.is_empty() {
+        println!("No .rts files found");
+        return Ok(0);
+    }
+
+    let mut unformatted_count = 0;
+    for path in &sources {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+
+        let formatted = rsc_fmt::format_source(&source)
+            .with_context(|| format!("failed to format {}", path.display()))?;
+
+        if source != formatted {
+            if check {
+                eprintln!("not formatted: {}", path.display());
+                unformatted_count += 1;
+            } else {
+                std::fs::write(path, &formatted)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                println!("formatted: {}", path.display());
+            }
+        }
+    }
+
+    if check && unformatted_count > 0 {
+        eprintln!("{unformatted_count} file(s) need formatting");
+        Ok(EXIT_USER_ERROR)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Discover all `.rts` files in the project's `src/` directory.
+fn discover_rts_files() -> Result<Vec<PathBuf>> {
+    let cwd = std::env::current_dir().context("failed to determine current directory")?;
+    let src_dir = cwd.join("src");
+
+    if !src_dir.is_dir() {
+        anyhow::bail!("no src/ directory found — are you in a RustScript project?");
+    }
+
+    let mut files = Vec::new();
+    collect_rts_files(&src_dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+/// Recursively collect all `.rts` files from a directory.
+fn collect_rts_files(dir: &std::path::Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
+
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rts_files(&path, files)?;
+        } else if path.extension().is_some_and(|ext| ext == "rts") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
 }
 
 /// Open a project from the current directory.
