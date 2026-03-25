@@ -923,8 +923,8 @@ mod tests {
         // Check utils.rs was generated with pub fn
         let utils_rs = fs::read_to_string(build_dir.join("src/utils.rs")).unwrap();
         assert!(
-            utils_rs.contains("pub fn greet(name: String)"),
-            "expected `pub fn greet(name: String)` in utils.rs:\n{utils_rs}"
+            utils_rs.contains("pub fn greet(name: &str)"),
+            "expected `pub fn greet(name: &str)` in utils.rs:\n{utils_rs}"
         );
     }
 

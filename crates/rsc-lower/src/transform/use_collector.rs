@@ -265,6 +265,7 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         }
         RustExprKind::Paren(inner)
         | RustExprKind::Clone(inner)
+        | RustExprKind::Borrow(inner)
         | RustExprKind::ToString(inner)
         | RustExprKind::Some(inner)
         | RustExprKind::QuestionMark(inner)

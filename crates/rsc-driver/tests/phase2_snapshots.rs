@@ -348,7 +348,7 @@ async function main() {
   console.log(result);
 }"#;
 
-    let expected = r#"async fn processName(name: String) -> String {
+    let expected = r#"async fn processName(name: &str) -> String {
     let upper = name.to_uppercase();
     return upper;
 }
@@ -357,7 +357,7 @@ async function main() {
 async fn main() {
     let names: Vec<String> = vec!["alice".to_string(), "bob".to_string()];
     let first = names[0];
-    let result = processName(first).await;
+    let result = processName(&first).await;
     println!("{}", result);
 }
 "#;
@@ -614,7 +614,7 @@ async function main() {
   console.log(result);
 }"#;
 
-    let expected = r#"async fn formatName(raw: String) -> String {
+    let expected = r#"async fn formatName(raw: &str) -> String {
     let trimmed = raw.trim().to_string();
     let upper = trimmed.to_uppercase();
     return upper;
@@ -622,7 +622,7 @@ async function main() {
 
 #[tokio::main]
 async fn main() {
-    let result = formatName("  alice  ".to_string()).await;
+    let result = formatName("  alice  ").await;
     println!("{}", result);
 }
 "#;

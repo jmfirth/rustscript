@@ -7,7 +7,7 @@
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
-use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam, RustExpr, RustExprKind};
+use rsc_syntax::rust_ir::{ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind};
 
 use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
@@ -81,6 +81,7 @@ impl Transform {
                 }
 
                 let sig = self.fn_signatures.get(&call.callee.name);
+                let callee_modes = sig.and_then(|s| s.param_modes.as_ref());
                 let args: Vec<RustExpr> = call
                     .args
                     .iter()
@@ -105,7 +106,39 @@ impl Transform {
                                 a.span,
                             );
                         }
-                        self.lower_expr(a, ctx, use_map, stmt_index)
+                        let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+
+                        // Tier 2: apply callsite borrow transform
+                        if let Some(modes) = callee_modes
+                            && let Some(mode) = modes.get(i)
+                        {
+                            match mode {
+                                ParamMode::BorrowedStr => {
+                                    // String literal → &str: unwrap .to_string() wrapper
+                                    if let RustExprKind::ToString(inner) = &lowered.kind
+                                        && matches!(inner.kind, RustExprKind::StringLit(_))
+                                    {
+                                        return *inner.clone();
+                                    }
+                                    // Variable → &var (auto-deref handles &String → &str)
+                                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
+                                        return RustExpr::synthetic(RustExprKind::Borrow(
+                                            Box::new(lowered),
+                                        ));
+                                    }
+                                }
+                                ParamMode::Borrowed => {
+                                    // Wrap in & unless already a borrow
+                                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
+                                        return RustExpr::synthetic(RustExprKind::Borrow(
+                                            Box::new(lowered),
+                                        ));
+                                    }
+                                }
+                                ParamMode::Owned => {}
+                            }
+                        }
+                        lowered
                     })
                     .collect();
                 let call_expr = RustExpr::new(

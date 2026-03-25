@@ -633,3 +633,73 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "10\n20");
 }
+
+// ===========================================================================
+// Task 046: Tier 2 Ownership — E2E Tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 046-E2E-1: Function taking &str compiles and runs correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_tier2_borrowed_str_compiles_and_runs() {
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  const name: string = \"Alice\";
+  greet(name);
+  greet(name);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Alice\nAlice");
+}
+
+// ---------------------------------------------------------------------------
+// 046-E2E-2: Clone elimination — no double-free or use-after-move
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_tier2_clone_elimination_correct_output() {
+    let source = "\
+function len(s: string): i64 {
+  return s.length;
+}
+
+function main(): void {
+  const s: string = \"hello\";
+  const a: i64 = len(s);
+  const b: i64 = len(s);
+  console.log(a);
+  console.log(b);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "5\n5");
+}
+
+// ---------------------------------------------------------------------------
+// 046-E2E-3: String literal without .to_string() compiles and runs
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_tier2_string_literal_no_alloc() {
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  greet(\"hello\");
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "hello");
+}

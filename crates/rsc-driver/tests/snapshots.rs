@@ -171,13 +171,13 @@ function main() {
 }";
 
     let expected = "\
-fn greet(name: String) {
+fn greet(name: &str) {
     println!(\"{}\", name);
 }
 
 fn main() {
     let name: String = \"Alice\".to_string();
-    greet(name.clone());
+    greet(&name);
     println!(\"{}\", name);
 }
 ";
@@ -2263,4 +2263,227 @@ async fn doWork() {
 
     let actual = compile_to_rust(source);
     assert_snapshot("spawn_fire_and_forget", &actual, expected);
+}
+
+// ===========================================================================
+// Task 046: Tier 2 Ownership — Callsite Borrow Transform
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 046-1. BorrowedStr param emits `fn greet(name: &str)`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_borrowed_str_param_signature() {
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  const name: string = \"Alice\";
+  greet(name);
+  greet(name);
+}";
+
+    let expected = "\
+fn greet(name: &str) {
+    println!(\"{}\", name);
+}
+
+fn main() {
+    let name: String = \"Alice\".to_string();
+    greet(&name);
+    greet(&name);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_borrowed_str", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-2. String literal optimization — no .to_string() for BorrowedStr
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_string_literal_no_to_string() {
+    let source = "\
+function greet(name: string): void {
+  console.log(name);
+}
+
+function main(): void {
+  greet(\"hello\");
+}";
+
+    let expected = "\
+fn greet(name: &str) {
+    println!(\"{}\", name);
+}
+
+fn main() {
+    greet(\"hello\");
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_string_literal_optimization", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-3. Mixed borrow and owned params
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_mixed_borrow_and_owned() {
+    let source = "\
+function readName(name: string): void {
+  console.log(name);
+}
+
+function takeName(name: string): string {
+  return name;
+}";
+
+    let expected = "\
+fn readName(name: &str) {
+    println!(\"{}\", name);
+}
+
+fn takeName(name: String) -> String {
+    return name;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_mixed_borrow_owned", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-4. Clone elimination — variable passed to two borrowed-param functions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_clone_elimination() {
+    let source = "\
+function len(s: string): i64 {
+  return s.length;
+}
+
+function main(): void {
+  const s: string = \"hello\";
+  const a: i64 = len(s);
+  const b: i64 = len(s);
+}";
+
+    let expected = "\
+fn len(s: &str) -> i64 {
+    return s.len();
+}
+
+fn main() {
+    let s: String = \"hello\".to_string();
+    let a: i64 = len(&s);
+    let b: i64 = len(&s);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_clone_elimination", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-5. Variable passed to BorrowedStr emits &var
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_variable_to_borrowed_str() {
+    let source = "\
+function display(msg: string): void {
+  console.log(msg);
+}
+
+function main(): void {
+  const msg: string = \"world\";
+  display(msg);
+}";
+
+    let expected = "\
+fn display(msg: &str) {
+    println!(\"{}\", msg);
+}
+
+fn main() {
+    let msg: String = \"world\".to_string();
+    display(&msg);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_variable_to_borrowed_str", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-6. Borrowed param for generic collection type (Vec)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_borrowed_vec_param() {
+    let source = "\
+function countItems(items: Array<i32>): i64 {
+  return items.length;
+}
+
+function main(): void {
+  const nums: Array<i32> = [1, 2, 3];
+  const n: i64 = countItems(nums);
+  console.log(n);
+}";
+
+    let expected = "\
+fn countItems(items: &Vec<i32>) -> i64 {
+    return items.len();
+}
+
+fn main() {
+    let nums: Vec<i32> = vec![1, 2, 3];
+    let n: i64 = countItems(&nums);
+    println!(\"{}\", n);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_borrowed_vec_param", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 046-7. Mixed params — one borrowed, one owned
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_tier2_mixed_params_same_function() {
+    let source = "\
+function process(label: string, count: i64): void {
+  console.log(label);
+  console.log(count);
+}
+
+function main(): void {
+  process(\"test\", 42);
+}";
+
+    let expected = "\
+fn process(label: &str, count: i64) {
+    println!(\"{}\", label);
+    println!(\"{}\", count);
+}
+
+fn main() {
+    process(\"test\", 42);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("tier2_mixed_params_same_fn", &actual, expected);
 }
