@@ -9,6 +9,7 @@ pub mod error;
 pub mod error_translation;
 mod pipeline;
 mod project;
+mod templates;
 
 pub use error_translation::translate_rustc_errors;
 pub use pipeline::{CompileResult, compile_source, compile_source_with_mods};
