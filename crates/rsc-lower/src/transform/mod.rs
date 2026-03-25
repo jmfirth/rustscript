@@ -1746,6 +1746,42 @@ impl Transform {
             return lowering_fn(receiver, lowered_args, span);
         }
 
+        // Check for collection method: if the method name matches a registered
+        // collection method, lower to an iterator chain. If the receiver is
+        // already an iterator chain (from a chained call like arr.map().filter()),
+        // merge the outer operation into the existing chain.
+        if self
+            .builtins
+            .lookup_collection_method(&mc.method.name)
+            .is_some()
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+
+            // Try to merge into an existing chain first (for chained calls)
+            if matches!(receiver.kind, RustExprKind::IteratorChain { .. })
+                && let Some(merged) = crate::builtins::merge_into_chain(
+                    receiver.clone(),
+                    &mc.method.name,
+                    &lowered_args,
+                    span,
+                )
+            {
+                return merged;
+            }
+
+            // Not a chain merge — create a new iterator chain via the lowering function
+            let lowering_fn = self
+                .builtins
+                .lookup_collection_method(&mc.method.name)
+                .expect("collection method already verified");
+            return lowering_fn(receiver, lowered_args, span);
+        }
+
         // Not a builtin — lower as a regular method call
         let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
         let args: Vec<RustExpr> = mc
@@ -5522,5 +5558,258 @@ function main() {}"#;
             !needs_async_runtime,
             "expected needs_async_runtime to be false when no async function exists"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 033: Collection method integration tests
+    // ---------------------------------------------------------------
+
+    // Test: arr.map(x => x * 2) produces IteratorChain
+    #[test]
+    fn test_lower_array_map_produces_iterator_chain_ir() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            const doubled = arr.map((x: i32): i32 => x * 2);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                // Second statement should be the map
+                match &f.body.stmts[1] {
+                    RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                        RustExprKind::IteratorChain { ops, terminal, .. } => {
+                            assert!(!ops.is_empty(), "expected at least one iterator op (Map)");
+                            assert!(
+                                matches!(
+                                    terminal,
+                                    rsc_syntax::rust_ir::IteratorTerminal::CollectVec
+                                ),
+                                "expected CollectVec terminal"
+                            );
+                        }
+                        other => panic!("expected IteratorChain, got {other:?}"),
+                    },
+                    other => panic!("expected Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.filter(x => x > 0) produces IteratorChain with Cloned
+    #[test]
+    fn test_lower_array_filter_produces_iterator_chain_ir() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            const pos = arr.filter((x: i32): bool => x > 0);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { ops, .. } => {
+                        assert!(
+                            ops.iter()
+                                .any(|op| matches!(op, rsc_syntax::rust_ir::IteratorOp::Cloned)),
+                            "expected Cloned op in filter chain"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.reduce((acc, x) => acc + x, 0) produces IteratorChain with Fold
+    #[test]
+    fn test_lower_array_reduce_produces_fold_terminal() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            const sum = arr.reduce((acc: i32, x: i32): i32 => acc + x, 0);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { terminal, .. } => {
+                        assert!(
+                            matches!(terminal, rsc_syntax::rust_ir::IteratorTerminal::Fold { .. }),
+                            "expected Fold terminal"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.find(x => x > 3) produces IteratorChain with Find
+    #[test]
+    fn test_lower_array_find_produces_find_terminal() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3, 4, 5];
+            const found = arr.find((x: i32): bool => x > 3);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { terminal, .. } => {
+                        assert!(
+                            matches!(terminal, rsc_syntax::rust_ir::IteratorTerminal::Find(..)),
+                            "expected Find terminal"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.some(x => x > 5) produces IteratorChain with Any
+    #[test]
+    fn test_lower_array_some_produces_any_terminal() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            const has = arr.some((x: i32): bool => x > 5);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { terminal, .. } => {
+                        assert!(
+                            matches!(terminal, rsc_syntax::rust_ir::IteratorTerminal::Any(..)),
+                            "expected Any terminal"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.every(x => x > 0) produces IteratorChain with All
+    #[test]
+    fn test_lower_array_every_produces_all_terminal() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            const all = arr.every((x: i32): bool => x > 0);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { terminal, .. } => {
+                        assert!(
+                            matches!(terminal, rsc_syntax::rust_ir::IteratorTerminal::All(..)),
+                            "expected All terminal"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: arr.forEach(x => ...) produces IteratorChain with ForEach
+    #[test]
+    fn test_lower_array_for_each_produces_for_each_terminal() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3];
+            arr.forEach((x: i32): void => console.log(x));
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                // forEach is a statement, so look at stmts[1]
+                match &f.body.stmts[1] {
+                    RustStmt::Semi(expr) => match &expr.kind {
+                        RustExprKind::IteratorChain { terminal, .. } => {
+                            assert!(
+                                matches!(
+                                    terminal,
+                                    rsc_syntax::rust_ir::IteratorTerminal::ForEach(..)
+                                ),
+                                "expected ForEach terminal"
+                            );
+                        }
+                        other => panic!("expected IteratorChain, got {other:?}"),
+                    },
+                    other => panic!("expected Semi, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: chained map+filter produces single IteratorChain with multiple ops
+    #[test]
+    fn test_lower_chained_map_filter_produces_single_chain() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3, 4, 5];
+            const result = arr.map((x: i32): i32 => x * 2).filter((x: i32): bool => x > 4);
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => match &let_stmt.init.kind {
+                    RustExprKind::IteratorChain { ops, terminal, .. } => {
+                        // Should have: Map, Filter, Cloned
+                        let has_map = ops
+                            .iter()
+                            .any(|op| matches!(op, rsc_syntax::rust_ir::IteratorOp::Map(..)));
+                        let has_filter = ops
+                            .iter()
+                            .any(|op| matches!(op, rsc_syntax::rust_ir::IteratorOp::Filter(..)));
+                        assert!(has_map, "expected Map op in chain");
+                        assert!(has_filter, "expected Filter op in chain");
+                        assert!(
+                            matches!(terminal, rsc_syntax::rust_ir::IteratorTerminal::CollectVec),
+                            "expected CollectVec terminal"
+                        );
+                    }
+                    other => panic!("expected IteratorChain, got {other:?}"),
+                },
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: non-collection method falls through to regular method call
+    #[test]
+    fn test_lower_non_collection_method_falls_through() {
+        let source = r#"function main() {
+            const obj: Array<i32> = [1, 2, 3];
+            const result = obj.customMethod();
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => match &f.body.stmts[1] {
+                RustStmt::Let(let_stmt) => {
+                    assert!(
+                        matches!(
+                            &let_stmt.init.kind,
+                            RustExprKind::MethodCall { method, .. } if method == "customMethod"
+                        ),
+                        "expected regular MethodCall for unknown method, got {:?}",
+                        let_stmt.init.kind
+                    );
+                }
+                other => panic!("expected Let, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
     }
 }

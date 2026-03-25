@@ -858,4 +858,195 @@ async function getData(): string {
         assert!(result.rust_source.contains("async fn getData() -> String"));
         assert!(result.needs_async_runtime);
     }
+
+    // ---------------------------------------------------------------
+    // Task 033: Iterator method chaining correctness tests
+    // ---------------------------------------------------------------
+
+    // Correctness Scenario 1: map produces .iter().map().collect::<Vec<_>>()
+    #[test]
+    fn test_correctness_array_map_emits_iterator_chain() {
+        let source = r#"function main() {
+            const numbers: Array<i32> = [1, 2, 3];
+            const doubled = numbers.map((n: i32): i32 => n * 2);
+        }"#;
+        let result = compile_source(source, "map.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().map("),
+            "expected .iter().map( in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".collect::<Vec<_>>()"),
+            "expected .collect::<Vec<_>>() in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness Scenario 1: filter produces .iter().filter().cloned().collect()
+    #[test]
+    fn test_correctness_array_filter_emits_iterator_chain_with_cloned() {
+        let source = r#"function main() {
+            const numbers: Array<i32> = [1, 2, 3, 4, 5];
+            const evens = numbers.filter((n: i32): bool => n % 2 == 0);
+        }"#;
+        let result = compile_source(source, "filter.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().filter("),
+            "expected .iter().filter( in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".cloned().collect::<Vec<_>>()"),
+            "expected .cloned().collect::<Vec<_>>() in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness Scenario 2: reduce → fold with argument reordering
+    #[test]
+    fn test_correctness_array_reduce_emits_fold_with_reordered_args() {
+        let source = r#"function main() {
+            const sum = [1, 2, 3, 4, 5].reduce((acc: i32, n: i32): i32 => acc + n, 0);
+            console.log(sum);
+        }"#;
+        let result = compile_source(source, "reduce.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        // fold(0, |acc, n| ...) — init comes first in Rust
+        assert!(
+            result.rust_source.contains(".iter().fold(0, |acc, n|"),
+            "expected .iter().fold(0, |acc, n| in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness Scenario 3: find produces .iter().find().cloned()
+    #[test]
+    fn test_correctness_array_find_emits_find_with_cloned() {
+        let source = r#"function main() {
+            const numbers: Array<i32> = [1, 2, 3, 4, 5];
+            const found = numbers.find((n: i32): bool => n > 3);
+        }"#;
+        let result = compile_source(source, "find.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().find("),
+            "expected .iter().find( in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(").cloned()"),
+            "expected .cloned() after find in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness: some → any
+    #[test]
+    fn test_correctness_array_some_emits_any() {
+        let source = r#"function main() {
+            const items: Array<i32> = [1, 2, 3];
+            const has_big = items.some((x: i32): bool => x > 5);
+        }"#;
+        let result = compile_source(source, "some.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().any("),
+            "expected .iter().any( in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness: every → all
+    #[test]
+    fn test_correctness_array_every_emits_all() {
+        let source = r#"function main() {
+            const items: Array<i32> = [1, 2, 3];
+            const all_pos = items.every((x: i32): bool => x > 0);
+        }"#;
+        let result = compile_source(source, "every.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().all("),
+            "expected .iter().all( in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness: forEach → for_each
+    #[test]
+    fn test_correctness_array_foreach_emits_for_each() {
+        let source = r#"function main() {
+            const items: Array<i32> = [1, 2, 3];
+            items.forEach((x: i32): void => console.log(x));
+        }"#;
+        let result = compile_source(source, "foreach.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".iter().for_each("),
+            "expected .iter().for_each( in output:\n{}",
+            result.rust_source
+        );
+    }
+
+    // Correctness: chained map+filter composes into single iterator chain
+    #[test]
+    fn test_correctness_chained_map_filter_emits_single_chain() {
+        let source = r#"function main() {
+            const arr: Array<i32> = [1, 2, 3, 4, 5];
+            const result = arr.map((x: i32): i32 => x * 2).filter((x: i32): bool => x > 4);
+        }"#;
+        let result = compile_source(source, "chain.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}\ngenerated:\n{}",
+            result.diagnostics, result.rust_source
+        );
+        // Should be a single chain: .iter().map(...).filter(...).cloned().collect()
+        assert!(
+            result.rust_source.contains(".iter().map("),
+            "expected .iter().map( in chained output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(").filter("),
+            "expected .filter( after .map() in output:\n{}",
+            result.rust_source
+        );
+        assert!(
+            result.rust_source.contains(".collect::<Vec<_>>()"),
+            "expected .collect::<Vec<_>>() at end of chain:\n{}",
+            result.rust_source
+        );
+    }
 }

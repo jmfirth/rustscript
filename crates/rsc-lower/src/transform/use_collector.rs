@@ -216,6 +216,8 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
     }
 }
 
+#[allow(clippy::too_many_lines)]
+// Expression scanning covers all IR node kinds; splitting would obscure the match structure
 /// Scan an expression for `HashMap` or `HashSet` usage.
 fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
     match &expr.kind {
@@ -311,5 +313,34 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(block, needs_hashmap, needs_hashset);
             }
         },
+        RustExprKind::IteratorChain {
+            source,
+            ops,
+            terminal,
+        } => {
+            scan_expr_for_collections(source, needs_hashmap, needs_hashset);
+            for op in ops {
+                match op {
+                    rsc_syntax::rust_ir::IteratorOp::Map(_, body)
+                    | rsc_syntax::rust_ir::IteratorOp::Filter(_, body) => {
+                        scan_expr_for_collections(body, needs_hashmap, needs_hashset);
+                    }
+                    rsc_syntax::rust_ir::IteratorOp::Cloned => {}
+                }
+            }
+            match terminal {
+                rsc_syntax::rust_ir::IteratorTerminal::CollectVec => {}
+                rsc_syntax::rust_ir::IteratorTerminal::Fold { init, body, .. } => {
+                    scan_expr_for_collections(init, needs_hashmap, needs_hashset);
+                    scan_expr_for_collections(body, needs_hashmap, needs_hashset);
+                }
+                rsc_syntax::rust_ir::IteratorTerminal::Find(_, body)
+                | rsc_syntax::rust_ir::IteratorTerminal::Any(_, body)
+                | rsc_syntax::rust_ir::IteratorTerminal::All(_, body)
+                | rsc_syntax::rust_ir::IteratorTerminal::ForEach(_, body) => {
+                    scan_expr_for_collections(body, needs_hashmap, needs_hashset);
+                }
+            }
+        }
     }
 }

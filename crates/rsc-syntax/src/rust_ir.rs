@@ -330,6 +330,9 @@ pub enum RustType {
     /// The `Self` type in trait method signatures.
     /// Produced by lowering `Self` in interface method return types.
     SelfType,
+    /// The inferred type placeholder `_`.
+    /// Used in turbofish positions like `.collect::<Vec<_>>()`.
+    Infer,
 }
 
 impl std::fmt::Display for RustType {
@@ -372,6 +375,7 @@ impl std::fmt::Display for RustType {
                 return write!(f, ") -> {ret}");
             }
             Self::SelfType => "Self",
+            Self::Infer => "_",
         };
         f.write_str(s)
     }
@@ -833,6 +837,61 @@ pub enum RustExprKind {
         /// The value being assigned.
         value: Box<RustExpr>,
     },
+    /// An iterator chain: `source.iter().ops...terminal`.
+    ///
+    /// Produced by lowering TypeScript-style array method chains
+    /// (e.g., `arr.map(fn).filter(fn)`) to Rust iterator chains.
+    IteratorChain {
+        /// The source collection expression.
+        source: Box<RustExpr>,
+        /// The chain of intermediate iterator operations.
+        ops: Vec<IteratorOp>,
+        /// The terminal operation (collect, fold, find, any, all, `for_each`).
+        terminal: IteratorTerminal,
+    },
+}
+
+/// A single intermediate iterator operation in a chain.
+///
+/// These operations appear between `.iter()` and the terminal operation
+/// in the emitted Rust iterator chain.
+#[derive(Debug, Clone)]
+pub enum IteratorOp {
+    /// `.map(|param| body)` — transform each element.
+    Map(RustClosureParam, Box<RustExpr>),
+    /// `.filter(|param| body)` — keep elements matching predicate.
+    Filter(RustClosureParam, Box<RustExpr>),
+    /// `.cloned()` — clone referenced elements to produce owned values.
+    Cloned,
+}
+
+/// The terminal operation of an iterator chain.
+///
+/// Determines what the iterator chain produces: a collected `Vec`, a fold
+/// result, a found element, a boolean predicate, or a side-effect loop.
+#[derive(Debug, Clone)]
+pub enum IteratorTerminal {
+    /// `.collect::<Vec<_>>()` — collect into a Vec.
+    CollectVec,
+    /// `.fold(init, |acc, item| body)` — reduce to a single value.
+    Fold {
+        /// The initial accumulator value.
+        init: Box<RustExpr>,
+        /// The accumulator parameter name.
+        acc_param: String,
+        /// The item parameter name.
+        item_param: String,
+        /// The fold body expression.
+        body: Box<RustExpr>,
+    },
+    /// `.find(|param| body).cloned()` — find first matching, return `Option<T>`.
+    Find(RustClosureParam, Box<RustExpr>),
+    /// `.any(|param| body)` — true if any element matches.
+    Any(RustClosureParam, Box<RustExpr>),
+    /// `.all(|param| body)` — true if all elements match.
+    All(RustClosureParam, Box<RustExpr>),
+    /// `.for_each(|param| body)` — execute side effect for each element.
+    ForEach(RustClosureParam, Box<RustExpr>),
 }
 
 /// A closure parameter (may omit type for inference).

@@ -7,10 +7,20 @@
 //! String methods (e.g., `.toUpperCase()`, `.split()`) are registered
 //! separately from object-based builtins because their receiver is any
 //! expression of type `String`, not a named object like `"console"`.
+//!
+//! Collection methods (e.g., `.map()`, `.filter()`, `.reduce()`) are registered
+//! for array/collection types and produce `IteratorChain` IR nodes that emit
+//! as Rust iterator chains.
 
 use std::collections::HashMap;
 
-use rsc_syntax::rust_ir::{RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustType};
+use rsc_syntax::rust_ir::{
+    IteratorOp, IteratorTerminal, RustClosureBody, RustClosureParam, RustExpr, RustExprKind,
+    RustType,
+};
+
+#[cfg(test)]
+use rsc_syntax::rust_ir::RustBinaryOp;
 use rsc_syntax::span::Span;
 
 /// How a builtin call is lowered to Rust IR.
@@ -37,15 +47,24 @@ struct BuiltinEntry {
 pub(crate) type StringMethodLowering =
     fn(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr;
 
+/// How a collection method call is lowered to an iterator chain IR node.
+///
+/// Receives the already-lowered receiver expression, arguments, and span.
+/// Returns an `IteratorChain` `RustExpr` representing the full iterator operation.
+pub(crate) type CollectionMethodLowering =
+    fn(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr;
+
 /// Registry of builtin functions and methods.
 ///
 /// Maps `(object_name, method_name)` pairs to their lowering functions.
 /// Uses a nested `HashMap` to avoid allocating on every lookup.
 /// Phase 0 registers `console.log` -> `println!`.
-/// Phase 2 adds string method mappings (e.g., `.toUpperCase()` -> `.to_uppercase()`).
+/// Phase 2 adds string method mappings (e.g., `.toUpperCase()` -> `.to_uppercase()`)
+/// and collection method mappings (e.g., `.map()` -> `.iter().map().collect()`).
 pub(crate) struct BuiltinRegistry {
     methods: HashMap<String, HashMap<String, BuiltinEntry>>,
     string_methods: HashMap<String, StringMethodLowering>,
+    collection_methods: HashMap<String, CollectionMethodLowering>,
 }
 
 impl BuiltinRegistry {
@@ -54,6 +73,7 @@ impl BuiltinRegistry {
         let mut registry = Self {
             methods: HashMap::new(),
             string_methods: HashMap::new(),
+            collection_methods: HashMap::new(),
         };
         register_defaults(&mut registry);
         registry
@@ -84,6 +104,19 @@ impl BuiltinRegistry {
     /// (e.g., `"toUpperCase"`, `"split"`, `"trim"`).
     pub fn lookup_string_method(&self, method: &str) -> Option<&StringMethodLowering> {
         self.string_methods.get(method)
+    }
+
+    /// Register a collection method lowering function.
+    fn register_collection_method(&mut self, name: &str, lowering: CollectionMethodLowering) {
+        self.collection_methods.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up a collection method by name.
+    ///
+    /// Returns the lowering function if the method is a known collection method
+    /// (e.g., `"map"`, `"filter"`, `"reduce"`, `"find"`).
+    pub fn lookup_collection_method(&self, method: &str) -> Option<&CollectionMethodLowering> {
+        self.collection_methods.get(method)
     }
 
     /// Check if a method call is a builtin and return its lowering function.
@@ -120,6 +153,15 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_string_method("trim", lower_trim);
     registry.register_string_method("includes", lower_includes);
     registry.register_string_method("replace", lower_replace);
+
+    // Phase 2: collection methods (array iterator chains)
+    registry.register_collection_method("map", lower_array_map);
+    registry.register_collection_method("filter", lower_array_filter);
+    registry.register_collection_method("reduce", lower_array_reduce);
+    registry.register_collection_method("find", lower_array_find);
+    registry.register_collection_method("forEach", lower_array_for_each);
+    registry.register_collection_method("some", lower_array_some);
+    registry.register_collection_method("every", lower_array_every);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -332,6 +374,446 @@ fn lower_split(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr 
 /// `starts_with("A")` instead of `starts_with("A".to_string())`).
 fn strip_to_string_args(args: Vec<RustExpr>) -> Vec<RustExpr> {
     args.into_iter().map(strip_to_string).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Collection method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Extract the closure parameter name and body expression from a `Closure` arg.
+///
+/// Collection method lowerings receive already-lowered `RustExpr` args.
+/// The first arg is typically a closure. This helper extracts the parameter
+/// name and body for building `IteratorOp` or `IteratorTerminal` nodes.
+/// Takes ownership of the expression to avoid unnecessary cloning.
+fn extract_closure_owned(arg: RustExpr) -> Option<(RustClosureParam, RustExpr)> {
+    if let RustExprKind::Closure { params, body, .. } = arg.kind {
+        let param = params.into_iter().next().unwrap_or(RustClosureParam {
+            name: "_".into(),
+            ty: None,
+        });
+        let body_expr = match body {
+            RustClosureBody::Expr(e) => *e,
+            RustClosureBody::Block(block) => {
+                if let Some(expr) = block.expr {
+                    *expr
+                } else if let Some(rsc_syntax::rust_ir::RustStmt::Expr(e)) =
+                    block.stmts.into_iter().last()
+                {
+                    e
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some((param, body_expr))
+    } else {
+        None
+    }
+}
+
+/// Extract the closure parameter and body from a reference (non-owning).
+///
+/// Used by `merge_into_chain` where we borrow from the args vector.
+fn extract_closure_ref(arg: &RustExpr) -> Option<(RustClosureParam, RustExpr)> {
+    if let RustExprKind::Closure { params, body, .. } = &arg.kind {
+        let param = params.first().cloned().unwrap_or(RustClosureParam {
+            name: "_".into(),
+            ty: None,
+        });
+        let body_expr = match body {
+            RustClosureBody::Expr(e) => (**e).clone(),
+            RustClosureBody::Block(block) => {
+                if let Some(expr) = &block.expr {
+                    (**expr).clone()
+                } else if let Some(rsc_syntax::rust_ir::RustStmt::Expr(e)) = block.stmts.last() {
+                    e.clone()
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some((param, body_expr))
+    } else {
+        None
+    }
+}
+
+/// Lower `.map(fn)` to an `IteratorChain` with `CollectVec` terminal.
+///
+/// `arr.map(x => x * 2)` → `arr.iter().map(|x| x * 2).collect::<Vec<_>>()`
+fn lower_array_map(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::Ident("_".into())),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![IteratorOp::Map(param, Box::new(body))],
+            terminal: IteratorTerminal::CollectVec,
+        },
+        span,
+    )
+}
+
+/// Lower `.filter(fn)` to an `IteratorChain` with `.cloned().collect()`.
+///
+/// `arr.filter(x => x > 0)` → `arr.iter().filter(|x| *x > 0).cloned().collect::<Vec<_>>()`
+fn lower_array_filter(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::BoolLit(true)),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![
+                IteratorOp::Filter(param, Box::new(body)),
+                IteratorOp::Cloned,
+            ],
+            terminal: IteratorTerminal::CollectVec,
+        },
+        span,
+    )
+}
+
+/// Lower `.reduce(fn, init)` to an `IteratorChain` with `Fold` terminal.
+///
+/// `arr.reduce((acc, x) => acc + x, 0)` → `arr.iter().fold(0, |acc, x| acc + x)`
+/// Note: argument order is swapped — JS `reduce(fn, init)` → Rust `fold(init, fn)`.
+fn lower_array_reduce(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let closure_arg = iter.next();
+    let init_arg = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let (acc_param, item_param, body) = if let Some(closure) = closure_arg
+        && let RustExprKind::Closure { params, body, .. } = closure.kind
+    {
+        let acc = params
+            .first()
+            .map_or_else(|| "acc".into(), |p| p.name.clone());
+        let item = params
+            .get(1)
+            .map_or_else(|| "item".into(), |p| p.name.clone());
+        let body_expr = match body {
+            RustClosureBody::Expr(e) => *e,
+            RustClosureBody::Block(block) => {
+                if let Some(expr) = block.expr {
+                    *expr
+                } else {
+                    RustExpr::synthetic(RustExprKind::Ident("_".into()))
+                }
+            }
+        };
+        (acc, item, body_expr)
+    } else {
+        (
+            "acc".into(),
+            "item".into(),
+            RustExpr::synthetic(RustExprKind::Ident("_".into())),
+        )
+    };
+
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![],
+            terminal: IteratorTerminal::Fold {
+                init: Box::new(init_arg),
+                acc_param,
+                item_param,
+                body: Box::new(body),
+            },
+        },
+        span,
+    )
+}
+
+/// Lower `.find(fn)` to an `IteratorChain` with `Find` terminal.
+///
+/// `arr.find(x => x > 3)` → `arr.iter().find(|x| *x > 3).cloned()`
+fn lower_array_find(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::BoolLit(true)),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![],
+            terminal: IteratorTerminal::Find(param, Box::new(body)),
+        },
+        span,
+    )
+}
+
+/// Lower `.forEach(fn)` to an `IteratorChain` with `ForEach` terminal.
+///
+/// `arr.forEach(x => console.log(x))` → `arr.iter().for_each(|x| println!("{}", x))`
+fn lower_array_for_each(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::Ident("()".into())),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![],
+            terminal: IteratorTerminal::ForEach(param, Box::new(body)),
+        },
+        span,
+    )
+}
+
+/// Lower `.some(fn)` to an `IteratorChain` with `Any` terminal.
+///
+/// `arr.some(x => x > 5)` → `arr.iter().any(|x| *x > 5)`
+fn lower_array_some(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::BoolLit(false)),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![],
+            terminal: IteratorTerminal::Any(param, Box::new(body)),
+        },
+        span,
+    )
+}
+
+/// Lower `.every(fn)` to an `IteratorChain` with `All` terminal.
+///
+/// `arr.every(x => x > 0)` → `arr.iter().all(|x| *x > 0)`
+fn lower_array_every(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let (param, body) = args
+        .into_iter()
+        .next()
+        .and_then(extract_closure_owned)
+        .unwrap_or_else(|| {
+            (
+                RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                },
+                RustExpr::synthetic(RustExprKind::BoolLit(true)),
+            )
+        });
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![],
+            terminal: IteratorTerminal::All(param, Box::new(body)),
+        },
+        span,
+    )
+}
+
+/// Merge an outer collection method call onto an existing `IteratorChain`.
+///
+/// When we see `arr.map(fn1).filter(fn2)`, the inner `map` produces an
+/// `IteratorChain`. The outer `filter` should append to that chain rather
+/// than creating a new nested chain. This function handles that composition.
+#[allow(clippy::too_many_lines)]
+// Match arms for all 7 collection method variants; splitting would obscure the chain composition logic
+pub(crate) fn merge_into_chain(
+    inner_chain: RustExpr,
+    outer_method: &str,
+    outer_args: &[RustExpr],
+    span: Span,
+) -> Option<RustExpr> {
+    if let RustExprKind::IteratorChain {
+        source,
+        mut ops,
+        terminal,
+    } = inner_chain.kind
+    {
+        // The inner terminal must be CollectVec for chaining to work.
+        // (You can't chain .filter() after .find() — find is terminal.)
+        if !matches!(terminal, IteratorTerminal::CollectVec) {
+            return None;
+        }
+
+        // Build the outer operation as the new terminal.
+        match outer_method {
+            "map" => {
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                ops.push(IteratorOp::Map(param, Box::new(body)));
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::CollectVec,
+                    },
+                    span,
+                ))
+            }
+            "filter" => {
+                // Remove trailing Cloned from previous filter if present,
+                // since we're continuing the chain and will add Cloned at the end.
+                if matches!(ops.last(), Some(IteratorOp::Cloned)) {
+                    ops.pop();
+                }
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                ops.push(IteratorOp::Filter(param, Box::new(body)));
+                ops.push(IteratorOp::Cloned);
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::CollectVec,
+                    },
+                    span,
+                ))
+            }
+            "reduce" => merge_reduce_into_chain(source, ops, outer_args, span),
+            "find" => {
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::Find(param, Box::new(body)),
+                    },
+                    span,
+                ))
+            }
+            "forEach" => {
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::ForEach(param, Box::new(body)),
+                    },
+                    span,
+                ))
+            }
+            "some" => {
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::Any(param, Box::new(body)),
+                    },
+                    span,
+                ))
+            }
+            "every" => {
+                let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
+                Some(RustExpr::new(
+                    RustExprKind::IteratorChain {
+                        source,
+                        ops,
+                        terminal: IteratorTerminal::All(param, Box::new(body)),
+                    },
+                    span,
+                ))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Helper for merging a reduce call into an existing iterator chain.
+fn merge_reduce_into_chain(
+    source: Box<RustExpr>,
+    ops: Vec<IteratorOp>,
+    outer_args: &[RustExpr],
+    span: Span,
+) -> Option<RustExpr> {
+    let closure_arg = outer_args.first();
+    let init_arg = outer_args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    if let Some(closure) = closure_arg
+        && let RustExprKind::Closure { params, body, .. } = &closure.kind
+    {
+        let acc = params
+            .first()
+            .map_or_else(|| "acc".into(), |p| p.name.clone());
+        let item = params
+            .get(1)
+            .map_or_else(|| "item".into(), |p| p.name.clone());
+        let body_expr = match body {
+            RustClosureBody::Expr(e) => (**e).clone(),
+            RustClosureBody::Block(block) => {
+                if let Some(expr) = &block.expr {
+                    (**expr).clone()
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(RustExpr::new(
+            RustExprKind::IteratorChain {
+                source,
+                ops,
+                terminal: IteratorTerminal::Fold {
+                    init: Box::new(init_arg),
+                    acc_param: acc,
+                    item_param: item,
+                    body: Box::new(body_expr),
+                },
+            },
+            span,
+        ))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -600,6 +1082,323 @@ mod tests {
                 registry.lookup_string_method(method).is_some(),
                 "expected string method '{method}' to be registered"
             );
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 033: Collection method registry and lowering tests
+    // ---------------------------------------------------------------
+
+    fn make_closure(param_name: &str, body: RustExpr) -> RustExpr {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![RustClosureParam {
+                name: param_name.into(),
+                ty: None,
+            }],
+            return_type: None,
+            body: RustClosureBody::Expr(Box::new(body)),
+        })
+    }
+
+    fn make_two_param_closure(p1: &str, p2: &str, body: RustExpr) -> RustExpr {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![
+                RustClosureParam {
+                    name: p1.into(),
+                    ty: None,
+                },
+                RustClosureParam {
+                    name: p2.into(),
+                    ty: None,
+                },
+            ],
+            return_type: None,
+            body: RustClosureBody::Expr(Box::new(body)),
+        })
+    }
+
+    fn ident_expr(name: &str) -> RustExpr {
+        RustExpr::new(RustExprKind::Ident(name.to_owned()), span())
+    }
+
+    // Test 10: Registry lookup for collection method "map" returns Some
+    #[test]
+    fn test_builtin_registry_lookup_collection_method_map_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_collection_method("map").is_some());
+    }
+
+    // Test 11: Non-collection method falls through
+    #[test]
+    fn test_builtin_registry_lookup_collection_method_unknown_returns_none() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_collection_method("customMethod").is_none());
+    }
+
+    // Test: all 7 collection methods are registered
+    #[test]
+    fn test_builtin_registry_all_collection_methods_registered() {
+        let registry = BuiltinRegistry::new();
+        let methods = [
+            "map", "filter", "reduce", "find", "forEach", "some", "every",
+        ];
+        for method in methods {
+            assert!(
+                registry.lookup_collection_method(method).is_some(),
+                "expected collection method '{method}' to be registered"
+            );
+        }
+    }
+
+    // Test 1: map produces IteratorChain with Map op and CollectVec terminal
+    #[test]
+    fn test_lower_array_map_produces_iterator_chain() {
+        let receiver = ident_expr("arr");
+        let closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Mul,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(2))),
+            }),
+        );
+        let result = lower_array_map(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert_eq!(ops.len(), 1);
+                assert!(matches!(&ops[0], IteratorOp::Map(p, _) if p.name == "x"));
+                assert!(matches!(terminal, IteratorTerminal::CollectVec));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 2: filter produces IteratorChain with Filter + Cloned ops
+    #[test]
+    fn test_lower_array_filter_produces_iterator_chain_with_cloned() {
+        let receiver = ident_expr("items");
+        let closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(0))),
+            }),
+        );
+        let result = lower_array_filter(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert_eq!(ops.len(), 2);
+                assert!(matches!(&ops[0], IteratorOp::Filter(p, _) if p.name == "x"));
+                assert!(matches!(&ops[1], IteratorOp::Cloned));
+                assert!(matches!(terminal, IteratorTerminal::CollectVec));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 3: reduce produces IteratorChain with Fold terminal, args reordered
+    #[test]
+    fn test_lower_array_reduce_produces_fold_with_reordered_args() {
+        let receiver = ident_expr("arr");
+        let closure = make_two_param_closure(
+            "acc",
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Add,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("acc".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+            }),
+        );
+        let init = RustExpr::synthetic(RustExprKind::IntLit(0));
+        let result = lower_array_reduce(receiver, vec![closure, init], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert!(ops.is_empty());
+                match terminal {
+                    IteratorTerminal::Fold {
+                        init,
+                        acc_param,
+                        item_param,
+                        ..
+                    } => {
+                        assert_eq!(acc_param, "acc");
+                        assert_eq!(item_param, "x");
+                        assert!(matches!(init.kind, RustExprKind::IntLit(0)));
+                    }
+                    other => panic!("expected Fold terminal, got {other:?}"),
+                }
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 4: find produces IteratorChain with Find terminal
+    #[test]
+    fn test_lower_array_find_produces_find_terminal() {
+        let receiver = ident_expr("items");
+        let closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(3))),
+            }),
+        );
+        let result = lower_array_find(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert!(ops.is_empty());
+                assert!(matches!(terminal, IteratorTerminal::Find(p, _) if p.name == "x"));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 5: forEach produces IteratorChain with ForEach terminal
+    #[test]
+    fn test_lower_array_for_each_produces_for_each_terminal() {
+        let receiver = ident_expr("items");
+        let closure = make_closure("x", RustExpr::synthetic(RustExprKind::Ident("x".into())));
+        let result = lower_array_for_each(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert!(ops.is_empty());
+                assert!(matches!(terminal, IteratorTerminal::ForEach(p, _) if p.name == "x"));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 6: some produces IteratorChain with Any terminal
+    #[test]
+    fn test_lower_array_some_produces_any_terminal() {
+        let receiver = ident_expr("items");
+        let closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(5))),
+            }),
+        );
+        let result = lower_array_some(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert!(ops.is_empty());
+                assert!(matches!(terminal, IteratorTerminal::Any(p, _) if p.name == "x"));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 7: every produces IteratorChain with All terminal
+    #[test]
+    fn test_lower_array_every_produces_all_terminal() {
+        let receiver = ident_expr("items");
+        let closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(0))),
+            }),
+        );
+        let result = lower_array_every(receiver, vec![closure], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert!(ops.is_empty());
+                assert!(matches!(terminal, IteratorTerminal::All(p, _) if p.name == "x"));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 8: chain map+filter merges into single IteratorChain
+    #[test]
+    fn test_merge_map_then_filter_into_single_chain() {
+        let receiver = ident_expr("arr");
+        let map_closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Mul,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(2))),
+            }),
+        );
+        // Create the inner map chain
+        let inner = lower_array_map(receiver, vec![map_closure], span());
+        // Now merge a filter onto it
+        let filter_closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(5))),
+            }),
+        );
+        let result = merge_into_chain(inner, "filter", &[filter_closure], span())
+            .expect("merge should succeed");
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert_eq!(ops.len(), 3); // Map, Filter, Cloned
+                assert!(matches!(&ops[0], IteratorOp::Map(p, _) if p.name == "x"));
+                assert!(matches!(&ops[1], IteratorOp::Filter(p, _) if p.name == "x"));
+                assert!(matches!(&ops[2], IteratorOp::Cloned));
+                assert!(matches!(terminal, IteratorTerminal::CollectVec));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
+    // Test 9: chain map+filter+reduce merges into single chain
+    #[test]
+    fn test_merge_map_filter_reduce_into_single_chain() {
+        let receiver = ident_expr("arr");
+        let map_closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Mul,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(2))),
+            }),
+        );
+        let inner = lower_array_map(receiver, vec![map_closure], span());
+
+        let filter_closure = make_closure(
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Gt,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::IntLit(0))),
+            }),
+        );
+        let mid = merge_into_chain(inner, "filter", &[filter_closure], span())
+            .expect("merge filter should succeed");
+
+        let reduce_closure = make_two_param_closure(
+            "acc",
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Add,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("acc".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+            }),
+        );
+        let init = RustExpr::synthetic(RustExprKind::IntLit(0));
+        let result = merge_into_chain(mid, "reduce", &[reduce_closure, init], span())
+            .expect("merge reduce should succeed");
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                // Map, Filter, Cloned from the filter merge
+                assert!(ops.len() >= 2);
+                assert!(matches!(terminal, IteratorTerminal::Fold { .. }));
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
         }
     }
 }
