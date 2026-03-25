@@ -14,6 +14,7 @@ use rsc_syntax::diagnostic::{Severity, render_diagnostics};
 use rsc_syntax::rust_ir::RustModDecl;
 
 use crate::error::{DriverError, Result};
+use crate::error_translation::translate_rustc_errors;
 use crate::pipeline::{CompileResult, compile_source, compile_source_with_mods};
 
 /// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
@@ -362,10 +363,19 @@ impl Project {
             cmd.arg("--release");
         }
 
-        let status = cmd.status()?;
+        let output = cmd.output()?;
 
-        if !status.success() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let translated = translate_rustc_errors(&stderr);
+            eprint!("{translated}");
             return Err(DriverError::CargoBuildFailed);
+        }
+
+        // On success, forward any stdout (e.g. "Compiling ..." messages).
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            print!("{stdout}");
         }
 
         Ok(())
@@ -400,8 +410,23 @@ impl Project {
             cmd.args(args);
         }
 
-        let status = cmd.status()?;
-        Ok(status)
+        let output = cmd.output()?;
+
+        // Forward stdout (program output + cargo messages).
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            print!("{stdout}");
+        }
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                let translated = translate_rustc_errors(&stderr);
+                eprint!("{translated}");
+            }
+        }
+
+        Ok(output.status)
     }
 }
 

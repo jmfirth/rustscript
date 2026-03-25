@@ -6,8 +6,10 @@
 //! (`init_project`) and diagnostic aggregation.
 
 pub mod error;
+pub mod error_translation;
 mod pipeline;
 mod project;
 
+pub use error_translation::translate_rustc_errors;
 pub use pipeline::{CompileResult, compile_source, compile_source_with_mods};
 pub use project::{Project, init_project};
