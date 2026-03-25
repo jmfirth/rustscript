@@ -179,7 +179,7 @@ pub fn compile_multi_file_and_run(files: &[(&str, &str)]) -> String {
 
     // Open and compile the project using the driver
     let project = rsc_driver::Project::open(&project_dir).expect("failed to open project");
-    let (result, build_dir) = project.compile().expect("failed to compile project");
+    let (result, build_dir, _, _) = project.compile().expect("failed to compile project");
 
     assert!(
         !result.has_errors,

@@ -221,13 +221,14 @@ impl Project {
     /// Discovers all `.rts` files in `src/`, compiles each independently, generates
     /// `mod` declarations for the main file, and writes all output to `.rsc-build/src/`.
     ///
-    /// Returns the [`CompileResult`] for the main file and the path to the build directory.
+    /// Returns the [`CompileResult`] for the main file, the path to the build directory,
+    /// the original `.rts` source text, and the `.rts` display filename.
     ///
     /// # Errors
     ///
     /// Returns an error if the main source file cannot be found or read, or if
     /// the build directory cannot be created.
-    pub fn compile(&self) -> Result<(CompileResult, PathBuf)> {
+    pub fn compile(&self) -> Result<(CompileResult, PathBuf, String, String)> {
         let source_path = self.main_source()?;
         let source = fs::read_to_string(&source_path)?;
         let module_files = self.discover_modules()?;
@@ -332,7 +333,8 @@ impl Project {
             result
         };
 
-        Ok((result, build_dir))
+        let rts_filename = format!("src/{file_name}");
+        Ok((result, build_dir, source, rts_filename))
     }
 
     /// Build the project: compile, then invoke `cargo build` on the output.
@@ -344,7 +346,7 @@ impl Project {
     /// Returns [`DriverError::CompilationFailed`] if the `RustScript` compilation
     /// produces errors, or [`DriverError::CargoBuildFailed`] if `cargo build` fails.
     pub fn build(&self, release: bool) -> Result<()> {
-        let (result, build_dir) = self.compile()?;
+        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
             render_errors(&result);
@@ -367,7 +369,13 @@ impl Project {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let translated = translate_rustc_errors(&stderr);
+            let source_map = if result.source_map_lines.is_empty() {
+                None
+            } else {
+                Some(result.source_map_lines.as_slice())
+            };
+            let translated =
+                translate_rustc_errors(&stderr, source_map, Some(&rts_source), Some(&rts_filename));
             eprint!("{translated}");
             return Err(DriverError::CargoBuildFailed);
         }
@@ -390,7 +398,7 @@ impl Project {
     /// Returns [`DriverError::CompilationFailed`] if the `RustScript` compilation
     /// produces errors, or an I/O error if `cargo run` cannot be spawned.
     pub fn run(&self, args: &[String]) -> Result<std::process::ExitStatus> {
-        let (result, build_dir) = self.compile()?;
+        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
             render_errors(&result);
@@ -421,7 +429,17 @@ impl Project {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.is_empty() {
-                let translated = translate_rustc_errors(&stderr);
+                let source_map = if result.source_map_lines.is_empty() {
+                    None
+                } else {
+                    Some(result.source_map_lines.as_slice())
+                };
+                let translated = translate_rustc_errors(
+                    &stderr,
+                    source_map,
+                    Some(&rts_source),
+                    Some(&rts_filename),
+                );
                 eprint!("{translated}");
             }
         }
@@ -439,7 +457,7 @@ impl Project {
     /// Returns [`DriverError::CompilationFailed`] if `RustScript` compilation fails,
     /// or [`DriverError::CargoBuildFailed`] if `cargo test` fails.
     pub fn test(&self, release: bool, args: &[String]) -> Result<std::process::ExitStatus> {
-        let (result, build_dir) = self.compile()?;
+        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
             render_errors(&result);
@@ -481,7 +499,17 @@ impl Project {
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.is_empty() {
-                let translated = translate_rustc_errors(&stderr);
+                let source_map = if result.source_map_lines.is_empty() {
+                    None
+                } else {
+                    Some(result.source_map_lines.as_slice())
+                };
+                let translated = translate_rustc_errors(
+                    &stderr,
+                    source_map,
+                    Some(&rts_source),
+                    Some(&rts_filename),
+                );
                 eprint!("{translated}");
             }
         }
@@ -707,7 +735,7 @@ mod tests {
         let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir) = project.compile().unwrap();
+        let (result, build_dir, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -736,7 +764,7 @@ mod tests {
         let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
@@ -756,7 +784,7 @@ mod tests {
         let project_dir = init_project("hello-project", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir) = project.compile().unwrap();
+        let (result, build_dir, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -810,7 +838,7 @@ mod tests {
         let project = Project::open(&project_dir).unwrap();
 
         // First compile
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         // Simulate a previous cargo build by creating a target/ directory
         let target_dir = build_dir.join("target");
@@ -821,7 +849,7 @@ mod tests {
         fs::write(build_dir.join("Cargo.lock"), "# lock file").unwrap();
 
         // Recompile
-        let (_, build_dir2) = project.compile().unwrap();
+        let (_, build_dir2, _, _) = project.compile().unwrap();
         assert_eq!(build_dir, build_dir2);
 
         // target/ and Cargo.lock should still be there
@@ -869,7 +897,7 @@ mod tests {
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir) = project.compile().unwrap();
+        let (result, build_dir, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -907,7 +935,7 @@ mod tests {
         let project_dir = init_project("single-file", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, _) = project.compile().unwrap();
+        let (result, _, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -940,7 +968,7 @@ mod tests {
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
@@ -960,7 +988,7 @@ mod tests {
         let project_dir = init_project("local-only", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
@@ -998,7 +1026,7 @@ mod tests {
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         // reqwest should appear exactly once
@@ -1063,7 +1091,7 @@ mod tests {
         let project_dir = init_project("builder-test", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
@@ -1112,7 +1140,7 @@ async function fetchData(): string {
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir) = project.compile().unwrap();
+        let (result, build_dir, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -1138,7 +1166,7 @@ async function fetchData(): string {
         let project_dir = init_project("sync-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir) = project.compile().unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
 
         let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
