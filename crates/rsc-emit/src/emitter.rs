@@ -1278,6 +1278,19 @@ impl Emitter {
                 self.write(" as ");
                 self.write(&ty.to_string());
             }
+            RustExprKind::IfExpr {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.write("if ");
+                self.emit_expr(condition);
+                self.write(" { ");
+                self.emit_expr(then_expr);
+                self.write(" } else { ");
+                self.emit_expr(else_expr);
+                self.write(" }");
+            }
         }
     }
 

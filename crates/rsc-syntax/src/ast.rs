@@ -769,6 +769,18 @@ pub enum ExprKind {
     /// A spread argument in a function call: `...expr`.
     /// In function calls to rest-parameter functions, passes a `Vec<T>` directly.
     SpreadArg(Box<Expr>),
+    /// Ternary conditional: `condition ? consequent : alternate`.
+    /// Lowers to `if condition { consequent } else { alternate }`.
+    Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// Non-null assertion: `expr!`. Asserts the value is not null/None.
+    /// Lowers to `expr.unwrap()`.
+    NonNullAssert(Box<Expr>),
+    /// Type cast: `expr as Type`.
+    /// Lowers to Rust `expr as Type` for numeric casts.
+    Cast(Box<Expr>, TypeAnnotation),
+    /// typeof operator: `typeof expr`.
+    /// Lowers to a string literal for known types at compile time.
+    TypeOf(Box<Expr>),
 }
 
 /// A binary expression with an operator and two operands.
@@ -813,6 +825,18 @@ pub enum BinaryOp {
     And,
     /// Logical OR (`||`).
     Or,
+    /// Exponentiation (`**`). Lowers to `.pow()` or `.powf()`.
+    Pow,
+    /// Bitwise AND (`&`).
+    BitAnd,
+    /// Bitwise OR (`|`).
+    BitOr,
+    /// Bitwise XOR (`^`).
+    BitXor,
+    /// Left shift (`<<`).
+    Shl,
+    /// Right shift (`>>`).
+    Shr,
 }
 
 impl std::fmt::Display for BinaryOp {
@@ -831,6 +855,12 @@ impl std::fmt::Display for BinaryOp {
             Self::Ge => ">=",
             Self::And => "&&",
             Self::Or => "||",
+            Self::Pow => "**",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         };
         f.write_str(s)
     }
@@ -852,6 +882,8 @@ pub enum UnaryOp {
     Neg,
     /// Logical NOT (`!`).
     Not,
+    /// Bitwise NOT (`~`). Lowers to Rust `!` on integer types.
+    BitNot,
 }
 
 /// A function call expression.

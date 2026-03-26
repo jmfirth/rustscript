@@ -921,3 +921,134 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "true\nfalse\ntrue");
 }
+
+// ---------------------------------------------------------------------------
+// Task 054: Operators and Expressions
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_ternary_returns_correct_value() {
+    let source = "\
+function main() {
+  const x: i64 = 10;
+  const result: i64 = x > 5 ? 1 : 0;
+  console.log(result);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_exponentiation_computes_power() {
+    let source = "\
+function main() {
+  const result: i64 = 2 ** 10;
+  console.log(result);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "1024");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_non_null_assert_unwraps_some() {
+    let source = "\
+function main() {
+  const x: i64 | null = 42;
+  const y: i64 = x!;
+  console.log(y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_as_cast_converts_type() {
+    let source = "\
+function main() {
+  const x: i64 = 42;
+  const y: f64 = x as f64;
+  console.log(y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "42");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_typeof_returns_correct_strings() {
+    let source = "\
+function main() {
+  console.log(typeof 42);
+  console.log(typeof true);
+}";
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "number");
+    assert_eq!(lines[1], "boolean");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_bitwise_operations() {
+    let source = "\
+function main() {
+  const a: i64 = 12;
+  const b: i64 = 10;
+  console.log(a & b);
+  console.log(a | b);
+  console.log(a ^ b);
+  console.log(~a);
+}";
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "8"); // 12 & 10 = 8
+    assert_eq!(lines[1], "14"); // 12 | 10 = 14
+    assert_eq!(lines[2], "6"); // 12 ^ 10 = 6
+    assert_eq!(lines[3], "-13"); // ~12 = -13
+}
+
+#[test]
+#[ignore]
+fn test_e2e_shift_operations() {
+    let source = "\
+function main() {
+  const x: i64 = 1;
+  console.log(x << 4);
+  console.log(16 >> 2);
+}";
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "16"); // 1 << 4 = 16
+    assert_eq!(lines[1], "4"); // 16 >> 2 = 4
+}
+
+#[test]
+#[ignore]
+fn test_e2e_strict_equality_comparison() {
+    let source = "\
+function main() {
+  const a: i64 = 5;
+  const b: i64 = 5;
+  const c: i64 = 3;
+  console.log(a === b);
+  console.log(a !== c);
+  console.log(a === c);
+}";
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "true");
+    assert_eq!(lines[1], "true");
+    assert_eq!(lines[2], "false");
+}

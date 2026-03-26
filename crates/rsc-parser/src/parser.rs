@@ -26,10 +26,11 @@ use crate::token::{Token, TokenKind};
 /// adversarial input (e.g., deeply nested parentheses).
 ///
 /// Set conservatively to account for the full precedence chain per depth
-/// level in debug builds. Each expression depth level uses ~12 stack
-/// frames through the precedence hierarchy, including arrow function
+/// level in debug builds. Each expression depth level uses ~18 stack
+/// frames through the precedence hierarchy (ternary, bitwise, shift,
+/// exponentiation, postfix, etc.), including arrow function
 /// disambiguation lookahead.
-const MAX_EXPR_DEPTH: usize = 50;
+const MAX_EXPR_DEPTH: usize = 35;
 
 /// Maximum nesting depth for blocks / statements to prevent stack overflow
 /// on adversarial input (e.g., 50 nested `function` declarations).
@@ -259,6 +260,11 @@ impl<'src> Parser<'src> {
             TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
             TokenKind::TemplateMiddle(_) => "template literal middle",
             TokenKind::TemplateTail(_) => "template literal tail",
+            TokenKind::StarStar => "`**`",
+            TokenKind::Caret => "`^`",
+            TokenKind::Tilde => "`~`",
+            TokenKind::As => "`as`",
+            TokenKind::TypeOf => "`typeof`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -2165,12 +2171,12 @@ impl<'src> Parser<'src> {
         result
     }
 
-    /// Parse assignment: `IDENT = assignment | IDENT op= assignment | nullish_coalesce`.
+    /// Parse assignment: `IDENT = assignment | IDENT op= assignment | ternary`.
     ///
     /// Assignment is right-associative: `a = b = c` parses as `a = (b = c)`.
     /// Compound assignments (`+=`, `-=`, etc.) are desugared to `x = x op rhs`.
     fn parse_assignment(&mut self) -> Option<Expr> {
-        let expr = self.parse_nullish_coalesce()?;
+        let expr = self.parse_ternary()?;
 
         // Check for compound assignment operators
         let compound_op = match self.peek() {
@@ -2271,6 +2277,32 @@ impl<'src> Parser<'src> {
         Some(expr)
     }
 
+    /// Parse ternary: `nullish_coalesce ( "?" assignment ":" assignment )?`.
+    ///
+    /// The ternary operator has lower precedence than nullish coalescing.
+    /// Right-associative: `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+    fn parse_ternary(&mut self) -> Option<Expr> {
+        let condition = self.parse_nullish_coalesce()?;
+
+        if self.check(&TokenKind::Question) {
+            self.advance(); // consume `?`
+            let consequent = self.parse_assignment()?;
+            self.expect(&TokenKind::Colon)?;
+            let alternate = self.parse_assignment()?;
+            let span = condition.span.merge(alternate.span);
+            return Some(Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(condition),
+                    Box::new(consequent),
+                    Box::new(alternate),
+                ),
+                span,
+            });
+        }
+
+        Some(condition)
+    }
+
     /// Parse nullish coalescing: `logic_or ( "??" logic_or )*`.
     ///
     /// `??` has lower precedence than `||`, so `a || b ?? c` is `(a || b) ?? c`.
@@ -2314,17 +2346,86 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse logical AND: `equality ( "&&" equality )*`.
+    /// Parse logical AND: `bitwise_or ( "&&" bitwise_or )*`.
     fn parse_logic_and(&mut self) -> Option<Expr> {
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_bitwise_or()?;
 
         while self.check(&TokenKind::AmpAmp) {
+            self.advance();
+            let right = self.parse_bitwise_or()?;
+            let span = left.span.merge(right.span);
+            left = Expr {
+                kind: ExprKind::Binary(BinaryExpr {
+                    op: BinaryOp::And,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse bitwise OR: `bitwise_xor ( "|" bitwise_xor )*`.
+    ///
+    /// The `|` token is `Pipe` — but only when it's not part of `||` (which is lexed as
+    /// `PipePipe`). We need to be careful not to consume `|` when it's used for union types
+    /// in other contexts, but in expression position `|` is always bitwise OR.
+    fn parse_bitwise_or(&mut self) -> Option<Expr> {
+        let mut left = self.parse_bitwise_xor()?;
+
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            let right = self.parse_bitwise_xor()?;
+            let span = left.span.merge(right.span);
+            left = Expr {
+                kind: ExprKind::Binary(BinaryExpr {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse bitwise XOR: `bitwise_and ( "^" bitwise_and )*`.
+    fn parse_bitwise_xor(&mut self) -> Option<Expr> {
+        let mut left = self.parse_bitwise_and()?;
+
+        while self.check(&TokenKind::Caret) {
+            self.advance();
+            let right = self.parse_bitwise_and()?;
+            let span = left.span.merge(right.span);
+            left = Expr {
+                kind: ExprKind::Binary(BinaryExpr {
+                    op: BinaryOp::BitXor,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse bitwise AND: `equality ( "&" equality )*`.
+    ///
+    /// Uses `Ampersand` token. `&&` is already lexed as `AmpAmp` for logical AND.
+    fn parse_bitwise_and(&mut self) -> Option<Expr> {
+        let mut left = self.parse_equality()?;
+
+        while self.check(&TokenKind::Ampersand) {
             self.advance();
             let right = self.parse_equality()?;
             let span = left.span.merge(right.span);
             left = Expr {
                 kind: ExprKind::Binary(BinaryExpr {
-                    op: BinaryOp::And,
+                    op: BinaryOp::BitAnd,
                     left: Box::new(left),
                     right: Box::new(right),
                 }),
@@ -2361,9 +2462,9 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse comparison: `addition ( ("<" | ">" | "<=" | ">=") addition )*`.
+    /// Parse comparison: `shift ( ("<" | ">" | "<=" | ">=") shift )*`.
     fn parse_comparison(&mut self) -> Option<Expr> {
-        let mut left = self.parse_addition()?;
+        let mut left = self.parse_shift()?;
 
         loop {
             let op = match self.peek() {
@@ -2374,6 +2475,45 @@ impl<'src> Parser<'src> {
                 _ => break,
             };
             self.advance();
+            let right = self.parse_shift()?;
+            let span = left.span.merge(right.span);
+            left = Expr {
+                kind: ExprKind::Binary(BinaryExpr {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse shift: `addition ( ("<<" | ">>") addition )*`.
+    ///
+    /// `<<` and `>>` are not lexed as single tokens (to avoid conflicts with
+    /// generic type syntax like `Array<Array<i32>>`). Instead, we detect two
+    /// consecutive `<` or `>` tokens and consume them as shift operators.
+    fn parse_shift(&mut self) -> Option<Expr> {
+        let mut left = self.parse_addition()?;
+
+        loop {
+            let op = if self.check(&TokenKind::Lt)
+                && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Lt)
+            {
+                Some(BinaryOp::Shl)
+            } else if self.check(&TokenKind::Gt)
+                && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Gt)
+            {
+                Some(BinaryOp::Shr)
+            } else {
+                None
+            };
+
+            let Some(op) = op else { break };
+            self.advance(); // consume first `<` or `>`
+            self.advance(); // consume second `<` or `>`
             let right = self.parse_addition()?;
             let span = left.span.merge(right.span);
             left = Expr {
@@ -2415,9 +2555,9 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse multiplication: `unary ( ("*" | "/" | "%") unary )*`.
+    /// Parse multiplication: `exponentiation ( ("*" | "/" | "%") exponentiation )*`.
     fn parse_multiplication(&mut self) -> Option<Expr> {
-        let mut left = self.parse_unary()?;
+        let mut left = self.parse_exponentiation()?;
 
         loop {
             let op = match self.peek() {
@@ -2427,7 +2567,7 @@ impl<'src> Parser<'src> {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_exponentiation()?;
             let span = left.span.merge(right.span);
             left = Expr {
                 kind: ExprKind::Binary(BinaryExpr {
@@ -2442,7 +2582,30 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse unary: `("-" | "!") unary | "throw" expr | "await" unary | call`.
+    /// Parse exponentiation: `unary ( "**" exponentiation )?`.
+    ///
+    /// Right-associative: `a ** b ** c` parses as `a ** (b ** c)`.
+    fn parse_exponentiation(&mut self) -> Option<Expr> {
+        let base = self.parse_unary()?;
+
+        if self.check(&TokenKind::StarStar) {
+            self.advance();
+            let exp = self.parse_exponentiation()?;
+            let span = base.span.merge(exp.span);
+            return Some(Expr {
+                kind: ExprKind::Binary(BinaryExpr {
+                    op: BinaryOp::Pow,
+                    left: Box::new(base),
+                    right: Box::new(exp),
+                }),
+                span,
+            });
+        }
+
+        Some(base)
+    }
+
+    /// Parse unary: `("-" | "!" | "~" | "typeof") unary | "throw" expr | "await" unary | postfix`.
     fn parse_unary(&mut self) -> Option<Expr> {
         match self.peek() {
             TokenKind::Minus => {
@@ -2469,6 +2632,27 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+            TokenKind::Tilde => {
+                let op_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = op_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::Unary(UnaryExpr {
+                        op: UnaryOp::BitNot,
+                        operand: Box::new(operand),
+                    }),
+                    span,
+                })
+            }
+            TokenKind::TypeOf => {
+                let typeof_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = typeof_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::TypeOf(Box::new(operand)),
+                    span,
+                })
+            }
             TokenKind::Throw => {
                 let throw_token = self.advance();
                 let value = self.parse_unary()?;
@@ -2487,8 +2671,43 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
-            _ => self.parse_call(),
+            _ => self.parse_postfix(),
         }
+    }
+
+    /// Parse postfix operators: `as Type` and `!` (non-null assertion).
+    ///
+    /// These are applied after call/member-access parsing:
+    /// `expr.method()!` or `expr as f64`.
+    fn parse_postfix(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_call()?;
+
+        loop {
+            if self.check(&TokenKind::As) {
+                self.advance(); // consume `as`
+                let ty = self.parse_type_annotation()?;
+                let span = expr.span.merge(ty.span);
+                expr = Expr {
+                    kind: ExprKind::Cast(Box::new(expr), ty),
+                    span,
+                };
+            } else if self.check(&TokenKind::Bang) {
+                // Postfix `!` — non-null assertion.
+                // Must not be followed by `=` (that would be `!=` or `!==`).
+                // The lexer already handles `!=` and `!==` as separate tokens,
+                // so if we see a bare `Bang` here, it's always postfix `!`.
+                let bang = self.advance();
+                let span = expr.span.merge(bang.span);
+                expr = Expr {
+                    kind: ExprKind::NonNullAssert(Box::new(expr)),
+                    span,
+                };
+            } else {
+                break;
+            }
+        }
+
+        Some(expr)
     }
 
     /// Parse call and member expressions:
@@ -6356,6 +6575,260 @@ function main(): void {
             assert!(f.params[0].is_rest);
         } else {
             panic!("expected function");
+        }
+    }
+
+    // --- Task 054: Operators and Expressions ---
+
+    #[test]
+    fn test_parser_ternary_produces_ternary_node() {
+        let module = parse_ok("function main() { const x: i32 = true ? 1 : 0; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(&decl.init.kind, ExprKind::Ternary(_, _, _)),
+                "expected Ternary, got: {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_nested_ternary_right_associative() {
+        let module = parse_ok("function f() { const x: i32 = a ? 1 : b ? 2 : 3; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Ternary(_, _, alternate) = &decl.init.kind {
+                assert!(
+                    matches!(&alternate.kind, ExprKind::Ternary(_, _, _)),
+                    "alternate should be another ternary"
+                );
+            } else {
+                panic!("expected Ternary");
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_exponentiation_produces_pow_binary() {
+        let module = parse_ok("function f() { const x: i64 = 2 ** 10; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Pow);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_exponentiation_right_associative() {
+        let module = parse_ok("function f() { const x: i64 = 2 ** 3 ** 2; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Pow);
+                // Right-hand side should also be a Pow binary
+                assert!(
+                    matches!(&bin.right.kind, ExprKind::Binary(inner) if inner.op == BinaryOp::Pow),
+                    "expected right-associative ** parsing"
+                );
+            } else {
+                panic!("expected Binary");
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_non_null_assert_postfix_bang() {
+        let module = parse_ok("function f() { const x: i32 = y!; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(&decl.init.kind, ExprKind::NonNullAssert(_)),
+                "expected NonNullAssert, got: {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_as_cast() {
+        let module = parse_ok("function f() { const x: f64 = y as f64; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Cast(_, ref ty) = decl.init.kind {
+                assert!(
+                    matches!(&ty.kind, TypeKind::Named(ident) if ident.name == "f64"),
+                    "expected f64 type, got: {:?}",
+                    ty.kind
+                );
+            } else {
+                panic!("expected Cast, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_typeof_prefix() {
+        let module = parse_ok("function f() { const x: string = typeof 42; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(&decl.init.kind, ExprKind::TypeOf(_)),
+                "expected TypeOf, got: {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitwise_and() {
+        let module = parse_ok("function f() { const x: i64 = a & b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::BitAnd);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitwise_or() {
+        let module = parse_ok("function f() { const x: i64 = a | b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::BitOr);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitwise_xor() {
+        let module = parse_ok("function f() { const x: i64 = a ^ b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::BitXor);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_bitwise_not() {
+        let module = parse_ok("function f() { const x: i64 = ~a; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Unary(un) = &decl.init.kind {
+                assert_eq!(un.op, UnaryOp::BitNot);
+            } else {
+                panic!("expected Unary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_left_shift() {
+        let module = parse_ok("function f() { const x: i64 = 1 << 4; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Shl);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_right_shift() {
+        let module = parse_ok("function f() { const x: i64 = 16 >> 2; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Shr);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_triple_equals_produces_eq() {
+        let module = parse_ok("function f() { const x: bool = a === b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Eq);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_triple_not_equals_produces_ne() {
+        let module = parse_ok("function f() { const x: bool = a !== b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(bin) = &decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Ne);
+            } else {
+                panic!("expected Binary, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
         }
     }
 }

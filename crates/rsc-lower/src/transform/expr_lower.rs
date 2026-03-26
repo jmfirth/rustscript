@@ -47,6 +47,13 @@ impl Transform {
                 Self::lower_ident_ref(ident, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Binary(bin) => {
+                // Special handling for exponentiation: `a ** b` → `a.pow(b as u32)` or `a.powf(b)`
+                if bin.op == ast::BinaryOp::Pow {
+                    return self.lower_pow_expr(
+                        &bin.left, &bin.right, expr.span, ctx, use_map, stmt_index,
+                    );
+                }
+
                 let left = self.lower_expr(&bin.left, ctx, use_map, stmt_index);
                 let right = self.lower_expr(&bin.right, ctx, use_map, stmt_index);
                 let op = lower_binary_op(bin.op);
@@ -288,6 +295,52 @@ impl Transform {
                 // it's a spread used outside a function call context — just lower
                 // the inner expression.
                 self.lower_expr(inner, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::Ternary(condition, consequent, alternate) => {
+                let cond = self.lower_expr(condition, ctx, use_map, stmt_index);
+                let then_expr = self.lower_expr(consequent, ctx, use_map, stmt_index);
+                let else_expr = self.lower_expr(alternate, ctx, use_map, stmt_index);
+                RustExpr::new(
+                    RustExprKind::IfExpr {
+                        condition: Box::new(cond),
+                        then_expr: Box::new(then_expr),
+                        else_expr: Box::new(else_expr),
+                    },
+                    expr.span,
+                )
+            }
+            ast::ExprKind::NonNullAssert(inner) => {
+                let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
+                RustExpr::new(
+                    RustExprKind::MethodCall {
+                        receiver: Box::new(lowered),
+                        method: "unwrap".to_owned(),
+                        type_args: vec![],
+                        args: vec![],
+                    },
+                    expr.span,
+                )
+            }
+            ast::ExprKind::Cast(inner, type_ann) => {
+                let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
+                let mut diags = Vec::new();
+                let ty =
+                    rsc_typeck::resolve::resolve_type_annotation_to_rust_type(type_ann, &mut diags);
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
+                RustExpr::new(RustExprKind::Cast(Box::new(lowered), ty), expr.span)
+            }
+            ast::ExprKind::TypeOf(inner) => {
+                // Resolve typeof statically based on the expression's literal type.
+                let type_str = match &inner.kind {
+                    ast::ExprKind::IntLit(_) | ast::ExprKind::FloatLit(_) => "number",
+                    ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => "string",
+                    ast::ExprKind::BoolLit(_) => "boolean",
+                    _ => "object",
+                };
+                let lit = RustExpr::new(RustExprKind::StringLit(type_str.to_owned()), expr.span);
+                RustExpr::synthetic(RustExprKind::ToString(Box::new(lit)))
             }
         }
     }
@@ -570,6 +623,51 @@ impl Transform {
             },
             span,
         )
+    }
+
+    /// Lower exponentiation: `a ** b`.
+    ///
+    /// For integer bases: `a.pow(b as u32)`.
+    /// For float bases: `a.powf(b)`.
+    /// When the base type is ambiguous, defaults to `.pow(b as u32)`.
+    fn lower_pow_expr(
+        &self,
+        left: &ast::Expr,
+        right: &ast::Expr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let base = self.lower_expr(left, ctx, use_map, stmt_index);
+        let exp = self.lower_expr(right, ctx, use_map, stmt_index);
+
+        let is_float = matches!(left.kind, ast::ExprKind::FloatLit(_));
+
+        if is_float {
+            // `a.powf(b)`
+            RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(base),
+                    method: "powf".to_owned(),
+                    type_args: vec![],
+                    args: vec![exp],
+                },
+                span,
+            )
+        } else {
+            // `a.pow(b as u32)`
+            let cast_exp = RustExpr::new(RustExprKind::Cast(Box::new(exp), RustType::U32), span);
+            RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(base),
+                    method: "pow".to_owned(),
+                    type_args: vec![],
+                    args: vec![cast_exp],
+                },
+                span,
+            )
+        }
     }
 
     /// Lower an identifier reference, inserting a clone if ownership analysis requires it.

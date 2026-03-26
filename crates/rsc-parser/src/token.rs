@@ -158,11 +158,21 @@ pub(crate) enum TokenKind {
     BangEqEq,
     /// `=>` (fat arrow, used in arrow functions / closures)
     FatArrow,
-    /// `&` (ampersand, used in intersection types)
+    /// `&` (ampersand, used in intersection types and bitwise AND)
     Ampersand,
     /// `...` (spread/rest operator)
     DotDotDot,
-    /// `?` (question mark, used in optional parameters)
+    /// `**` (exponentiation operator)
+    StarStar,
+    /// `^` (bitwise XOR)
+    Caret,
+    /// `~` (bitwise NOT)
+    Tilde,
+    /// `as` (type casting keyword)
+    As,
+    /// `typeof` (type query operator)
+    TypeOf,
+    /// `?` (question mark, used in optional parameters and ternary operator)
     Question,
 
     // Delimiters
