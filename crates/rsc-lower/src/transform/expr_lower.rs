@@ -136,6 +136,14 @@ impl Transform {
                     )));
                 }
 
+                // Math.PI / Math.E → std::f64::consts::PI / E
+                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
+                    && let Some(constant_expr) =
+                        crate::builtins::lower_math_constant(&obj_ident.name, field_name)
+                {
+                    return constant_expr;
+                }
+
                 // `.length` / `.size` on strings/arrays/maps/sets → `.len() as i64`
                 // The cast to i64 matches RustScript's default numeric type and avoids
                 // type mismatches when assigning to numeric fields (usize vs i64/u32).

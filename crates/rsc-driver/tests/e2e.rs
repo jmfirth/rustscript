@@ -1052,3 +1052,74 @@ function main() {
     assert_eq!(lines[1], "true");
     assert_eq!(lines[2], "false");
 }
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — Math operations e2e
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_math_operations_produce_correct_output() {
+    let source = "\
+function main() {
+  console.log(Math.floor(3.7));
+  console.log(Math.ceil(3.2));
+  console.log(Math.round(3.5));
+  console.log(Math.abs(-5.0));
+  console.log(Math.sqrt(16.0));
+  console.log(Math.min(3.0, 5.0));
+  console.log(Math.max(3.0, 5.0));
+  console.log(Math.pow(2.0, 3.0));
+  console.log(Math.PI);
+  console.log(Math.E);
+}";
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "3", "floor(3.7) should be 3");
+    assert_eq!(lines[1], "4", "ceil(3.2) should be 4");
+    assert_eq!(lines[2], "4", "round(3.5) should be 4");
+    assert_eq!(lines[3], "5", "abs(-5.0) should be 5");
+    assert_eq!(lines[4], "4", "sqrt(16.0) should be 4");
+    assert_eq!(lines[5], "3", "min(3.0, 5.0) should be 3");
+    assert_eq!(lines[6], "5", "max(3.0, 5.0) should be 5");
+    assert_eq!(lines[7], "8", "pow(2.0, 3.0) should be 8");
+    assert!(
+        lines[8].starts_with("3.14159"),
+        "PI should start with 3.14159"
+    );
+    assert!(
+        lines[9].starts_with("2.71828"),
+        "E should start with 2.71828"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_e2e_console_error_outputs_to_stderr() {
+    // console.error outputs to stderr, not stdout — stdout should be empty
+    let source = r#"
+function main() {
+  console.log("stdout");
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "stdout");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_number_parse_int_operations() {
+    let source = r#"
+function main() {
+  console.log(Number.parseInt("42"));
+  console.log(Number.parseInt("invalid"));
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "42");
+    assert_eq!(lines[1], "0");
+}

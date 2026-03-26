@@ -41,7 +41,9 @@ pub struct LowerOptions {
 /// Result of lowering a single module.
 ///
 /// Groups the Rust IR, diagnostics, external crate dependencies, and
-/// whether the module needs an async runtime or futures crate.
+/// whether the module needs an async runtime, futures, `serde_json`, or rand crate.
+#[allow(clippy::struct_excessive_bools)]
+// Four boolean flags for independent crate dependency tracking
 pub struct LowerResult {
     /// The generated Rust IR.
     pub ir: RustFile,
@@ -54,6 +56,10 @@ pub struct LowerResult {
     pub needs_async_runtime: bool,
     /// Whether the source uses `for await` or `Promise.any` and needs the `futures` crate.
     pub needs_futures_crate: bool,
+    /// Whether the source uses `JSON.stringify`/`JSON.parse` and needs `serde_json`.
+    pub needs_serde_json: bool,
+    /// Whether the source uses `Math.random()` and needs the `rand` crate.
+    pub needs_rand: bool,
 }
 
 /// Lower a `RustScript` AST to Rust IR.
@@ -72,8 +78,15 @@ pub fn lower(module: &ast::Module) -> LowerResult {
 #[must_use]
 pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> LowerResult {
     let mut transform = Transform::new(options.no_borrow_inference);
-    let (ir, diagnostics, crate_deps, needs_async_runtime, needs_futures_crate) =
-        transform.lower_module(module);
+    let (
+        ir,
+        diagnostics,
+        crate_deps,
+        needs_async_runtime,
+        needs_futures_crate,
+        needs_serde_json,
+        needs_rand,
+    ) = transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {
         ir,
@@ -81,5 +94,7 @@ pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> Lower
         crate_dependencies,
         needs_async_runtime,
         needs_futures_crate,
+        needs_serde_json,
+        needs_rand,
     }
 }

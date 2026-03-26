@@ -53,6 +53,34 @@ static BUILTIN_IDENTIFIERS: LazyLock<HashMap<&'static str, BuiltinHover>> = Lazy
         },
     );
 
+    m.insert(
+        "Math",
+        BuiltinHover {
+            markdown: "```rustscript\nobject Math\n```\n\nMathematical constants and functions.\n\n- `Math.floor(x)` --- `x.floor()`\n- `Math.ceil(x)` --- `x.ceil()`\n- `Math.round(x)` --- `x.round()`\n- `Math.abs(x)` --- `x.abs()`\n- `Math.sqrt(x)` --- `x.sqrt()`\n- `Math.min(a, b)` --- `a.min(b)`\n- `Math.max(a, b)` --- `a.max(b)`\n- `Math.random()` --- `rand::random::<f64>()`\n- `Math.PI` --- `std::f64::consts::PI`\n- `Math.E` --- `std::f64::consts::E`",
+        },
+    );
+
+    m.insert(
+        "Number",
+        BuiltinHover {
+            markdown: "```rustscript\nobject Number\n```\n\nNumeric parsing and classification.\n\n- `Number.parseInt(str)` --- `str.parse::<i64>().unwrap_or(0)`\n- `Number.parseFloat(str)` --- `str.parse::<f64>().unwrap_or(0.0)`\n- `Number.isNaN(x)` --- `x.is_nan()`\n- `Number.isFinite(x)` --- `x.is_finite()`\n- `Number.isInteger(x)` --- `(x as i64 as f64) == x`",
+        },
+    );
+
+    m.insert(
+        "JSON",
+        BuiltinHover {
+            markdown: "```rustscript\nobject JSON\n```\n\nJSON serialization and deserialization.\n\n- `JSON.stringify(obj)` --- `serde_json::to_string(&obj)`\n- `JSON.parse(str)` --- `serde_json::from_str(&str)`\n\nAuto-adds `serde_json` dependency when used.",
+        },
+    );
+
+    m.insert(
+        "Object",
+        BuiltinHover {
+            markdown: "```rustscript\nobject Object\n```\n\nObject utility functions for maps.\n\n- `Object.keys(map)` --- `map.keys().cloned().collect()`\n- `Object.values(map)` --- `map.values().cloned().collect()`\n- `Object.entries(map)` --- `map.iter().map(|(k,v)| (k.clone(), v.clone())).collect()`",
+        },
+    );
+
     m
 });
 
@@ -435,6 +463,166 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         },
     );
 
+    // console extensions
+    m.insert(
+        "console.warn",
+        BuiltinHover {
+            markdown: "```rustscript\nconsole.warn(...args): void\n```\n\nPrints a warning to stderr.\n\n**Rust:** `eprintln!(\"warning: {}\", ...)`",
+        },
+    );
+    m.insert(
+        "console.debug",
+        BuiltinHover {
+            markdown: "```rustscript\nconsole.debug(...args): void\n```\n\nPrints debug output to stderr.\n\n**Rust:** `eprintln!(\"debug: {}\", ...)`",
+        },
+    );
+
+    // Math methods
+    m.insert(
+        "Math.floor",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.floor(x: number): number\n```\n\nRounds down to the nearest integer.\n\n**Rust:** `x.floor()`",
+        },
+    );
+    m.insert(
+        "Math.ceil",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.ceil(x: number): number\n```\n\nRounds up to the nearest integer.\n\n**Rust:** `x.ceil()`",
+        },
+    );
+    m.insert(
+        "Math.round",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.round(x: number): number\n```\n\nRounds to the nearest integer.\n\n**Rust:** `x.round()`",
+        },
+    );
+    m.insert(
+        "Math.abs",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.abs(x: number): number\n```\n\nReturns the absolute value.\n\n**Rust:** `x.abs()`",
+        },
+    );
+    m.insert(
+        "Math.sqrt",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.sqrt(x: number): number\n```\n\nReturns the square root.\n\n**Rust:** `x.sqrt()`",
+        },
+    );
+    m.insert(
+        "Math.min",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.min(a: number, b: number): number\n```\n\nReturns the smaller of two values.\n\n**Rust:** `a.min(b)`",
+        },
+    );
+    m.insert(
+        "Math.max",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.max(a: number, b: number): number\n```\n\nReturns the larger of two values.\n\n**Rust:** `a.max(b)`",
+        },
+    );
+    m.insert(
+        "Math.random",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.random(): number\n```\n\nReturns a random f64 in [0, 1).\n\n**Rust:** `rand::random::<f64>()`\n\nAuto-adds `rand` dependency.",
+        },
+    );
+    m.insert(
+        "Math.pow",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.pow(base: number, exp: number): number\n```\n\nReturns base raised to the power of exp.\n\n**Rust:** `base.powf(exp)`",
+        },
+    );
+    m.insert(
+        "Math.log",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.log(x: number): number\n```\n\nReturns the natural logarithm.\n\n**Rust:** `x.ln()`",
+        },
+    );
+    m.insert(
+        "Math.sin",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.sin(x: number): number\n```\n\nReturns the sine.\n\n**Rust:** `x.sin()`",
+        },
+    );
+    m.insert(
+        "Math.cos",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.cos(x: number): number\n```\n\nReturns the cosine.\n\n**Rust:** `x.cos()`",
+        },
+    );
+    m.insert(
+        "Math.tan",
+        BuiltinHover {
+            markdown: "```rustscript\nMath.tan(x: number): number\n```\n\nReturns the tangent.\n\n**Rust:** `x.tan()`",
+        },
+    );
+
+    // Number methods
+    m.insert(
+        "Number.parseInt",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.parseInt(str: string): number\n```\n\nParses a string as an integer.\n\n**Rust:** `str.parse::<i64>().unwrap_or(0)`",
+        },
+    );
+    m.insert(
+        "Number.parseFloat",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.parseFloat(str: string): number\n```\n\nParses a string as a float.\n\n**Rust:** `str.parse::<f64>().unwrap_or(0.0)`",
+        },
+    );
+    m.insert(
+        "Number.isNaN",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.isNaN(x: number): boolean\n```\n\nChecks if the value is NaN.\n\n**Rust:** `x.is_nan()`",
+        },
+    );
+    m.insert(
+        "Number.isFinite",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.isFinite(x: number): boolean\n```\n\nChecks if the value is finite.\n\n**Rust:** `x.is_finite()`",
+        },
+    );
+    m.insert(
+        "Number.isInteger",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.isInteger(x: number): boolean\n```\n\nChecks if the value is an integer.\n\n**Rust:** `(x as i64 as f64) == x`",
+        },
+    );
+
+    // Object methods
+    m.insert(
+        "Object.keys",
+        BuiltinHover {
+            markdown: "```rustscript\nObject.keys(map: Map<K, V>): Array<K>\n```\n\nReturns the keys of a map as an array.\n\n**Rust:** `map.keys().cloned().collect()`",
+        },
+    );
+    m.insert(
+        "Object.values",
+        BuiltinHover {
+            markdown: "```rustscript\nObject.values(map: Map<K, V>): Array<V>\n```\n\nReturns the values of a map as an array.\n\n**Rust:** `map.values().cloned().collect()`",
+        },
+    );
+    m.insert(
+        "Object.entries",
+        BuiltinHover {
+            markdown: "```rustscript\nObject.entries(map: Map<K, V>): Array<[K, V]>\n```\n\nReturns the entries of a map as key-value pairs.\n\n**Rust:** `map.iter().map(|(k,v)| (k.clone(), v.clone())).collect()`",
+        },
+    );
+
+    // JSON methods
+    m.insert(
+        "JSON.stringify",
+        BuiltinHover {
+            markdown: "```rustscript\nJSON.stringify(obj: any): string\n```\n\nSerializes a value to a JSON string.\n\n**Rust:** `serde_json::to_string(&obj).unwrap_or_default()`",
+        },
+    );
+    m.insert(
+        "JSON.parse",
+        BuiltinHover {
+            markdown: "```rustscript\nJSON.parse(str: string): any\n```\n\nDeserializes a JSON string to a value.\n\n**Rust:** `serde_json::from_str(&str).unwrap_or_default()`",
+        },
+    );
+
     // Promise / async
     m.insert(
         "Promise.all",
@@ -629,6 +817,10 @@ pub fn lookup_keyword(name: &str) -> Option<&'static str> {
 pub fn classify_receiver(name: &str) -> Option<&'static str> {
     match name {
         "console" => Some("console"),
+        "Math" => Some("Math"),
+        "Number" => Some("Number"),
+        "JSON" => Some("JSON"),
+        "Object" => Some("Object"),
         _ => None,
     }
 }
@@ -928,5 +1120,106 @@ mod tests {
         let hover = lookup_keyword("satisfies");
         assert!(hover.is_some(), "satisfies should have hover info");
         assert!(hover.unwrap().contains("compile-time"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Standard library builtins hover tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_math_identifier() {
+        let hover = lookup_identifier("Math");
+        assert!(hover.is_some(), "Math should have hover info");
+        assert!(hover.unwrap().contains("Math.floor"));
+    }
+
+    #[test]
+    fn test_builtin_hover_math_floor_method() {
+        let hover = lookup_method("Math", "floor");
+        assert!(hover.is_some(), "Math.floor should have hover info");
+        assert!(hover.unwrap().contains(".floor()"));
+    }
+
+    #[test]
+    fn test_builtin_hover_math_random_method() {
+        let hover = lookup_method("Math", "random");
+        assert!(hover.is_some(), "Math.random should have hover info");
+        assert!(hover.unwrap().contains("rand"));
+    }
+
+    #[test]
+    fn test_builtin_hover_number_identifier() {
+        let hover = lookup_identifier("Number");
+        assert!(hover.is_some(), "Number should have hover info");
+        assert!(hover.unwrap().contains("parseInt"));
+    }
+
+    #[test]
+    fn test_builtin_hover_number_parse_int_method() {
+        let hover = lookup_method("Number", "parseInt");
+        assert!(hover.is_some(), "Number.parseInt should have hover info");
+        assert!(hover.unwrap().contains("parse"));
+    }
+
+    #[test]
+    fn test_builtin_hover_json_identifier() {
+        let hover = lookup_identifier("JSON");
+        assert!(hover.is_some(), "JSON should have hover info");
+        assert!(hover.unwrap().contains("serde_json"));
+    }
+
+    #[test]
+    fn test_builtin_hover_json_stringify_method() {
+        let hover = lookup_method("JSON", "stringify");
+        assert!(hover.is_some(), "JSON.stringify should have hover info");
+        assert!(hover.unwrap().contains("serde_json::to_string"));
+    }
+
+    #[test]
+    fn test_builtin_hover_object_identifier() {
+        let hover = lookup_identifier("Object");
+        assert!(hover.is_some(), "Object should have hover info");
+        assert!(hover.unwrap().contains("keys"));
+    }
+
+    #[test]
+    fn test_builtin_hover_object_keys_method() {
+        let hover = lookup_method("Object", "keys");
+        assert!(hover.is_some(), "Object.keys should have hover info");
+        assert!(hover.unwrap().contains("keys()"));
+    }
+
+    #[test]
+    fn test_builtin_hover_console_warn_method() {
+        let hover = lookup_method("console", "warn");
+        assert!(hover.is_some(), "console.warn should have hover info");
+        assert!(hover.unwrap().contains("warning"));
+    }
+
+    #[test]
+    fn test_builtin_hover_console_debug_method() {
+        let hover = lookup_method("console", "debug");
+        assert!(hover.is_some(), "console.debug should have hover info");
+        assert!(hover.unwrap().contains("debug"));
+    }
+
+    #[test]
+    fn test_builtin_hover_classify_receiver_math() {
+        assert_eq!(classify_receiver("Math"), Some("Math"));
+    }
+
+    #[test]
+    fn test_builtin_hover_classify_receiver_number() {
+        assert_eq!(classify_receiver("Number"), Some("Number"));
+    }
+
+    #[test]
+    fn test_builtin_hover_classify_receiver_json() {
+        assert_eq!(classify_receiver("JSON"), Some("JSON"));
+    }
+
+    #[test]
+    fn test_builtin_hover_classify_receiver_object() {
+        assert_eq!(classify_receiver("Object"), Some("Object"));
     }
 }
