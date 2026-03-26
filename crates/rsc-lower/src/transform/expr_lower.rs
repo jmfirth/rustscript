@@ -204,10 +204,11 @@ impl Transform {
                     );
                 }
 
-                // `.length` on strings/arrays → `.len() as i64`
+                // `.length` / `.size` on strings/arrays/maps/sets → `.len() as i64`
                 // The cast to i64 matches RustScript's default numeric type and avoids
                 // type mismatches when assigning to numeric fields (usize vs i64/u32).
-                if fa.field.name == "length" {
+                // `.size` is the Map/Set equivalent of `.length`.
+                if fa.field.name == "length" || fa.field.name == "size" {
                     let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                     let len_call = RustExpr::new(
                         RustExprKind::MethodCall {
@@ -482,6 +483,8 @@ impl Transform {
     /// First checks if the method call matches a builtin. If so, lowers
     /// the arguments first then delegates to the builtin lowering function.
     /// Then checks string methods registered in the builtin registry.
+    #[allow(clippy::too_many_lines)]
+    // Method dispatch across builtins, string, collection, map/set, and lock methods
     fn lower_method_call(
         &self,
         mc: &ast::MethodCallExpr,
@@ -503,6 +506,28 @@ impl Transform {
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
             return lowering_fn(lowered_args, span);
+        }
+
+        // Check for Map/Set method: type-aware dispatch for methods like
+        // get/set/has/delete/clear/keys/values/entries/add that would conflict
+        // with user-defined class methods if dispatched by name alone.
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && ctx.lookup_variable(&obj_ident.name).is_some_and(|info| {
+                matches!(
+                    &info.ty,
+                    RustType::Generic(base, _)
+                        if matches!(base.as_ref(), RustType::Named(n) if n == "HashMap" || n == "HashSet")
+                )
+            })
+            && let Some(lowering_fn) = self.builtins.lookup_map_set_method(&mc.method.name)
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return lowering_fn(receiver, lowered_args, span);
         }
 
         // Check for string method: if the method name matches a registered
