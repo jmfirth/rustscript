@@ -768,3 +768,156 @@ function main(): void {
         result_without.rust_source,
     );
 }
+
+// ===========================================================================
+// Task 047: Borrow-to-owned context crossing fixes
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Bug 1: Array index with variable needs `as usize` cast
+//
+// `arr[i]` where `i: i32` must emit `arr[i as usize]`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p4_array_index_usize_cast() {
+    let source = "\
+function getItem(arr: Array<string>, i: i32): string {
+  return arr[i];
+}";
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("i as usize"),
+        "variable index should be cast to usize: {rust}"
+    );
+    // Literal index should NOT be cast
+    let source2 = "\
+function getFirst(arr: Array<string>): string {
+  return arr[0];
+}";
+    let rust2 = compile_to_rust(source2);
+    assert!(
+        !rust2.contains("as usize"),
+        "literal index should not be cast: {rust2}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug 2: for-of loop variable is &T, needs clone on return
+//
+// `for (const u of users) { return u; }` must emit `u.clone()` in Some().
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p4_for_of_return_clones_reference() {
+    let source = "\
+class User {
+  constructor(public id: i32, public name: string) {}
+}
+
+function findUser(users: Array<User>, targetId: i32): User | null {
+  for (const u of users) {
+    if (u.id === targetId) {
+      return u;
+    }
+  }
+  return null;
+}";
+    let rust = compile_to_rust(source);
+    // The return value should be cloned since u is &User in the for loop
+    assert!(
+        rust.contains("u.clone()"),
+        "for-of loop variable should be cloned on return: {rust}"
+    );
+    assert!(
+        rust.contains("Some(u.clone())"),
+        "return in Option context should wrap cloned value in Some: {rust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug 3: .find() returns Option<T>, should not double-wrap in Some()
+//
+// `return users.find(u => u.id === id)` should NOT emit `Some(users.iter()...)`
+// because .find().cloned() already returns Option<T>.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p4_find_no_double_wrap() {
+    let source = "\
+class User {
+  constructor(public id: i32, public name: string) {}
+}
+
+function findUser(users: Array<User>, targetId: i32): User | null {
+  return users.find((u) => u.id === targetId);
+}";
+    let rust = compile_to_rust(source);
+    // Should contain .find().cloned() — already returns Option<T>
+    assert!(
+        rust.contains(".find(") && rust.contains(".cloned()"),
+        "find should emit .find().cloned(): {rust}"
+    );
+    // Should NOT double-wrap in Some()
+    assert!(
+        !rust.contains("Some(users.iter()"),
+        "find result should not be wrapped in Some: {rust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug 4: Iterator closure parameter is &T, function expects T — needs clone
+//
+// `users.map(u => formatUser(u))` — formatUser takes User (owned),
+// but u is &User in the .iter() closure. Should emit formatUser(u.clone()).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p4_iterator_closure_arg_clone() {
+    let source = "\
+class User {
+  constructor(public id: i32, public name: string) {}
+}
+
+function formatUser(u: User): string {
+  return u.name;
+}
+
+function formatAll(users: Array<User>): Array<string> {
+  return users.map((u) => formatUser(u));
+}";
+    let rust = compile_to_rust(source);
+    // The closure param u is &User, but formatUser expects User (owned)
+    // so we need u.clone()
+    assert!(
+        rust.contains("u.clone()"),
+        "iterator closure arg should be cloned when passed to owned param: {rust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regression: for-of with Copy type should NOT insert unnecessary clone
+//
+// `for (const n of numbers)` where numbers: Array<i32> — n is Copy,
+// no clone needed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_p4_for_of_copy_type_no_clone() {
+    let source = "\
+function sumPositive(numbers: Array<i32>): i32 {
+  let total: i32 = 0;
+  for (const n of numbers) {
+    if (n > 0) {
+      total = total + n;
+    }
+  }
+  return total;
+}";
+    let rust = compile_to_rust(source);
+    // Copy types use deref pattern (&n), so no clone needed
+    assert!(
+        !rust.contains("n.clone()"),
+        "Copy type for-of variable should not be cloned: {rust}"
+    );
+}

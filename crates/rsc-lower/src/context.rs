@@ -3,7 +3,7 @@
 //! Tracks variable declarations, their types, and mutability within
 //! nested scopes. Does not contain type or ownership logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::RustType;
@@ -24,6 +24,10 @@ pub(crate) struct LoweringContext {
     /// Whether the current function is a `throws` function.
     /// Used to determine whether to wrap returns in `Ok()` and insert `?`.
     current_fn_throws: bool,
+    /// Variables that are references (e.g., for-of loop variables, iterator
+    /// closure parameters). Any use that requires ownership (return, function
+    /// call with owned param, struct field assignment) should auto-clone.
+    reference_variables: HashSet<String>,
 }
 
 /// A single scope level containing variable declarations.
@@ -48,6 +52,7 @@ impl LoweringContext {
             current_struct_type: None,
             current_return_type: None,
             current_fn_throws: false,
+            reference_variables: HashSet::new(),
         }
     }
 
@@ -110,6 +115,24 @@ impl LoweringContext {
         self.current_fn_throws
     }
 
+    /// Mark a variable as a reference (e.g., for-of loop variable).
+    ///
+    /// Variables marked as references will be auto-cloned when used in
+    /// owned contexts (return, function call with owned param).
+    pub fn mark_as_reference(&mut self, name: String) {
+        self.reference_variables.insert(name);
+    }
+
+    /// Remove a variable from the reference set (e.g., when leaving a for-of scope).
+    pub fn unmark_reference(&mut self, name: &str) {
+        self.reference_variables.remove(name);
+    }
+
+    /// Check whether a variable is currently a reference.
+    pub fn is_reference_variable(&self, name: &str) -> bool {
+        self.reference_variables.contains(name)
+    }
+
     /// Add a diagnostic to the accumulated list.
     pub fn emit_diagnostic(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(diagnostic);
@@ -161,5 +184,33 @@ mod tests {
         let diags = ctx.into_diagnostics();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "test error");
+    }
+
+    #[test]
+    fn test_context_mark_and_check_reference_variable() {
+        let mut ctx = LoweringContext::new();
+        assert!(!ctx.is_reference_variable("u"));
+        ctx.mark_as_reference("u".to_owned());
+        assert!(ctx.is_reference_variable("u"));
+    }
+
+    #[test]
+    fn test_context_unmark_reference_variable() {
+        let mut ctx = LoweringContext::new();
+        ctx.mark_as_reference("u".to_owned());
+        assert!(ctx.is_reference_variable("u"));
+        ctx.unmark_reference("u");
+        assert!(!ctx.is_reference_variable("u"));
+    }
+
+    #[test]
+    fn test_context_reference_variables_independent_of_scope() {
+        let mut ctx = LoweringContext::new();
+        ctx.mark_as_reference("u".to_owned());
+        ctx.push_scope();
+        // Reference tracking is global, not scoped
+        assert!(ctx.is_reference_variable("u"));
+        ctx.pop_scope();
+        assert!(ctx.is_reference_variable("u"));
     }
 }
