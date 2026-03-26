@@ -28,6 +28,7 @@ use crate::diagnostics;
 use crate::name_map;
 use crate::position_map::PositionMap;
 use crate::ra_proxy::RustAnalyzerProxy;
+use crate::rustdoc_cache::RustdocCache;
 
 /// Debounce delay for recompilation after document changes.
 const DEBOUNCE_MS: u64 = 300;
@@ -66,6 +67,8 @@ pub struct RscLanguageServer {
     ra_proxy: RwLock<Option<RustAnalyzerProxy>>,
     /// Project build directory (`.rsc-build/`).
     build_dir: RwLock<Option<PathBuf>>,
+    /// Cache of parsed rustdoc JSON for external crate hover documentation.
+    rustdoc_cache: RwLock<RustdocCache>,
 }
 
 impl RscLanguageServer {
@@ -80,6 +83,7 @@ impl RscLanguageServer {
             compile_cache: DashMap::new(),
             ra_proxy: RwLock::new(None),
             build_dir: RwLock::new(None),
+            rustdoc_cache: RwLock::new(RustdocCache::new()),
         }
     }
 
@@ -411,6 +415,23 @@ impl LanguageServer for RscLanguageServer {
                     range: None,
                 }));
             }
+
+            // Try rustdoc-based hover for imported symbols.
+            if let Some((crate_name, symbol_name)) = find_import_at_cursor(&module, offset)
+                && let Some(build_dir) = self.build_dir.read().await.as_ref()
+            {
+                let mut rustdoc = self.rustdoc_cache.write().await;
+                if let Some(hover_text) = rustdoc.lookup_hover(&crate_name, &symbol_name, build_dir)
+                {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: hover_text,
+                        }),
+                        range: None,
+                    }));
+                }
+            }
         }
         Ok(None)
     }
@@ -644,6 +665,46 @@ fn find_hover_info(
                 }
             }
             _ => {}
+        }
+    }
+
+    None
+}
+
+/// Check if the cursor is on an imported name and return `(crate_name, symbol_name)`.
+///
+/// For `import { Router } from "axum"`, hovering over `Router` returns
+/// `Some(("axum", "Router"))`. The source path must not start with `.` or `/`
+/// (those are local imports, not external crate imports).
+#[must_use]
+fn find_import_at_cursor(
+    module: &rsc_syntax::ast::Module,
+    offset: u32,
+) -> Option<(String, String)> {
+    use rsc_syntax::ast::ItemKind;
+    use rsc_syntax::span::BytePos;
+
+    let pos = BytePos(offset);
+
+    for item in &module.items {
+        if !item.span.contains(pos) {
+            continue;
+        }
+
+        if let ItemKind::Import(import) = &item.kind {
+            let source = &import.source.value;
+
+            // Skip local imports (relative paths).
+            if source.starts_with('.') || source.starts_with('/') {
+                continue;
+            }
+
+            // Check if cursor is on any imported name.
+            for name in &import.names {
+                if name.span.contains(pos) {
+                    return Some((source.clone(), name.name.clone()));
+                }
+            }
         }
     }
 
