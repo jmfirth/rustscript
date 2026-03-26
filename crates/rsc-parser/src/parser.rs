@@ -31,6 +31,10 @@ use crate::token::{Token, TokenKind};
 /// disambiguation lookahead.
 const MAX_EXPR_DEPTH: usize = 50;
 
+/// Maximum nesting depth for blocks / statements to prevent stack overflow
+/// on adversarial input (e.g., 50 nested `function` declarations).
+const MAX_BLOCK_DEPTH: usize = 50;
+
 /// Capitalize the first letter of a string.
 ///
 /// Used to derive Rust enum variant names from `RustScript` string literals
@@ -57,6 +61,7 @@ pub(crate) struct Parser<'src> {
     diagnostics: Vec<Diagnostic>,
     file_id: FileId,
     expr_depth: usize,
+    block_depth: usize,
     /// The original source text, needed for extracting raw content from
     /// inline Rust blocks (where we need the verbatim text between braces).
     source: &'src str,
@@ -71,6 +76,7 @@ impl<'src> Parser<'src> {
             diagnostics: Vec::new(),
             file_id,
             expr_depth: 0,
+            block_depth: 0,
             source,
         }
     }
@@ -298,8 +304,14 @@ impl<'src> Parser<'src> {
         let mut items = Vec::new();
 
         while !self.at_end() {
+            let before = self.pos;
             if let Some(item) = self.parse_item() {
                 items.push(item);
+            }
+            // Safety: guarantee forward progress to prevent infinite loops
+            // when error recovery returns to the same token position.
+            if self.pos == before {
+                self.advance();
             }
         }
 
@@ -1517,16 +1529,61 @@ impl<'src> Parser<'src> {
     // ---------------------------------------------------------------
 
     /// Parse a block: `{ stmt* }`.
+    ///
+    /// Tracks block nesting depth to prevent stack overflow on adversarial
+    /// input (e.g., 50 nested function declarations). Also guarantees forward
+    /// progress: if `parse_stmt` fails to advance the position, the parser
+    /// forcibly skips one token to prevent infinite loops.
     fn parse_block(&mut self) -> Option<Block> {
         let open = self.current_token().span;
         self.expect(&TokenKind::LBrace)?;
 
+        self.block_depth += 1;
+        if self.block_depth > MAX_BLOCK_DEPTH {
+            self.diagnostics.push(
+                Diagnostic::error("block nesting depth exceeded maximum").with_label(
+                    open,
+                    self.file_id,
+                    "here",
+                ),
+            );
+            self.block_depth -= 1;
+            // Skip to closing brace or EOF to avoid cascading errors
+            let mut brace_count = 1u32;
+            while !self.at_end() {
+                if self.check(&TokenKind::LBrace) {
+                    brace_count = brace_count.saturating_add(1);
+                } else if self.check(&TokenKind::RBrace) {
+                    brace_count = brace_count.saturating_sub(1);
+                    if brace_count == 0 {
+                        self.advance();
+                        break;
+                    }
+                }
+                self.advance();
+            }
+            return Some(Block {
+                stmts: Vec::new(),
+                span: open.merge(self.previous_span()),
+            });
+        }
+
         let mut stmts = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            let before = self.pos;
             if let Some(stmt) = self.parse_stmt() {
                 stmts.push(stmt);
             }
+            // Safety: if no progress was made, force advance one token to
+            // prevent infinite loops from error recovery landing on the same
+            // token repeatedly (e.g., `function` keyword inside a block that
+            // parse_stmt cannot handle).
+            if self.pos == before {
+                self.advance();
+            }
         }
+
+        self.block_depth -= 1;
 
         let close_span = if let Some(close) = self.expect(&TokenKind::RBrace) {
             close.span

@@ -89,6 +89,18 @@ impl<'a> Lexer<'a> {
         Some(byte)
     }
 
+    /// Advance past the current UTF-8 character, returning the char and its
+    /// byte width. This is used when the current byte is non-ASCII so that we
+    /// skip the full multi-byte character rather than landing on a continuation
+    /// byte (which would panic on `str` slicing).
+    fn advance_char(&mut self) -> Option<(char, usize)> {
+        let remaining = self.source.get(self.pos..)?;
+        let ch = remaining.chars().next()?;
+        let width = ch.len_utf8();
+        self.pos += width;
+        Some((ch, width))
+    }
+
     /// Whether we have consumed all source bytes.
     fn is_at_end(&self) -> bool {
         self.pos >= self.bytes.len()
@@ -112,12 +124,20 @@ impl<'a> Lexer<'a> {
     }
 
     /// Skip whitespace, line comments, and block comments.
+    ///
+    /// Also skips the Unicode BOM (U+FEFF) which some editors prepend to files.
     fn skip_whitespace_and_comments(&mut self) {
         loop {
-            // Skip whitespace
+            // Skip whitespace (including BOM which is 0xEF 0xBB 0xBF in UTF-8)
             while let Some(b) = self.peek() {
                 if b == b' ' || b == b'\t' || b == b'\r' || b == b'\n' {
                     self.advance();
+                } else if b == 0xEF
+                    && self.bytes.get(self.pos + 1).copied() == Some(0xBB)
+                    && self.bytes.get(self.pos + 2).copied() == Some(0xBF)
+                {
+                    // Unicode BOM (U+FEFF): skip all 3 bytes
+                    self.pos += 3;
                 } else {
                     break;
                 }
@@ -211,13 +231,17 @@ impl<'a> Lexer<'a> {
             });
         }
 
-        // Invalid character — emit diagnostic, advance, return None
-        self.advance();
+        // Invalid character — emit diagnostic, advance past full UTF-8 char, return None.
+        // We use advance_char() instead of advance() so that multi-byte characters
+        // (e.g., BOM U+FEFF, accented letters) are skipped entirely rather than
+        // leaving the position on a continuation byte.
+        let ch = if let Some((c, _)) = self.advance_char() {
+            c
+        } else {
+            self.advance();
+            char::REPLACEMENT_CHARACTER
+        };
         let span = self.span_from(start);
-        let ch = self.source[start..self.pos]
-            .chars()
-            .next()
-            .unwrap_or(char::REPLACEMENT_CHARACTER);
         self.diagnostics.push(
             Diagnostic::error(format!("unexpected character `{ch}`")).with_label(
                 span,

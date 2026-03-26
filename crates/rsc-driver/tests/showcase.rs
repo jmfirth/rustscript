@@ -497,6 +497,16 @@ enum TrafficLight {
     Green,
 }
 
+impl std::fmt::Display for TrafficLight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrafficLight::Red => write!(f, "Red"),
+            TrafficLight::Yellow => write!(f, "Yellow"),
+            TrafficLight::Green => write!(f, "Green"),
+        }
+    }
+}
+
 fn next(light: TrafficLight) -> TrafficLight {
     match light {
         TrafficLight::Red => {
