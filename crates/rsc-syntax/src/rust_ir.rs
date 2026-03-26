@@ -214,6 +214,8 @@ pub struct RustImplBlock {
     pub type_name: String,
     /// Generic type parameters on the impl block.
     pub type_params: Vec<RustTypeParam>,
+    /// Associated constants in this impl block (from static fields).
+    pub associated_consts: Vec<RustConstItem>,
     /// The methods in this impl block.
     pub methods: Vec<RustMethod>,
     /// The source span, if derived from source.

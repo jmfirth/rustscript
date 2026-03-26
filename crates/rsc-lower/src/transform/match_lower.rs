@@ -249,7 +249,8 @@ impl Transform {
                             variants.iter().any(|(vn, _)| *vn == variant_name)
                         }
                         rsc_typeck::registry::TypeDefKind::Struct(_)
-                        | rsc_typeck::registry::TypeDefKind::Interface(_) => false,
+                        | rsc_typeck::registry::TypeDefKind::Interface(_)
+                        | rsc_typeck::registry::TypeDefKind::Class { .. } => false,
                     };
                     if is_variant {
                         return RustExpr::new(

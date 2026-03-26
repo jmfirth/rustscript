@@ -1,12 +1,13 @@
 //! Class definition lowering.
 //!
 //! Handles registration of class types, lowering of class definitions to
-//! struct + impl blocks, constructors, and methods.
+//! struct + impl blocks, constructors, methods, getters, setters, static
+//! fields (associated constants), and constructor parameter properties.
 
 use rsc_syntax::ast;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustBlock, RustExpr, RustExprKind, RustFieldDef, RustImplBlock, RustItem,
-    RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitImplBlock, RustType,
+    ParamMode, RustBlock, RustConstItem, RustExpr, RustExprKind, RustFieldDef, RustImplBlock,
+    RustItem, RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitImplBlock, RustType,
 };
 
 use crate::context::LoweringContext;
@@ -17,14 +18,19 @@ use super::{Transform, collect_generic_param_names, lower_type_params};
 
 impl Transform {
     /// Register a class definition in the type registry during the pre-pass.
+    ///
+    /// Includes fields from both explicit declarations and constructor parameter
+    /// properties. Registers getter/setter names for call-site transformation.
     pub(super) fn register_class_def(&mut self, cls: &ast::ClassDef, ctx: &mut LoweringContext) {
         let mut diags = Vec::new();
         let generic_names = collect_generic_param_names(cls.type_params.as_ref());
-        let fields: Vec<(String, rsc_typeck::types::Type)> = cls
+
+        // Collect explicit (non-static) fields
+        let mut fields: Vec<(String, rsc_typeck::types::Type)> = cls
             .members
             .iter()
             .filter_map(|m| match m {
-                ast::ClassMember::Field(f) => {
+                ast::ClassMember::Field(f) if !f.is_static => {
                     let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
                         &f.type_ann,
                         &self.type_registry,
@@ -36,10 +42,57 @@ impl Transform {
                 _ => None,
             })
             .collect();
+
+        // Collect fields from constructor parameter properties
+        for member in &cls.members {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                for p in &ctor.params {
+                    if p.property_visibility.is_some() {
+                        let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                            &p.type_ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        // Only add if not already declared as an explicit field
+                        if !fields.iter().any(|(name, _)| name == &p.name.name) {
+                            fields.push((p.name.name.clone(), ty));
+                        }
+                    }
+                }
+            }
+        }
+
         for d in diags {
             ctx.emit_diagnostic(d);
         }
-        self.type_registry.register(cls.name.name.clone(), fields);
+
+        // Collect getter and setter names for call-site transformation
+        let mut getters = Vec::new();
+        let mut setters = Vec::new();
+        let mut static_methods = Vec::new();
+        for member in &cls.members {
+            match member {
+                ast::ClassMember::Getter(g) => {
+                    getters.push(g.name.name.clone());
+                }
+                ast::ClassMember::Setter(s) => {
+                    setters.push(s.name.name.clone());
+                }
+                ast::ClassMember::Method(m) if m.is_static => {
+                    static_methods.push(m.name.name.clone());
+                }
+                _ => {}
+            }
+        }
+
+        self.type_registry.register_class(
+            cls.name.name.clone(),
+            fields,
+            getters,
+            setters,
+            static_methods,
+        );
     }
 
     /// Lower a class definition to a struct + impl block(s).
@@ -47,8 +100,8 @@ impl Transform {
     /// Returns multiple `RustItem`s: one struct, one inherent impl, and
     /// optionally trait impl blocks for each interface the class implements.
     #[allow(clippy::too_many_lines)]
-    // Class lowering coordinates struct, constructor, methods, and trait impls;
-    // splitting would fragment the coherent pipeline.
+    // Class lowering coordinates struct, constructor, methods, getters, setters,
+    // static fields, and trait impls; splitting would fragment the coherent pipeline.
     pub(super) fn lower_class_def(
         &self,
         cls: &ast::ClassDef,
@@ -60,12 +113,36 @@ impl Transform {
         let generic_names = collect_generic_param_names(cls.type_params.as_ref());
         let type_params = lower_type_params(cls.type_params.as_ref());
 
-        // 1. Build the struct definition from class fields
-        let fields: Vec<RustFieldDef> = cls
+        // 1. Collect fields generated from constructor parameter properties
+        let mut param_property_fields: Vec<RustFieldDef> = Vec::new();
+        for member in &cls.members {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                for p in &ctor.params {
+                    if let Some(vis) = p.property_visibility {
+                        let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                            &p.type_ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                        param_property_fields.push(RustFieldDef {
+                            public: vis == ast::Visibility::Public,
+                            name: p.name.name.clone(),
+                            ty: rust_ty,
+                            span: Some(p.span),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Build the struct definition from non-static class fields + param properties
+        let mut fields: Vec<RustFieldDef> = cls
             .members
             .iter()
             .filter_map(|m| match m {
-                ast::ClassMember::Field(f) => {
+                ast::ClassMember::Field(f) if !f.is_static => {
                     let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
                         &f.type_ann,
                         &self.type_registry,
@@ -84,6 +161,13 @@ impl Transform {
             })
             .collect();
 
+        // Add parameter property fields that aren't already declared
+        for ppf in param_property_fields {
+            if !fields.iter().any(|f| f.name == ppf.name) {
+                fields.push(ppf);
+            }
+        }
+
         let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
         let has_type_params = !type_params.is_empty();
         let derives = derive_inference::infer_struct_derives(&field_types, has_type_params);
@@ -97,11 +181,28 @@ impl Transform {
         }));
 
         // Collect field names for the constructor's Self { } literal
-        let field_names: Vec<String> = cls
+        // This includes both explicit fields and parameter property fields
+        let field_names: Vec<String> = items
+            .iter()
+            .filter_map(|item| {
+                if let RustItem::Struct(s) = item {
+                    Some(s.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+
+        // Collect field initializers (for fields with default values)
+        let field_initializers: Vec<(String, &ast::Expr)> = cls
             .members
             .iter()
             .filter_map(|m| match m {
-                ast::ClassMember::Field(f) => Some(f.name.name.clone()),
+                ast::ClassMember::Field(f) if !f.is_static => f
+                    .initializer
+                    .as_ref()
+                    .map(|init| (f.name.name.clone(), init)),
                 _ => None,
             })
             .collect();
@@ -115,7 +216,7 @@ impl Transform {
             .map(|sig| sig.name.clone())
             .collect();
 
-        // 2. Build methods
+        // 3. Build methods
         let mut inherent_methods: Vec<RustMethod> = Vec::new();
         let mut trait_methods: std::collections::HashMap<String, Vec<RustMethod>> =
             std::collections::HashMap::new();
@@ -131,6 +232,7 @@ impl Transform {
                 let method = self.lower_class_constructor(
                     ctor,
                     &field_names,
+                    &field_initializers,
                     &generic_names,
                     ctx,
                     &mut diags,
@@ -167,15 +269,65 @@ impl Transform {
             }
         }
 
-        // 3. Emit the inherent impl block
+        // Lower getters
+        for member in &cls.members {
+            if let ast::ClassMember::Getter(getter) = member {
+                let lowered = self.lower_class_getter(getter, &generic_names, ctx, &mut diags);
+                inherent_methods.push(lowered);
+            }
+        }
+
+        // Lower setters
+        for member in &cls.members {
+            if let ast::ClassMember::Setter(setter) = member {
+                let lowered = self.lower_class_setter(setter, &generic_names, ctx, &mut diags);
+                inherent_methods.push(lowered);
+            }
+        }
+
+        // 4. Lower static fields to associated constants
+        let mut associated_consts: Vec<RustConstItem> = Vec::new();
+        for member in &cls.members {
+            if let ast::ClassMember::Field(f) = member
+                && f.is_static
+                && let Some(init_expr) = &f.initializer
+            {
+                let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                    &f.type_ann,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                let use_map = UseMap::analyze(
+                    &ast::Block {
+                        stmts: vec![],
+                        span: f.span,
+                    },
+                    |obj, method| self.builtins.is_ref_args(obj, method),
+                    |_| None,
+                );
+                let init = self.lower_expr(init_expr, ctx, &use_map, 0);
+                associated_consts.push(RustConstItem {
+                    public: f.visibility == ast::Visibility::Public,
+                    name: f.name.name.clone(),
+                    ty: rust_ty,
+                    init,
+                    span: Some(f.span),
+                });
+            }
+        }
+
+        // 5. Emit the inherent impl block
         items.push(RustItem::Impl(RustImplBlock {
             type_name: cls.name.name.clone(),
             type_params: type_params.clone(),
+            associated_consts,
             methods: inherent_methods,
             span: Some(cls.span),
         }));
 
-        // 4. Emit trait impl blocks
+        // 6. Emit trait impl blocks
         for iface in &cls.implements {
             if let Some(methods) = trait_methods.remove(&iface.name) {
                 items.push(RustItem::TraitImpl(RustTraitImplBlock {
@@ -196,10 +348,18 @@ impl Transform {
     }
 
     /// Lower a class constructor to a `fn new(params) -> Self { Self { fields } }`.
+    ///
+    /// Handles constructor parameter properties (auto-generated fields) and
+    /// field initializers (default values for fields not explicitly assigned).
+    #[allow(clippy::too_many_lines)]
+    // Constructor lowering coordinates param properties, field initializers,
+    // body analysis, and Self literal construction; splitting would fragment
+    // the coherent pipeline.
     fn lower_class_constructor(
         &self,
         ctor: &ast::ClassConstructor,
         field_names: &[String],
+        field_initializers: &[(String, &ast::Expr)],
         generic_names: &[String],
         ctx: &mut LoweringContext,
         diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
@@ -227,10 +387,26 @@ impl Transform {
             })
             .collect();
 
+        // Collect parameter property names for auto-assignment
+        let param_property_names: Vec<String> = ctor
+            .params
+            .iter()
+            .filter(|p| p.property_visibility.is_some())
+            .map(|p| p.name.name.clone())
+            .collect();
+
         // Analyze constructor body for field assignments: `this.field = value`
         // Collect field name → initializer expression
         let mut field_inits: Vec<(String, RustExpr)> = Vec::new();
         let mut other_stmts: Vec<rsc_syntax::rust_ir::RustStmt> = Vec::new();
+
+        // Add parameter property auto-assignments
+        for name in &param_property_names {
+            field_inits.push((
+                name.clone(),
+                RustExpr::synthetic(RustExprKind::Ident(name.clone())),
+            ));
+        }
 
         // Build use map for the constructor body
         let empty_reassigned = std::collections::HashSet::new();
@@ -248,7 +424,14 @@ impl Transform {
                         && matches!(fa.object.kind, ast::ExprKind::This)
                     {
                         let value = self.lower_expr(&fa.value, ctx, &use_map, i);
-                        field_inits.push((fa.field.name.clone(), value));
+                        // Override any param property auto-assignment
+                        if let Some(existing) =
+                            field_inits.iter_mut().find(|(n, _)| *n == fa.field.name)
+                        {
+                            existing.1 = value;
+                        } else {
+                            field_inits.push((fa.field.name.clone(), value));
+                        }
                         continue;
                     }
                     let lowered = self.lower_stmt(stmt, ctx, &use_map, i, &empty_reassigned);
@@ -262,12 +445,31 @@ impl Transform {
         }
 
         // Build the return expression: `Self { field1: value1, field2: value2, ... }`
-        // Use the field names in declaration order, matching with the collected inits
+        // Use the field names in declaration order, matching with the collected inits.
+        // For fields not assigned in the constructor body or via param properties,
+        // check for field initializers (default values).
+        let init_use_map = UseMap::analyze(
+            &ast::Block {
+                stmts: vec![],
+                span: ctor.span,
+            },
+            |obj, method| self.builtins.is_ref_args(obj, method),
+            |_| None,
+        );
         let self_fields: Vec<(String, RustExpr)> = field_names
             .iter()
             .map(|name| {
                 let value = field_inits.iter().find(|(n, _)| n == name).map_or_else(
-                    || RustExpr::synthetic(RustExprKind::Ident(name.clone())),
+                    || {
+                        // Check for field initializer (default value)
+                        if let Some((_, init_expr)) =
+                            field_initializers.iter().find(|(n, _)| n == name)
+                        {
+                            self.lower_expr(init_expr, ctx, &init_use_map, 0)
+                        } else {
+                            RustExpr::synthetic(RustExprKind::Ident(name.clone()))
+                        }
+                    },
                     |(_, v)| v.clone(),
                 );
                 (name.clone(), value)
@@ -302,8 +504,9 @@ impl Transform {
     /// Lower a class method to a `RustMethod`.
     ///
     /// Determines `&self` or `&mut self` by analyzing whether the method
-    /// writes to `this.field`. When `is_trait_impl` is false and borrow
-    /// inference is enabled, non-self parameters are analyzed for borrowing.
+    /// writes to `this.field`. Static methods have no self parameter.
+    /// When `is_trait_impl` is false and borrow inference is enabled,
+    /// non-self parameters are analyzed for borrowing.
     /// Trait impl methods always keep `Owned` params to match the trait contract.
     fn lower_class_method(
         &self,
@@ -397,12 +600,16 @@ impl Transform {
             })
         });
 
-        // Determine self_param: check if any statement writes to this.field
-        let mutates_self = method_mutates_self(&method.body);
-        let self_param = if mutates_self {
-            Some(RustSelfParam::RefMut)
+        // Determine self_param: static methods have none, instance methods check mutation
+        let self_param = if method.is_static {
+            None
         } else {
-            Some(RustSelfParam::Ref)
+            let mutates_self = method_mutates_self(&method.body);
+            if mutates_self {
+                Some(RustSelfParam::RefMut)
+            } else {
+                Some(RustSelfParam::Ref)
+            }
         };
 
         // Build use map and lower the body
@@ -425,6 +632,102 @@ impl Transform {
             return_type,
             body,
             span: Some(method.span),
+        }
+    }
+
+    /// Lower a getter accessor to a `fn name(&self) -> Type { body }`.
+    fn lower_class_getter(
+        &self,
+        getter: &ast::ClassGetter,
+        generic_names: &[String],
+        ctx: &mut LoweringContext,
+        diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
+    ) -> RustMethod {
+        ctx.push_scope();
+
+        let return_type = getter.return_type.as_ref().and_then(|rt| {
+            rt.type_ann.as_ref().and_then(|ann| {
+                let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                    ann,
+                    &self.type_registry,
+                    generic_names,
+                    diags,
+                );
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                if rust_ty == RustType::Unit {
+                    return None;
+                }
+                Some(rust_ty)
+            })
+        });
+
+        let reassigned = ownership::find_reassigned_variables(&getter.body);
+        let use_map = UseMap::analyze(
+            &getter.body,
+            |obj, method_name| self.builtins.is_ref_args(obj, method_name),
+            |_| None,
+        );
+
+        let body = self.lower_block(&getter.body, ctx, &use_map, 0, &reassigned);
+
+        ctx.pop_scope();
+
+        RustMethod {
+            is_async: false,
+            name: getter.name.name.clone(),
+            self_param: Some(RustSelfParam::Ref),
+            params: vec![],
+            return_type,
+            body,
+            span: Some(getter.span),
+        }
+    }
+
+    /// Lower a setter accessor to a `fn set_name(&mut self, value: Type) { body }`.
+    fn lower_class_setter(
+        &self,
+        setter: &ast::ClassSetter,
+        generic_names: &[String],
+        ctx: &mut LoweringContext,
+        diags: &mut Vec<rsc_syntax::diagnostic::Diagnostic>,
+    ) -> RustMethod {
+        ctx.push_scope();
+
+        let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+            &setter.param.type_ann,
+            &self.type_registry,
+            generic_names,
+            diags,
+        );
+        let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+        ctx.declare_variable(setter.param.name.name.clone(), rust_ty.clone());
+
+        let params = vec![RustParam {
+            name: setter.param.name.name.clone(),
+            ty: rust_ty,
+            mode: ParamMode::Owned,
+            span: Some(setter.param.span),
+        }];
+
+        let reassigned = ownership::find_reassigned_variables(&setter.body);
+        let use_map = UseMap::analyze(
+            &setter.body,
+            |obj, method_name| self.builtins.is_ref_args(obj, method_name),
+            |_| None,
+        );
+
+        let body = self.lower_block(&setter.body, ctx, &use_map, 0, &reassigned);
+
+        ctx.pop_scope();
+
+        RustMethod {
+            is_async: false,
+            name: format!("set_{}", setter.name.name),
+            self_param: Some(RustSelfParam::RefMut),
+            params,
+            return_type: None,
+            body,
+            span: Some(setter.span),
         }
     }
 }

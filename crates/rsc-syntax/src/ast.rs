@@ -281,11 +281,19 @@ pub enum ClassMember {
     Constructor(ClassConstructor),
     /// A class method.
     Method(ClassMethod),
+    /// A getter accessor: `get name(): Type { ... }`.
+    /// Lowers to a `fn name(&self) -> Type` method.
+    Getter(ClassGetter),
+    /// A setter accessor: `set name(value: Type) { ... }`.
+    /// Lowers to a `fn set_name(&mut self, value: Type)` method.
+    Setter(ClassSetter),
 }
 
-/// A class field declaration: `[private|public] name: Type;`.
+/// A class field declaration: `[private|public] [readonly] [static] name: Type [= expr];`.
 ///
 /// Lowers to a struct field, with visibility controlling `pub`.
+/// Static fields lower to associated constants in the impl block.
+/// Readonly fields are enforced at `RustScript` compile time.
 #[derive(Debug, Clone)]
 pub struct ClassField {
     /// The visibility modifier (`public` or `private`).
@@ -294,6 +302,12 @@ pub struct ClassField {
     pub name: Ident,
     /// The field type annotation.
     pub type_ann: TypeAnnotation,
+    /// Optional field initializer (default value).
+    pub initializer: Option<Expr>,
+    /// Whether this field is readonly.
+    pub readonly: bool,
+    /// Whether this field is static.
+    pub is_static: bool,
     /// The span covering the field declaration.
     pub span: Span,
 }
@@ -310,24 +324,45 @@ pub enum Visibility {
 /// A class constructor: `constructor(params) { body }`.
 ///
 /// Lowers to an associated `fn new(params) -> Self { Self { fields } }` in Rust.
+/// Constructor parameters may have visibility modifiers (`public`/`private`), which
+/// auto-generate struct fields and `self.field = param` assignments.
 #[derive(Debug, Clone)]
 pub struct ClassConstructor {
-    /// The constructor parameters.
-    pub params: Vec<Param>,
+    /// The constructor parameters (may include parameter properties).
+    pub params: Vec<ConstructorParam>,
     /// The constructor body.
     pub body: Block,
     /// The span covering the constructor declaration.
     pub span: Span,
 }
 
-/// A class method: `[private|public] [async] name(params): ReturnType { body }`.
+/// A constructor parameter, optionally a parameter property.
+///
+/// When `property_visibility` is `Some`, this parameter auto-generates a struct
+/// field with the matching visibility and a `self.field = param` assignment.
+#[derive(Debug, Clone)]
+pub struct ConstructorParam {
+    /// Visibility if this is a parameter property (auto-generates a field).
+    pub property_visibility: Option<Visibility>,
+    /// The parameter name.
+    pub name: Ident,
+    /// The type annotation.
+    pub type_ann: TypeAnnotation,
+    /// The span covering the parameter.
+    pub span: Span,
+}
+
+/// A class method: `[private|public] [static] [async] name(params): ReturnType { body }`.
 ///
 /// Lowers to a method in an `impl` block with `&self` or `&mut self`.
+/// Static methods lower to associated functions (no `self` parameter).
 /// `async` methods lower to `async fn` in Rust.
 #[derive(Debug, Clone)]
 pub struct ClassMethod {
     /// Whether this is an `async` method.
     pub is_async: bool,
+    /// Whether this is a static method (no `&self`).
+    pub is_static: bool,
     /// The visibility modifier (`public` or `private`).
     pub visibility: Visibility,
     /// The method name.
@@ -341,6 +376,42 @@ pub struct ClassMethod {
     /// The method body.
     pub body: Block,
     /// The span covering the method declaration.
+    pub span: Span,
+}
+
+/// A getter accessor in a class: `get name(): Type { ... }`.
+///
+/// Lowers to a `fn name(&self) -> Type` method in the impl block.
+/// Property-style access (`obj.name`) is transformed to `obj.name()` at call sites.
+#[derive(Debug, Clone)]
+pub struct ClassGetter {
+    /// The visibility modifier.
+    pub visibility: Visibility,
+    /// The getter name.
+    pub name: Ident,
+    /// The return type annotation.
+    pub return_type: Option<ReturnTypeAnnotation>,
+    /// The getter body.
+    pub body: Block,
+    /// The span covering the getter declaration.
+    pub span: Span,
+}
+
+/// A setter accessor in a class: `set name(value: Type) { ... }`.
+///
+/// Lowers to a `fn set_name(&mut self, value: Type)` method in the impl block.
+/// Property-style assignment (`obj.name = x`) is transformed to `obj.set_name(x)`.
+#[derive(Debug, Clone)]
+pub struct ClassSetter {
+    /// The visibility modifier.
+    pub visibility: Visibility,
+    /// The setter name.
+    pub name: Ident,
+    /// The setter parameter.
+    pub param: Param,
+    /// The setter body.
+    pub body: Block,
+    /// The span covering the setter declaration.
     pub span: Span,
 }
 

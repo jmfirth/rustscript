@@ -3199,3 +3199,269 @@ function main() {
         "right shift should emit >>, got: {actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 057: Class Completeness
+// ---------------------------------------------------------------------------
+
+// 057-1: Field initializers
+#[test]
+fn test_snapshot_057_field_initializer_default_in_new() {
+    let source = "\
+class Config {
+  public host: string = \"localhost\";
+  public port: i32 = 8080;
+  constructor() {}
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Config {
+    pub host: String,
+    pub port: i32,
+}
+
+impl Config {
+    fn new() -> Self {
+        Self { host: \"localhost\".to_string(), port: 8080 }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_field_initializer", &actual, expected);
+}
+
+// 057-2: Constructor parameter properties
+#[test]
+fn test_snapshot_057_constructor_param_properties() {
+    let source = "\
+class User {
+  constructor(public name: string, private age: i32) {}
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    pub name: String,
+    age: i32,
+}
+
+impl User {
+    fn new(name: String, age: i32) -> Self {
+        Self { name: name, age: age }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_constructor_param_properties", &actual, expected);
+}
+
+// 057-3: Static method
+#[test]
+fn test_snapshot_057_static_method() {
+    let source = "\
+class UserService {
+  private count: i32;
+  constructor() {
+    this.count = 0;
+  }
+  static create(): UserService {
+    return new UserService();
+  }
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UserService {
+    count: i32,
+}
+
+impl UserService {
+    fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    fn create() -> UserService {
+        return UserService::new();
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_static_method", &actual, expected);
+}
+
+// 057-4: Static field (associated constant)
+#[test]
+fn test_snapshot_057_static_field_assoc_const() {
+    let source = "\
+class Config {
+  static DEFAULT_PORT: i32 = 8080;
+  public host: string;
+  constructor(host: string) {
+    this.host = host;
+  }
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Config {
+    pub host: String,
+}
+
+impl Config {
+    pub const DEFAULT_PORT: i32 = 8080;
+
+    fn new(host: String) -> Self {
+        Self { host: host }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_static_field_assoc_const", &actual, expected);
+}
+
+// 057-5: Getter and setter
+#[test]
+fn test_snapshot_057_getter_setter() {
+    let source = "\
+class User {
+  private _name: string;
+  constructor(name: string) {
+    this._name = name;
+  }
+  get name(): string {
+    return this._name;
+  }
+  set name(value: string) {
+    this._name = value;
+  }
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    _name: String,
+}
+
+impl User {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn name(&self) -> String {
+        return self._name;
+    }
+
+    fn set_name(&mut self, value: String) {
+        self._name = value;
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_getter_setter", &actual, expected);
+}
+
+// 057-6: Static method call site transformation
+#[test]
+fn test_snapshot_057_static_method_call_site() {
+    let source = "\
+class Factory {
+  private value: i32;
+  constructor(v: i32) {
+    this.value = v;
+  }
+  static create(v: i32): Factory {
+    return new Factory(v);
+  }
+}
+
+function main() {
+  let f = Factory.create(42);
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Factory {
+    value: i32,
+}
+
+impl Factory {
+    fn new(v: i32) -> Self {
+        Self { value: v }
+    }
+
+    fn create(v: i32) -> Factory {
+        return Factory::new(v);
+    }
+}
+
+fn main() {
+    let f = Factory::create(42);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_static_method_call_site", &actual, expected);
+}
+
+// 057-7: Complete class with all features
+#[test]
+fn test_snapshot_057_complete_class_all_features() {
+    let source = "\
+class Counter {
+  static DEFAULT_START: i32 = 0;
+  private _count: i32;
+
+  constructor(public label: string) {
+    this._count = 0;
+  }
+
+  get count(): i32 {
+    return this._count;
+  }
+
+  increment(): void {
+    this._count = this._count + 1;
+  }
+
+  static zero(label: string): Counter {
+    return new Counter(label);
+  }
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Counter {
+    _count: i32,
+    pub label: String,
+}
+
+impl Counter {
+    pub const DEFAULT_START: i32 = 0;
+
+    fn new(label: String) -> Self {
+        Self { _count: 0, label: label }
+    }
+
+    fn increment(&mut self) {
+        self._count = self._count + 1;
+    }
+
+    fn zero(label: String) -> Counter {
+        return Counter::new(label);
+    }
+
+    fn count(&self) -> i32 {
+        return self._count;
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("057_complete_class", &actual, expected);
+}

@@ -5,14 +5,15 @@
 //! indentation level and line position to produce clean output.
 
 use rsc_syntax::ast::{
-    ArrayDestructureStmt, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef, ClassMember,
-    ClosureBody, ClosureExpr, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl,
-    IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr,
-    Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
-    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
-    UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    ArrayDestructureStmt, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef, ClassGetter,
+    ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, DestructureStmt,
+    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
+    FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef,
+    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
+    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation,
+    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt,
+    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
+    VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -436,6 +437,8 @@ impl Printer {
                 ClassMember::Field(f) => self.print_class_field(f),
                 ClassMember::Constructor(c) => self.print_class_constructor(c),
                 ClassMember::Method(m) => self.print_class_method(m),
+                ClassMember::Getter(g) => self.print_class_getter(g),
+                ClassMember::Setter(s) => self.print_class_setter(s),
             }
         }
         self.dedent();
@@ -448,19 +451,47 @@ impl Printer {
             Visibility::Private => self.write("private "),
             Visibility::Public => {}
         }
+        if field.is_static {
+            self.write("static ");
+        }
+        if field.readonly {
+            self.write("readonly ");
+        }
         self.write(&field.name.name);
         self.write(": ");
         self.print_type_annotation(&field.type_ann);
+        if let Some(init) = &field.initializer {
+            self.write(" = ");
+            self.print_expr(init);
+        }
         self.writeln(";");
     }
 
     /// Print a class constructor.
     fn print_class_constructor(&mut self, ctor: &rsc_syntax::ast::ClassConstructor) {
         self.write("constructor(");
-        self.print_params(&ctor.params);
+        self.print_constructor_params(&ctor.params);
         self.write(") ");
         self.print_block(&ctor.body);
         self.newline();
+    }
+
+    /// Print constructor parameter list (may include parameter properties).
+    fn print_constructor_params(&mut self, params: &[ConstructorParam]) {
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            if let Some(vis) = param.property_visibility {
+                match vis {
+                    Visibility::Public => self.write("public "),
+                    Visibility::Private => self.write("private "),
+                }
+            }
+            self.write(&param.name.name);
+            self.write(": ");
+            self.print_type_annotation(&param.type_ann);
+        }
     }
 
     /// Print a class method.
@@ -468,6 +499,9 @@ impl Printer {
         match method.visibility {
             Visibility::Private => self.write("private "),
             Visibility::Public => {}
+        }
+        if method.is_static {
+            self.write("static ");
         }
         if method.is_async {
             self.write("async ");
@@ -482,6 +516,40 @@ impl Printer {
         }
         self.write(" ");
         self.print_block(&method.body);
+        self.newline();
+    }
+
+    /// Print a getter accessor.
+    fn print_class_getter(&mut self, getter: &ClassGetter) {
+        match getter.visibility {
+            Visibility::Private => self.write("private "),
+            Visibility::Public => {}
+        }
+        self.write("get ");
+        self.write(&getter.name.name);
+        self.write("()");
+        if let Some(ret) = &getter.return_type {
+            self.print_return_type(ret);
+        }
+        self.write(" ");
+        self.print_block(&getter.body);
+        self.newline();
+    }
+
+    /// Print a setter accessor.
+    fn print_class_setter(&mut self, setter: &ClassSetter) {
+        match setter.visibility {
+            Visibility::Private => self.write("private "),
+            Visibility::Public => {}
+        }
+        self.write("set ");
+        self.write(&setter.name.name);
+        self.write("(");
+        self.write(&setter.param.name.name);
+        self.write(": ");
+        self.print_type_annotation(&setter.param.type_ann);
+        self.write(") ");
+        self.print_block(&setter.body);
         self.newline();
     }
 
