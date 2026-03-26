@@ -324,6 +324,16 @@ impl Printer {
                 self.print_type_annotation(inner);
                 self.write(">");
             }
+            TypeKind::Tuple(types) => {
+                self.write("[");
+                for (i, t) in types.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.print_type_annotation(t);
+                }
+                self.write("]");
+            }
         }
     }
 

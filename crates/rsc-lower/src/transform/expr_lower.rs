@@ -165,6 +165,27 @@ impl Transform {
                 self.lower_new_expr(new_expr, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Index(index_expr) => {
+                // Check if the object is a tuple-typed variable with a literal index.
+                // If so, emit tuple field access (e.g., `pair.0`) instead of index (`pair[0]`).
+                if let ast::ExprKind::Ident(ident) = &index_expr.object.kind
+                    && ctx
+                        .lookup_variable(&ident.name)
+                        .is_some_and(|info| matches!(info.ty, RustType::Tuple(_)))
+                    && let ast::ExprKind::IntLit(n) = &index_expr.index.kind
+                {
+                    let object = self.lower_expr(&index_expr.object, ctx, use_map, stmt_index);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    // Tuple indices from RustScript source are always small non-negative literals
+                    let idx = (*n).max(0) as usize;
+                    return RustExpr::new(
+                        RustExprKind::TupleField {
+                            object: Box::new(object),
+                            index: idx,
+                        },
+                        expr.span,
+                    );
+                }
+
                 let object = self.lower_expr(&index_expr.object, ctx, use_map, stmt_index);
                 let index = self.lower_expr(&index_expr.index, ctx, use_map, stmt_index);
                 RustExpr::new(
@@ -492,6 +513,22 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Lower array literals as tuples when the parameter type is a tuple.
+        if let ast::ExprKind::ArrayLit(elements) = &a.kind
+            && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
+            && matches!(param_ty, RustType::Tuple(_))
+        {
+            let lowered: Vec<RustExpr> = elements
+                .iter()
+                .map(|e| match e {
+                    ast::ArrayElement::Expr(expr) | ast::ArrayElement::Spread(expr) => {
+                        self.lower_expr(expr, ctx, use_map, stmt_index)
+                    }
+                })
+                .collect();
+            return RustExpr::new(RustExprKind::Tuple(lowered), a.span);
+        }
+
         // Resolve string literals as enum variants when the parameter type is an enum
         if let ast::ExprKind::StringLit(s) = &a.kind
             && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))

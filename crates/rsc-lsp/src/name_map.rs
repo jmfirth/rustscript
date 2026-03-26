@@ -350,6 +350,12 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
             let inner_str = rust_type_to_rts_display(inner);
             format!("shared<{inner_str}>")
         }
+
+        // `(T1, T2, ...)` -> `[T1, T2, ...]`
+        RustType::Tuple(types) => {
+            let types_str: Vec<String> = types.iter().map(rust_type_to_rts_display).collect();
+            format!("[{}]", types_str.join(", "))
+        }
     }
 }
 
@@ -689,5 +695,17 @@ mod tests {
         assert_eq!(rust_type_to_rts_display(&RustType::U32), "u32");
         assert_eq!(rust_type_to_rts_display(&RustType::U64), "u64");
         assert_eq!(rust_type_to_rts_display(&RustType::F32), "f32");
+    }
+
+    #[test]
+    fn test_rts_display_tuple_type() {
+        let ty = RustType::Tuple(vec![RustType::String, RustType::I32]);
+        assert_eq!(rust_type_to_rts_display(&ty), "[string, i32]");
+    }
+
+    #[test]
+    fn test_rts_display_tuple_type_three_elements() {
+        let ty = RustType::Tuple(vec![RustType::String, RustType::I32, RustType::Bool]);
+        assert_eq!(rust_type_to_rts_display(&ty), "[string, i32, boolean]");
     }
 }

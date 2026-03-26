@@ -916,7 +916,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Union(_)
                         | ast::TypeKind::Function(_, _)
                         | ast::TypeKind::Inferred
-                        | ast::TypeKind::Shared(_) => vec![],
+                        | ast::TypeKind::Shared(_)
+                        | ast::TypeKind::Tuple(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

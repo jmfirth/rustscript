@@ -939,6 +939,10 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         }
         TypeKind::Inferred => "(inferred)".to_owned(),
         TypeKind::Shared(inner) => format!("shared<{}>", format_type(inner)),
+        TypeKind::Tuple(types) => {
+            let types_str: Vec<String> = types.iter().map(format_type).collect();
+            format!("[{}]", types_str.join(", "))
+        }
     }
 }
 

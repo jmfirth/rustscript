@@ -138,8 +138,23 @@ impl Transform {
         let struct_type_name = extract_named_type(&ty);
         ctx.set_struct_type_name(struct_type_name);
 
+        // Check for tuple construction: `const pair: [string, i32] = ["hello", 42]`
+        // When the type is a tuple and the init is an array literal, lower as a tuple expression.
+        let init = if let (RustType::Tuple(_), ast::ExprKind::ArrayLit(elements)) =
+            (&ty, &decl.init.kind)
+        {
+            let lowered: Vec<RustExpr> = elements
+                .iter()
+                .map(|e| match e {
+                    ast::ArrayElement::Expr(expr) | ast::ArrayElement::Spread(expr) => {
+                        self.lower_expr(expr, ctx, use_map, stmt_index)
+                    }
+                })
+                .collect();
+            RustExpr::new(RustExprKind::Tuple(lowered), decl.init.span)
+        }
         // Check for enum construction: `const dir: Direction = "north"` → `Direction::North`
-        let init = if let (RustType::Named(type_name), ast::ExprKind::StringLit(s)) =
+        else if let (RustType::Named(type_name), ast::ExprKind::StringLit(s)) =
             (&ty, &decl.init.kind)
         {
             if let Some(td) = self.type_registry.lookup(type_name) {
@@ -225,9 +240,13 @@ impl Transform {
             ctx.set_struct_type_name(Some(name.clone()));
         }
 
+        let is_tuple_return = ctx
+            .current_return_type()
+            .is_some_and(|ty| matches!(ty, RustType::Tuple(_)));
+
         let value = ret.value.as_ref().map(|v| {
             if is_throws {
-                let lowered = self.lower_expr(v, ctx, use_map, stmt_index);
+                let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
                 return RustExpr::synthetic(RustExprKind::Ok(Box::new(lowered)));
             }
             if is_option_return {
@@ -236,10 +255,10 @@ impl Transform {
                     return RustExpr::new(RustExprKind::None, v.span);
                 }
                 // Non-null return in Option context → wrap in Some(...)
-                let lowered = self.lower_expr(v, ctx, use_map, stmt_index);
+                let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
                 RustExpr::synthetic(RustExprKind::Some(Box::new(lowered)))
             } else {
-                self.lower_expr(v, ctx, use_map, stmt_index)
+                self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return)
             }
         });
 
@@ -531,10 +550,33 @@ impl Transform {
         })
     }
 
+    /// Lower a return value, converting array literals to tuples when the return type is a tuple.
+    fn lower_return_value(
+        &self,
+        v: &ast::Expr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        is_tuple_return: bool,
+    ) -> RustExpr {
+        if is_tuple_return && let ast::ExprKind::ArrayLit(elements) = &v.kind {
+            let lowered: Vec<RustExpr> = elements
+                .iter()
+                .map(|e| match e {
+                    ast::ArrayElement::Expr(expr) | ast::ArrayElement::Spread(expr) => {
+                        self.lower_expr(expr, ctx, use_map, stmt_index)
+                    }
+                })
+                .collect();
+            return RustExpr::new(RustExprKind::Tuple(lowered), v.span);
+        }
+        self.lower_expr(v, ctx, use_map, stmt_index)
+    }
+
     /// Lower an array destructuring statement.
     ///
     /// `const [a, b] = expr;` → `let (a, b) = expr;`
-    /// Typically used with `Promise.all` results.
+    /// `const [a, b]: [string, i32] = expr;` → `let (a, b): (String, i32) = expr;`
     fn lower_array_destructure(
         &self,
         adestr: &ast::ArrayDestructureStmt,
@@ -545,10 +587,37 @@ impl Transform {
         let init = self.lower_expr(&adestr.init, ctx, use_map, stmt_index);
         let bindings = adestr.elements.iter().map(|e| e.name.clone()).collect();
 
-        // Declare the extracted variables in the current scope with inferred types.
-        // We use Unit as a placeholder — the actual types are inferred by Rust.
-        for elem in &adestr.elements {
-            ctx.declare_variable(elem.name.clone(), RustType::Unit);
+        // Resolve the tuple type annotation if present, to declare typed variables.
+        let tuple_element_types = adestr.type_ann.as_ref().and_then(|ann| {
+            if let ast::TypeKind::Tuple(types) = &ann.kind {
+                let mut diags = Vec::new();
+                let resolved: Vec<RustType> = types
+                    .iter()
+                    .map(|t| {
+                        let ty = rsc_typeck::resolve::resolve_type_annotation_with_registry(
+                            t,
+                            &self.type_registry,
+                            &mut diags,
+                        );
+                        rsc_typeck::bridge::type_to_rust_type(&ty)
+                    })
+                    .collect();
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
+                Some(resolved)
+            } else {
+                None
+            }
+        });
+
+        // Declare variables with resolved types (or Unit placeholder for inference).
+        for (i, elem) in adestr.elements.iter().enumerate() {
+            let ty = tuple_element_types
+                .as_ref()
+                .and_then(|types| types.get(i).cloned())
+                .unwrap_or(RustType::Unit);
+            ctx.declare_variable(elem.name.clone(), ty);
         }
 
         RustStmt::TupleDestructure(RustTupleDestructureStmt {

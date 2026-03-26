@@ -1626,6 +1626,10 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+            TokenKind::LBracket => {
+                // Tuple type: `[T1, T2, ...]`
+                self.parse_tuple_type_annotation()
+            }
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
                 let start_span = ident.span;
@@ -1708,6 +1712,38 @@ impl<'src> Parser<'src> {
 
         Some(TypeAnnotation {
             kind: TypeKind::Function(param_types, Box::new(return_type)),
+            span,
+        })
+    }
+
+    /// Parse a tuple type annotation: `[T1, T2, ...]`.
+    ///
+    /// Called when `[` is seen in type annotation position.
+    fn parse_tuple_type_annotation(&mut self) -> Option<TypeAnnotation> {
+        let start = self.current_token().span;
+        self.advance(); // consume `[`
+        let mut types = Vec::new();
+
+        if !self.check(&TokenKind::RBracket) && !self.at_end() {
+            loop {
+                let ty = self.parse_type_annotation()?;
+                types.push(ty);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // Allow trailing comma
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBracket)?;
+        let span = start.merge(close.span);
+        Some(TypeAnnotation {
+            kind: TypeKind::Tuple(types),
             span,
         })
     }
@@ -2295,6 +2331,13 @@ impl<'src> Parser<'src> {
             return None;
         }
 
+        // Optional type annotation: `const [a, b]: [string, i32] = expr`
+        let type_ann = if self.eat(&TokenKind::Colon) {
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
         if self.expect(&TokenKind::Eq).is_none() {
             self.synchronize();
             return None;
@@ -2314,6 +2357,7 @@ impl<'src> Parser<'src> {
         Some(Stmt::ArrayDestructure(ArrayDestructureStmt {
             binding,
             elements,
+            type_ann,
             init,
             span: start.merge(end),
         }))
@@ -7522,6 +7566,99 @@ class Foo {
             }
         } else {
             panic!("Expected class");
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Tuple type parsing tests (Task 064)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_tuple_type_two_elements() {
+        let module = parse_ok("function main() { const x: [string, i32] = [\"hi\", 42]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            let type_ann = decl.type_ann.as_ref().expect("expected type annotation");
+            match &type_ann.kind {
+                TypeKind::Tuple(types) => {
+                    assert_eq!(types.len(), 2);
+                    assert!(
+                        matches!(&types[0].kind, TypeKind::Named(ident) if ident.name == "string")
+                    );
+                    assert!(
+                        matches!(&types[1].kind, TypeKind::Named(ident) if ident.name == "i32")
+                    );
+                }
+                other => panic!("expected TypeKind::Tuple, got: {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_type_three_elements() {
+        let module =
+            parse_ok("function main() { const x: [string, i32, bool] = [\"hi\", 1, true]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            let type_ann = decl.type_ann.as_ref().expect("expected type annotation");
+            match &type_ann.kind {
+                TypeKind::Tuple(types) => {
+                    assert_eq!(types.len(), 3);
+                }
+                other => panic!("expected TypeKind::Tuple, got: {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_type_in_function_param() {
+        let module = parse_ok("function swap(pair: [i32, i32]): void {}");
+        let f = first_fn(&module);
+        assert_eq!(f.params.len(), 1);
+        match &f.params[0].type_ann.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            other => panic!("expected TypeKind::Tuple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_type_in_return_position() {
+        let module = parse_ok("function swap(pair: [i32, i32]): [i32, i32] { return [1, 2]; }");
+        let f = first_fn(&module);
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let ret_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &ret_ann.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            other => panic!("expected TypeKind::Tuple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_array_destructure_with_tuple_type_annotation() {
+        let module = parse_ok("function main() { const [a, b]: [string, i32] = pair; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::ArrayDestructure(adestr) = stmt {
+            assert_eq!(adestr.elements.len(), 2);
+            let type_ann = adestr.type_ann.as_ref().expect("expected type annotation");
+            match &type_ann.kind {
+                TypeKind::Tuple(types) => {
+                    assert_eq!(types.len(), 2);
+                }
+                other => panic!("expected TypeKind::Tuple, got: {other:?}"),
+            }
+        } else {
+            panic!("expected ArrayDestructure");
         }
     }
 }
