@@ -19,15 +19,18 @@ use tower_lsp::lsp_types::{
     DocumentFormattingParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
     Location, MarkupContent, MarkupKind, MessageType, OneOf, Position, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Url,
 };
 use tower_lsp::{Client, LanguageServer};
 
 use crate::builtin_hover;
+use crate::completions;
 use crate::diagnostics;
 use crate::name_map;
 use crate::position_map::PositionMap;
 use crate::ra_proxy::RustAnalyzerProxy;
+use crate::rustdoc_cache::RustdocCache;
 
 /// Debounce delay for recompilation after document changes.
 const DEBOUNCE_MS: u64 = 300;
@@ -66,6 +69,8 @@ pub struct RscLanguageServer {
     ra_proxy: RwLock<Option<RustAnalyzerProxy>>,
     /// Project build directory (`.rsc-build/`).
     build_dir: RwLock<Option<PathBuf>>,
+    /// Cache of parsed rustdoc JSON for external crate hover documentation.
+    rustdoc_cache: RwLock<RustdocCache>,
 }
 
 impl RscLanguageServer {
@@ -80,6 +85,7 @@ impl RscLanguageServer {
             compile_cache: DashMap::new(),
             ra_proxy: RwLock::new(None),
             build_dir: RwLock::new(None),
+            rustdoc_cache: RwLock::new(RustdocCache::new()),
         }
     }
 
@@ -320,7 +326,12 @@ impl LanguageServer for RscLanguageServer {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".".to_owned(), ":".to_owned()]),
+                    trigger_characters: Some(vec![".".to_owned(), ":".to_owned(), "\"".to_owned()]),
+                    ..Default::default()
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+                    retrigger_characters: Some(vec![",".to_owned()]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -411,6 +422,23 @@ impl LanguageServer for RscLanguageServer {
                     range: None,
                 }));
             }
+
+            // Try rustdoc-based hover for imported symbols.
+            if let Some((crate_name, symbol_name)) = find_import_at_cursor(&module, offset)
+                && let Some(build_dir) = self.build_dir.read().await.as_ref()
+            {
+                let mut rustdoc = self.rustdoc_cache.write().await;
+                if let Some(hover_text) = rustdoc.lookup_hover(&crate_name, &symbol_name, build_dir)
+                {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: hover_text,
+                        }),
+                        range: None,
+                    }));
+                }
+            }
         }
         Ok(None)
     }
@@ -435,12 +463,56 @@ impl LanguageServer for RscLanguageServer {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        // Try rust-analyzer proxy first.
+        // Try native RustScript completions first.
+        if let Some(source) = self.documents.get(uri) {
+            let source_text = source.clone();
+            drop(source);
+
+            let cache = self.compile_cache.get(uri).map(|c| c.clone());
+            let rustdoc = self.rustdoc_cache.read().await;
+            let ctx = completions::CompletionContext {
+                source: &source_text,
+                line: position.line,
+                character: position.character,
+                cache: cache.as_ref(),
+                rustdoc: Some(&rustdoc),
+            };
+
+            if let Some(response) = completions::resolve_completions(&ctx) {
+                return Ok(Some(response));
+            }
+        }
+
+        // Fall back to rust-analyzer proxy.
         if let Some(response) = self.ra_completion(uri, position).await {
             return Ok(Some(response));
         }
 
         // Graceful degradation: return empty when RA is not available.
+        Ok(None)
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        if let Some(source) = self.documents.get(uri) {
+            let source_text = source.clone();
+            drop(source);
+
+            let cache = self.compile_cache.get(uri).map(|c| c.clone());
+            let ctx = completions::SignatureHelpContext {
+                source: &source_text,
+                line: position.line,
+                character: position.character,
+                cache: cache.as_ref(),
+            };
+
+            if let Some(help) = completions::resolve_signature_help(&ctx) {
+                return Ok(Some(help));
+            }
+        }
+
         Ok(None)
     }
 }
@@ -644,6 +716,46 @@ fn find_hover_info(
                 }
             }
             _ => {}
+        }
+    }
+
+    None
+}
+
+/// Check if the cursor is on an imported name and return `(crate_name, symbol_name)`.
+///
+/// For `import { Router } from "axum"`, hovering over `Router` returns
+/// `Some(("axum", "Router"))`. The source path must not start with `.` or `/`
+/// (those are local imports, not external crate imports).
+#[must_use]
+fn find_import_at_cursor(
+    module: &rsc_syntax::ast::Module,
+    offset: u32,
+) -> Option<(String, String)> {
+    use rsc_syntax::ast::ItemKind;
+    use rsc_syntax::span::BytePos;
+
+    let pos = BytePos(offset);
+
+    for item in &module.items {
+        if !item.span.contains(pos) {
+            continue;
+        }
+
+        if let ItemKind::Import(import) = &item.kind {
+            let source = &import.source.value;
+
+            // Skip local imports (relative paths).
+            if source.starts_with('.') || source.starts_with('/') {
+                continue;
+            }
+
+            // Check if cursor is on any imported name.
+            for name in &import.names {
+                if name.span.contains(pos) {
+                    return Some((source.clone(), name.name.clone()));
+                }
+            }
         }
     }
 
@@ -1551,7 +1663,7 @@ mod tests {
     use super::*;
     use tower_lsp::lsp_types::ServerCapabilities;
 
-    // Test: Server capabilities are correct (updated with definition + completion)
+    // Test: Server capabilities are correct (updated with definition + completion + signature help)
     #[test]
     fn test_server_capabilities_include_formatting_and_hover() {
         let capabilities = ServerCapabilities {
@@ -1560,7 +1672,12 @@ mod tests {
             hover_provider: Some(HoverProviderCapability::Simple(true)),
             definition_provider: Some(OneOf::Left(true)),
             completion_provider: Some(CompletionOptions {
-                trigger_characters: Some(vec![".".to_owned(), ":".to_owned()]),
+                trigger_characters: Some(vec![".".to_owned(), ":".to_owned(), "\"".to_owned()]),
+                ..Default::default()
+            }),
+            signature_help_provider: Some(SignatureHelpOptions {
+                trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+                retrigger_characters: Some(vec![",".to_owned()]),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1583,6 +1700,7 @@ mod tests {
             Some(OneOf::Left(true))
         ));
         assert!(capabilities.completion_provider.is_some());
+        assert!(capabilities.signature_help_provider.is_some());
     }
 
     // Test: Hover on function name returns signature
