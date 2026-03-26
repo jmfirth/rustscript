@@ -71,6 +71,50 @@ pub enum ItemKind {
     /// A top-level variable declaration (`const name: Type = expr;` or `let name: Type = expr;`).
     /// Lowers to a Rust `const` or `static` item depending on the initializer.
     Const(VarDecl),
+    /// A test block: `test("name", () => { ... })`, `describe("name", () => { ... })`,
+    /// or `it("name", () => { ... })`.
+    /// Lowers to `#[cfg(test)] mod tests { #[test] fn name() { ... } }`.
+    TestBlock(TestBlock),
+}
+
+/// A top-level test block declaration.
+///
+/// Represents `test("name", () => { body })`, `describe("name", () => { items })`,
+/// or `it("name", () => { body })` at the module level. Lowers to Rust test
+/// infrastructure (`#[test]`, `#[cfg(test)] mod tests`).
+#[derive(Debug, Clone)]
+pub struct TestBlock {
+    /// The kind of test block.
+    pub kind: TestBlockKind,
+    /// The description string (first argument).
+    pub description: String,
+    /// The test body (block form of the closure argument).
+    pub body: TestBody,
+    /// The span covering the entire test block.
+    pub span: Span,
+}
+
+/// The kind of test block declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestBlockKind {
+    /// `test("name", () => { ... })` — a standalone test case.
+    Test,
+    /// `describe("name", () => { ... })` — a test suite that groups tests.
+    Describe,
+    /// `it("name", () => { ... })` — a test case inside a `describe` block.
+    It,
+}
+
+/// The body of a test block.
+///
+/// For `test` and `it`, this contains statements.
+/// For `describe`, this contains nested test blocks.
+#[derive(Debug, Clone)]
+pub enum TestBody {
+    /// A block of statements (for `test` / `it` blocks).
+    Stmts(Block),
+    /// Nested test items (for `describe` blocks).
+    Items(Vec<TestBlock>),
 }
 
 /// An import declaration: `import { User, Post } from "./models"`.

@@ -10,6 +10,7 @@ mod expr_lower;
 mod import_lower;
 mod match_lower;
 mod stmt_lower;
+mod test_lower;
 mod use_collector;
 
 use std::collections::HashSet;
@@ -125,7 +126,8 @@ impl Transform {
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
                 | ast::ItemKind::RustBlock(_)
-                | ast::ItemKind::Const(_) => {}
+                | ast::ItemKind::Const(_)
+                | ast::ItemKind::TestBlock(_) => {}
             }
         }
 
@@ -198,6 +200,8 @@ impl Transform {
                     let lowered = self.lower_top_level_const(decl, exported, &mut ctx);
                     items.push(lowered);
                 }
+                // Test blocks are handled separately by collect_test_module
+                ast::ItemKind::TestBlock(_) => {}
             }
         }
 
@@ -216,12 +220,16 @@ impl Transform {
         let needs_futures_crate = uses.iter().any(|u| u.path.starts_with("futures::"))
             || async_lower::module_needs_futures_crate(module);
 
+        // Collect test blocks (test(), describe(), it()) from top-level items
+        let test_module = self.collect_test_module(module, &mut ctx);
+
         let diagnostics = ctx.into_diagnostics();
         (
             RustFile {
                 uses,
                 mod_decls: Vec::new(),
                 items,
+                test_module,
             },
             diagnostics,
             crate_deps,

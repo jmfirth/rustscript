@@ -15,9 +15,9 @@ use rsc_syntax::ast::{
     ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
     LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
     OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
-    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt,
+    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock,
+    TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -364,6 +364,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a top-level item: function, type definition, interface, import, or export.
+    #[allow(clippy::too_many_lines)]
     fn parse_item(&mut self) -> Option<Item> {
         match self.peek() {
             TokenKind::Async => {
@@ -447,6 +448,9 @@ impl<'src> Parser<'src> {
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
             TokenKind::Const | TokenKind::Let => self.parse_top_level_const(),
+            TokenKind::Ident(name) if matches!(name.as_str(), "test" | "describe" | "it") => {
+                self.parse_test_block()
+            }
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -4079,6 +4083,134 @@ impl<'src> Parser<'src> {
             exported: false,
             span,
         })
+    }
+
+    /// Parse a `test("...", () => { ... })`, `describe("...", () => { ... })`, or
+    /// `it("...", () => { ... })` block at the top level.
+    ///
+    /// The identifier (`test`, `describe`, or `it`) has been peeked but not consumed.
+    fn parse_test_block(&mut self) -> Option<Item> {
+        let ident_token = self.advance();
+        let start = ident_token.span;
+        let kind = match &ident_token.kind {
+            TokenKind::Ident(name) => match name.as_str() {
+                "test" => TestBlockKind::Test,
+                "describe" => TestBlockKind::Describe,
+                "it" => TestBlockKind::It,
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        // Expect `(`
+        if self.expect(&TokenKind::LParen).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        // Parse the description string
+        let desc_token = self.advance();
+        let description = if let TokenKind::StringLit(value) = &desc_token.kind {
+            value.clone()
+        } else {
+            self.diagnostics.push(
+                Diagnostic::error("expected string literal for test description").with_label(
+                    desc_token.span,
+                    self.file_id,
+                    "expected string literal",
+                ),
+            );
+            self.synchronize();
+            return None;
+        };
+
+        // Expect `,`
+        if self.expect(&TokenKind::Comma).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        // Expect `() => {` or `() => { ... }`
+        // Parse the arrow function: () => { body }
+        if self.expect(&TokenKind::LParen).is_none() {
+            self.synchronize();
+            return None;
+        }
+        if self.expect(&TokenKind::RParen).is_none() {
+            self.synchronize();
+            return None;
+        }
+        if self.expect(&TokenKind::FatArrow).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        // Parse the body based on kind
+        let body = if kind == TestBlockKind::Describe {
+            // Describe blocks contain nested test blocks (it/test/describe)
+            self.parse_describe_body()?
+        } else {
+            // test/it blocks contain statements
+            let block = self.parse_block()?;
+            TestBody::Stmts(block)
+        };
+
+        // Expect `)`
+        if self.expect(&TokenKind::RParen).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        // Optional semicolon
+        self.eat(&TokenKind::Semicolon);
+        let end = self.previous_span();
+        let span = start.merge(end);
+
+        Some(Item {
+            kind: ItemKind::TestBlock(TestBlock {
+                kind,
+                description,
+                body,
+                span,
+            }),
+            exported: false,
+            span,
+        })
+    }
+
+    /// Parse the body of a `describe` block — a brace-enclosed list of nested test items.
+    ///
+    /// Each item inside is either `it(...)`, `test(...)`, or nested `describe(...)`.
+    fn parse_describe_body(&mut self) -> Option<TestBody> {
+        let _open = self.expect(&TokenKind::LBrace)?;
+        let mut items = Vec::new();
+
+        while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            if let TokenKind::Ident(name) = self.peek() {
+                let name_str = name.clone();
+                match name_str.as_str() {
+                    "test" | "describe" | "it" => {
+                        if let Some(Item {
+                            kind: ItemKind::TestBlock(tb),
+                            ..
+                        }) = self.parse_test_block()
+                        {
+                            items.push(tb);
+                        }
+                    }
+                    _ => {
+                        // Skip unrecognized tokens inside describe
+                        self.advance();
+                    }
+                }
+            } else {
+                // Skip non-identifier tokens
+                self.advance();
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+        Some(TestBody::Items(items))
     }
 
     /// Parse a `rust { ... }` block as a statement.
