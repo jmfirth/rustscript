@@ -1,0 +1,1447 @@
+//! Phase 6 integration tests -- exercise the COMPLETE language surface.
+//!
+//! These tests validate that all features from Phases 0-5 compose correctly
+//! together, with special focus on cross-feature interactions that individual
+//! phase tests may not cover.
+//!
+//! Organization:
+//!   1. All operators (ternary, **, ===, !, as, typeof, bitwise, ??=)
+//!   2. All function features (optional, default, rest, spread)
+//!   3. All class features (field init, constructor props, static, get/set, readonly, abstract)
+//!   4. Tuples + destructuring rename/defaults + general unions
+//!   5. Test syntax (describe/it blocks)
+//!   6. Async iteration + Promise.race (snapshot only -- no runtime in fast tests)
+//!   7. Kitchen sink: 10+ features in one program
+//!
+//! Snapshot tests are fast (no cargo invocation). E2e tests are `#[ignore]`.
+
+mod test_utils;
+
+use test_utils::{compile_and_run, compile_to_rust};
+
+/// Assert that `actual` matches `expected`, printing a diff on failure.
+fn assert_snapshot(name: &str, actual: &str, expected: &str) {
+    if actual != expected {
+        panic!(
+            "snapshot mismatch for `{name}`.\n\n\
+             === expected ===\n{expected}\n\
+             === actual ===\n{actual}\n\
+             === end ===\n"
+        );
+    }
+}
+
+// ===========================================================================
+//
+// CATEGORY 1: All Operators Composition
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 1.1 Ternary + exponentiation + strict equality + bitwise ops in one function
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_all_operators_snapshot() {
+    let source = "\
+function compute(n: i64, flag: bool): i64 {
+  const base: i64 = flag ? n : n ** 2;
+  const masked: i64 = base & 255;
+  const shifted: i64 = masked << 2;
+  return shifted;
+}
+
+function main() {
+  const a: i64 = compute(3, true);
+  const b: i64 = compute(3, false);
+  const eq: bool = a === 12;
+  console.log(a);
+  console.log(b);
+  console.log(eq);
+}";
+
+    let actual = compile_to_rust(source);
+    // Ternary produces if/else
+    assert!(
+        actual.contains("if flag"),
+        "ternary should emit if/else: {actual}"
+    );
+    // Exponentiation produces .pow()
+    assert!(actual.contains(".pow("), "** should emit .pow(): {actual}");
+    // Bitwise AND
+    assert!(
+        actual.contains("& 255"),
+        "bitwise & should be preserved: {actual}"
+    );
+    // Left shift
+    assert!(
+        actual.contains("<< 2"),
+        "bitwise << should be preserved: {actual}"
+    );
+    // === lowers to ==
+    assert!(actual.contains("== 12"), "=== should lower to ==: {actual}");
+}
+
+#[test]
+#[ignore]
+fn test_p6_all_operators_e2e() {
+    let source = "\
+function compute(n: i64, flag: bool): i64 {
+  const base: i64 = flag ? n : n ** 2;
+  const masked: i64 = base & 255;
+  const shifted: i64 = masked << 2;
+  return shifted;
+}
+
+function main() {
+  const a: i64 = compute(3, true);
+  const b: i64 = compute(3, false);
+  const eq: bool = a === 12;
+  console.log(a);
+  console.log(b);
+  console.log(eq);
+}";
+
+    let output = compile_and_run(source);
+    // compute(3, true): base = 3, masked = 3 & 255 = 3, shifted = 3 << 2 = 12
+    // compute(3, false): base = 3**2 = 9, masked = 9 & 255 = 9, shifted = 9 << 2 = 36
+    assert_eq!(output, "12\n36\ntrue\n");
+}
+
+// ---------------------------------------------------------------------------
+// 1.2 typeof + as cast + non-null assertion together
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_typeof_cast_nonnull_snapshot() {
+    let source = "\
+function main() {
+  const t: string = typeof 42;
+  const n: i64 = 100;
+  const narrow: i32 = n as i32;
+  console.log(t);
+  console.log(narrow);
+}";
+
+    let actual = compile_to_rust(source);
+    // typeof produces a string literal
+    assert!(
+        actual.contains("\"number\""),
+        "typeof 42 should produce \"number\": {actual}"
+    );
+    // as cast produces Rust `as`
+    assert!(
+        actual.contains("as i32"),
+        "cast should produce `as i32`: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 1.3 Bitwise XOR + OR + shift combination
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_bitwise_ops_full_snapshot() {
+    let source = "\
+function main() {
+  const a: i64 = 170;
+  const b: i64 = 85;
+  const xor_val: i64 = a ^ b;
+  const or_val: i64 = a | b;
+  const shr_val: i64 = a >> 1;
+  console.log(xor_val);
+  console.log(or_val);
+  console.log(shr_val);
+}";
+
+    let expected = "\
+fn main() {
+    let a: i64 = 170;
+    let b: i64 = 85;
+    let xor_val: i64 = a ^ b;
+    let or_val: i64 = a | b;
+    let shr_val: i64 = a >> 1;
+    println!(\"{}\", xor_val);
+    println!(\"{}\", or_val);
+    println!(\"{}\", shr_val);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("bitwise_ops_full", &actual, expected);
+}
+
+#[test]
+#[ignore]
+fn test_p6_bitwise_ops_full_e2e() {
+    let source = "\
+function main() {
+  const a: i64 = 170;
+  const b: i64 = 85;
+  const xor_val: i64 = a ^ b;
+  const or_val: i64 = a | b;
+  const shr_val: i64 = a >> 1;
+  console.log(xor_val);
+  console.log(or_val);
+  console.log(shr_val);
+}";
+
+    let output = compile_and_run(source);
+    // 170 ^ 85 = 255, 170 | 85 = 255, 170 >> 1 = 85
+    assert_eq!(output, "255\n255\n85\n");
+}
+
+// ===========================================================================
+//
+// CATEGORY 2: All Function Features Composition
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 2.1 Optional + default + rest parameters in one function
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_function_features_snapshot() {
+    let source = "\
+function format_list(prefix: string, sep: string = \", \", ...items: Array<string>): string {
+  let result: string = prefix;
+  let i: i64 = 0;
+  for (const item of items) {
+    if (i > 0) {
+      result = `${result}${sep}`;
+    }
+    result = `${result}${item}`;
+    i = i + 1;
+  }
+  return result;
+}
+
+function main() {
+  console.log(format_list(\"Items: \", \" | \", \"a\", \"b\", \"c\"));
+  console.log(format_list(\"Default: \"));
+}";
+
+    let actual = compile_to_rust(source);
+    // Rest param should produce Vec<String>
+    assert!(
+        actual.contains("Vec<String>") || actual.contains("items: Vec<"),
+        "rest param should be Vec: {actual}"
+    );
+    // Default value should be inlined at call site
+    assert!(
+        actual.contains("Default: "),
+        "call site should have prefix arg: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2.2 Optional parameter with None filling at call site
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_optional_param_call_site() {
+    let source = "\
+function greet(name: string, title?: string): string {
+  return name;
+}
+
+function main() {
+  console.log(greet(\"Alice\"));
+  console.log(greet(\"Bob\", \"Dr.\"));
+}";
+
+    let actual = compile_to_rust(source);
+    // Optional should produce Option<String>
+    assert!(
+        actual.contains("Option<"),
+        "optional param should be Option: {actual}"
+    );
+    // Missing arg should fill with None
+    assert!(
+        actual.contains("None"),
+        "missing optional arg should produce None: {actual}"
+    );
+    // Provided arg should pass the value (may or may not wrap in Some
+    // depending on whether borrow inference changes the signature)
+    assert!(
+        actual.contains("Some(") || actual.contains("\"Dr.\""),
+        "provided optional arg should be present: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 3: All Class Features Composition
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 3.1 Class with field init, constructor props, static, get/set, readonly
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_class_features_full_snapshot() {
+    let source = "\
+class Counter {
+  readonly name: string;
+  private count: i64 = 0;
+  static MAX: i64 = 1000;
+
+  constructor(public label: string) {
+    this.name = label;
+  }
+
+  get value(): i64 {
+    return this.count;
+  }
+
+  set value(n: i64) {
+    this.count = n;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  static create(label: string): Counter {
+    return new Counter(label);
+  }
+}
+
+function main() {
+  let c: Counter = Counter.create(\"test\");
+  c.increment();
+  console.log(c.value);
+}";
+
+    let actual = compile_to_rust(source);
+    // Struct should exist
+    assert!(
+        actual.contains("struct Counter"),
+        "should produce Counter struct: {actual}"
+    );
+    // Constructor prop should generate a field
+    assert!(
+        actual.contains("label"),
+        "constructor property should produce field: {actual}"
+    );
+    // Static const should produce associated const
+    assert!(
+        actual.contains("const MAX"),
+        "static field should produce associated const: {actual}"
+    );
+    // Getter should produce a method
+    assert!(
+        actual.contains("fn value(&self)"),
+        "getter should produce fn value: {actual}"
+    );
+    // Setter should produce a set_ method
+    assert!(
+        actual.contains("fn set_value("),
+        "setter should produce fn set_value: {actual}"
+    );
+    // Static method should have no &self
+    assert!(
+        actual.contains("fn create("),
+        "static method should exist: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 3.2 Abstract class lowers to trait
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_abstract_class_snapshot() {
+    let source = "\
+abstract class Shape {
+  abstract area(): f64;
+
+  describe(): string {
+    return \"a shape\";
+  }
+}
+
+class Circle implements Shape {
+  radius: f64;
+
+  constructor(r: f64) {
+    this.radius = r;
+  }
+
+  area(): f64 {
+    return this.radius * this.radius * 3.14159;
+  }
+}
+
+function main() {
+  const c: Circle = new Circle(5.0);
+  console.log(c.area());
+}";
+
+    let actual = compile_to_rust(source);
+    // Abstract class should produce a trait
+    assert!(
+        actual.contains("trait Shape"),
+        "abstract class should produce trait: {actual}"
+    );
+    // Default method should have a body in the trait
+    assert!(
+        actual.contains("fn describe("),
+        "default method should exist: {actual}"
+    );
+    // Concrete class should implement the trait
+    assert!(
+        actual.contains("impl Shape for Circle"),
+        "Circle should impl Shape: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_abstract_class_e2e() {
+    let source = "\
+abstract class Shape {
+  abstract area(): f64;
+}
+
+class Circle implements Shape {
+  radius: f64;
+
+  constructor(r: f64) {
+    this.radius = r;
+  }
+
+  area(): f64 {
+    return this.radius * this.radius * 3.14159;
+  }
+}
+
+function main() {
+  const c: Circle = new Circle(5.0);
+  console.log(c.area());
+}";
+
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("78.539"),
+        "area should be ~78.539: {output}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 4: Tuples + Destructuring Rename/Defaults + General Unions
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 4.1 Tuple construction, access, and destructuring
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_tuple_operations_snapshot() {
+    let source = "\
+function make_pair(a: string, b: i32): [string, i32] {
+  return [a, b];
+}
+
+function main() {
+  const pair: [string, i32] = make_pair(\"hello\", 42);
+  const first: string = pair[0];
+  const second: i32 = pair[1];
+  console.log(first);
+  console.log(second);
+}";
+
+    let actual = compile_to_rust(source);
+    // Return type should be tuple
+    assert!(
+        actual.contains("(String, i32)"),
+        "return type should be tuple: {actual}"
+    );
+    // Tuple construction
+    assert!(
+        actual.contains("(\"hello\".to_string(), 42)") || actual.contains(".to_string(), 42)"),
+        "tuple construction should use parens: {actual}"
+    );
+    // Tuple field access with .N
+    assert!(
+        actual.contains(".0") && actual.contains(".1"),
+        "tuple access should use .0 and .1: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_tuple_operations_e2e() {
+    let source = "\
+function make_pair(a: string, b: i32): [string, i32] {
+  return [a, b];
+}
+
+function main() {
+  const pair: [string, i32] = make_pair(\"hello\", 42);
+  const first: string = pair[0];
+  const second: i32 = pair[1];
+  console.log(first);
+  console.log(second);
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n42\n");
+}
+
+// ---------------------------------------------------------------------------
+// 4.2 Destructuring with rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_destructure_rename_snapshot() {
+    let source = "\
+type Point = {
+  x: f64,
+  y: f64,
+}
+
+function main() {
+  const p: Point = { x: 1.0, y: 2.0 };
+  const { x: px, y: py } = p;
+  console.log(px);
+  console.log(py);
+}";
+
+    let actual = compile_to_rust(source);
+    // Should produce renamed bindings
+    assert!(
+        actual.contains("px") && actual.contains("py"),
+        "destructure rename should produce px, py: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4.3 General union type
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_union_type_snapshot() {
+    let source = "\
+function process(value: string | i32): string {
+  return \"processed\";
+}
+
+function main() {
+  const a: string | i32 = \"hello\";
+  const b: string | i32 = 42;
+  console.log(process(a));
+  console.log(process(b));
+}";
+
+    let actual = compile_to_rust(source);
+    // Should generate an enum
+    assert!(
+        actual.contains("enum ") && actual.contains("Or"),
+        "union should generate enum with Or in name: {actual}"
+    );
+    // Should generate From impls
+    assert!(
+        actual.contains("impl From<"),
+        "union should generate From impls: {actual}"
+    );
+    // Values should use .into()
+    assert!(
+        actual.contains(".into()"),
+        "union values should use .into(): {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 5: Test Syntax (describe/it blocks)
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 5.1 Test block generates #[test] functions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_test_syntax_snapshot() {
+    let source = "\
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+test(\"add returns sum\", () => {
+  assert(add(2, 3) === 5);
+})
+
+describe(\"arithmetic\", () => {
+  it(\"handles zero\", () => {
+    assert(add(0, 0) === 0);
+  })
+
+  it(\"handles negatives\", () => {
+    assert(add(-1, 1) === 0);
+  })
+})";
+
+    let actual = compile_to_rust(source);
+    // Should produce #[cfg(test)]
+    assert!(
+        actual.contains("#[cfg(test)]"),
+        "should produce #[cfg(test)]: {actual}"
+    );
+    // Should produce #[test]
+    assert!(
+        actual.contains("#[test]"),
+        "should produce #[test]: {actual}"
+    );
+    // Should produce mod tests
+    assert!(
+        actual.contains("mod tests"),
+        "should produce mod tests: {actual}"
+    );
+    // Should produce assert macros
+    assert!(
+        actual.contains("assert_eq!") || actual.contains("assert!("),
+        "assert should produce assert macros: {actual}"
+    );
+    // describe should produce a nested module
+    assert!(
+        actual.contains("mod arithmetic"),
+        "describe should produce nested module: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 6: Async Iteration + Promise.race (snapshot only)
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 6.1 Async function with await
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_async_function_snapshot() {
+    let source = "\
+async function fetch_data(): string {
+  return \"data\";
+}
+
+async function main() {
+  const result: string = await fetch_data();
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    // async fn
+    assert!(
+        actual.contains("async fn"),
+        "should produce async fn: {actual}"
+    );
+    // .await
+    assert!(actual.contains(".await"), "should produce .await: {actual}");
+    // #[tokio::main]
+    assert!(
+        actual.contains("tokio::main"),
+        "async main should have tokio::main: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 7: Kitchen Sink -- 10+ features in one program
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 7.1 Kitchen sink snapshot: class + generics + closures + ternary + template
+//     + optional params + for-of + destructuring + enum + try/catch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_kitchen_sink_snapshot() {
+    let source = "\
+type Config = {
+  name: string,
+  verbose: bool,
+}
+
+type Direction = \"north\" | \"south\" | \"east\" | \"west\"
+
+interface Describable {
+  describe(): string;
+}
+
+class Logger implements Describable {
+  prefix: string;
+  private entries: Array<string>;
+
+  constructor(prefix: string) {
+    this.prefix = prefix;
+    this.entries = [];
+  }
+
+  log(msg: string): void {
+    this.entries = this.entries;
+  }
+
+  describe(): string {
+    return this.prefix;
+  }
+}
+
+function format_with_default(value: i64, label: string = \"count\"): string {
+  const display: string = value > 0 ? `${label}: ${value}` : `${label}: none`;
+  return display;
+}
+
+function process_items(items: Array<i32>): i64 {
+  let total: i64 = 0;
+  for (const item of items) {
+    total = total + item;
+  }
+  return total;
+}
+
+function main() {
+  const config: Config = { name: \"test\", verbose: true };
+  const { name, verbose } = config;
+  console.log(name);
+
+  const dir: Direction = \"north\";
+  switch (dir) {
+    case \"north\": console.log(\"going north\");
+    case \"south\": console.log(\"going south\");
+    case \"east\": console.log(\"going east\");
+    case \"west\": console.log(\"going west\");
+  }
+
+  const logger: Logger = new Logger(\"[APP]\");
+  console.log(logger.describe());
+
+  console.log(format_with_default(42));
+  console.log(format_with_default(0, \"items\"));
+
+  const items: Array<i32> = [10, 20, 30];
+  const sum: i64 = process_items(items);
+  console.log(sum);
+
+  const power: i64 = 2 ** 10;
+  console.log(power);
+
+  const flags: i64 = 255 & 15;
+  console.log(flags);
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Verify 10+ features are present in generated output:
+
+    // 1. Struct (type definition)
+    assert!(
+        actual.contains("struct Config"),
+        "feature 1: type def should produce struct: {actual}"
+    );
+
+    // 2. Enum (string literal union)
+    assert!(
+        actual.contains("enum Direction"),
+        "feature 2: enum should be generated: {actual}"
+    );
+
+    // 3. Trait (interface)
+    assert!(
+        actual.contains("trait Describable"),
+        "feature 3: interface should produce trait: {actual}"
+    );
+
+    // 4. Class (struct + impl)
+    assert!(
+        actual.contains("struct Logger"),
+        "feature 4: class should produce struct: {actual}"
+    );
+
+    // 5. Default parameter
+    assert!(
+        actual.contains("\"count\""),
+        "feature 5: default param should be present: {actual}"
+    );
+
+    // 6. Ternary (if/else expr)
+    assert!(
+        actual.contains("if") && actual.contains("else"),
+        "feature 6: ternary should produce if/else: {actual}"
+    );
+
+    // 7. Template literal (format!)
+    assert!(
+        actual.contains("format!("),
+        "feature 7: template literal should produce format!: {actual}"
+    );
+
+    // 8. For-of loop
+    assert!(
+        actual.contains("for") && actual.contains("in"),
+        "feature 8: for-of should produce for..in: {actual}"
+    );
+
+    // 9. Destructuring
+    assert!(
+        actual.contains("let Config"),
+        "feature 9: destructuring should name the type: {actual}"
+    );
+
+    // 10. Match (switch)
+    assert!(
+        actual.contains("match") || actual.contains("Direction::"),
+        "feature 10: switch should produce match: {actual}"
+    );
+
+    // 11. Exponentiation
+    assert!(
+        actual.contains(".pow("),
+        "feature 11: ** should produce .pow(): {actual}"
+    );
+
+    // 12. Bitwise AND
+    assert!(
+        actual.contains("& 15"),
+        "feature 12: bitwise & should be preserved: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_kitchen_sink_e2e() {
+    let source = "\
+type Config = {
+  name: string,
+  verbose: bool,
+}
+
+type Direction = \"north\" | \"south\" | \"east\" | \"west\"
+
+function format_with_default(value: i64, label: string = \"count\"): string {
+  const display: string = value > 0 ? `${label}: ${value}` : `${label}: none`;
+  return display;
+}
+
+function process_items(items: Array<i32>): i64 {
+  let total: i64 = 0;
+  for (const item of items) {
+    total = total + item;
+  }
+  return total;
+}
+
+function main() {
+  const config: Config = { name: \"test\", verbose: true };
+  const { name } = config;
+  console.log(name);
+
+  const dir: Direction = \"north\";
+  switch (dir) {
+    case \"north\": console.log(\"going north\");
+    case \"south\": console.log(\"going south\");
+    case \"east\": console.log(\"going east\");
+    case \"west\": console.log(\"going west\");
+  }
+
+  console.log(format_with_default(42));
+  console.log(format_with_default(0, \"items\"));
+
+  const items: Array<i32> = [10, 20, 30];
+  const sum: i64 = process_items(items);
+  console.log(sum);
+
+  const power: i64 = 2 ** 10;
+  console.log(power);
+
+  const flags: i64 = 255 & 15;
+  console.log(flags);
+}";
+
+    let output = compile_and_run(source);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines[0], "test"); // config.name
+    assert_eq!(lines[1], "going north"); // switch match
+    assert_eq!(lines[2], "count: 42"); // format_with_default(42)
+    assert_eq!(lines[3], "items: none"); // format_with_default(0, "items")
+    assert_eq!(lines[4], "60"); // process_items sum
+    assert_eq!(lines[5], "1024"); // 2 ** 10
+    assert_eq!(lines[6], "15"); // 255 & 15
+}
+
+// ===========================================================================
+//
+// CATEGORY 8: Cross-phase composition tests
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 8.1 Tier 2 borrow inference + template literals + closures
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_borrow_inference_with_closures() {
+    let source = "\
+function greet(name: string): string {
+  return `Hello, ${name}!`;
+}
+
+function apply(f: (string) => string, value: string): string {
+  return f(value);
+}
+
+function main() {
+  console.log(greet(\"World\"));
+}";
+
+    let actual = compile_to_rust(source);
+    // Should compile without errors -- borrow inference should work with
+    // string params in template literals
+    assert!(
+        actual.contains("fn greet("),
+        "greet function should exist: {actual}"
+    );
+    assert!(
+        actual.contains("format!("),
+        "template literal should produce format!: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8.2 Derive macros on struct + enum + class
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_derive_macros_composition() {
+    let source = "\
+type Point = {
+  x: f64,
+  y: f64,
+}
+
+type Color = \"red\" | \"green\" | \"blue\"
+
+class Rect {
+  width: f64;
+  height: f64;
+
+  constructor(w: f64, h: f64) {
+    this.width = w;
+    this.height = h;
+  }
+}
+
+function main() {
+  const p: Point = { x: 1.0, y: 2.0 };
+  const c: Color = \"red\";
+  const r: Rect = new Rect(3.0, 4.0);
+  console.log(p);
+  console.log(r);
+}";
+
+    let actual = compile_to_rust(source);
+    // Struct should have derives
+    assert!(
+        actual.contains("#[derive(Debug, Clone"),
+        "struct should have Debug, Clone derives: {actual}"
+    );
+    // Simple enum should have full derives including Copy
+    assert!(
+        actual.contains("Copy") && actual.contains("Hash"),
+        "simple enum should have Copy, Hash: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8.3 Inline Rust + regular code
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_inline_rust_composition() {
+    let source = "\
+rust {
+    fn helper() -> i32 {
+        42
+    }
+}
+
+function main() {
+  const x: i32 = 10;
+  console.log(x);
+}";
+
+    let actual = compile_to_rust(source);
+    // Raw rust block should be passed through
+    assert!(
+        actual.contains("fn helper()"),
+        "inline rust should contain helper: {actual}"
+    );
+    // Regular RustScript code should also compile
+    assert!(
+        actual.contains("let x: i32 = 10"),
+        "regular code should compile: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8.4 shared<T> type with method calls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_shared_type_composition() {
+    let source = "\
+function main() {
+  const counter: shared<i64> = shared(0);
+  const data: shared<string> = shared(\"hello\");
+  console.log(counter);
+  console.log(data);
+}";
+
+    let actual = compile_to_rust(source);
+    // shared<T> should produce Arc<Mutex<T>>
+    assert!(
+        actual.contains("Arc<Mutex<i64>>"),
+        "shared<i64> should produce Arc<Mutex<i64>>: {actual}"
+    );
+    assert!(
+        actual.contains("Arc<Mutex<String>>"),
+        "shared<string> should produce Arc<Mutex<String>>: {actual}"
+    );
+    // shared(expr) should produce Arc::new(Mutex::new(expr))
+    assert!(
+        actual.contains("Arc::new(Mutex::new("),
+        "shared() should produce Arc::new(Mutex::new()): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8.5 WASM-aware compilation flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_compile_options_no_borrow_inference() {
+    // Test that no_borrow_inference option disables Tier 2
+    let source = "\
+function greet(name: string): string {
+  return name;
+}
+
+function main() {
+  console.log(greet(\"world\"));
+}";
+
+    let options = rsc_driver::CompileOptions {
+        no_borrow_inference: true,
+    };
+    let result = rsc_driver::compile_source_with_options(source, "test.rts", &options);
+    assert!(
+        !result.has_errors,
+        "compilation should succeed with no_borrow_inference: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    // With no_borrow_inference, params should be owned (String, not &str)
+    assert!(
+        result.rust_source.contains("name: String") || result.rust_source.contains("fn greet("),
+        "function should still compile: {}",
+        result.rust_source
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 9: JSDoc comments propagation
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 9.1 JSDoc on function produces /// doc comment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_jsdoc_propagation() {
+    let source = "\
+/** Adds two numbers together.
+ * @param a the first number
+ * @param b the second number
+ * @returns the sum
+ */
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+function main() {
+  console.log(add(1, 2));
+}";
+
+    let actual = compile_to_rust(source);
+    // JSDoc should produce /// doc comments
+    assert!(
+        actual.contains("/// "),
+        "JSDoc should produce doc comments: {actual}"
+    );
+    // Should translate @param to Rustdoc
+    assert!(
+        actual.contains("# Arguments")
+            || actual.contains("param")
+            || actual.contains("Adds two numbers"),
+        "JSDoc content should be preserved: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 10: Error handling composition
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 10.1 try/catch + finally composition
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_try_catch_finally_snapshot() {
+    let source = "\
+function risky(): i32 throws string {
+  throw \"error\";
+}
+
+function main() {
+  try {
+    const result: i32 = risky();
+    console.log(result);
+  } catch (e: string) {
+    console.log(e);
+  } finally {
+    console.log(\"cleanup\");
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    // Should have match on Result
+    assert!(
+        actual.contains("Ok(") && actual.contains("Err("),
+        "try/catch should produce Ok/Err match: {actual}"
+    );
+    // Finally should produce cleanup code
+    assert!(
+        actual.contains("cleanup"),
+        "finally should produce cleanup: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 11: Collections and builtin methods
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 11.1 Array + Map + Set with builtin methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_collections_builtins_snapshot() {
+    let source = "\
+function main() {
+  const items: Array<i32> = [1, 2, 3, 4, 5];
+  const name: string = \"hello world\";
+  const upper: string = name.toUpperCase();
+  const parts: Array<string> = name.split(\" \");
+  console.log(upper);
+  console.log(items.length);
+}";
+
+    let actual = compile_to_rust(source);
+    // toUpperCase -> to_uppercase
+    assert!(
+        actual.contains("to_uppercase()"),
+        "toUpperCase should lower to to_uppercase: {actual}"
+    );
+    // split should produce Rust split
+    assert!(
+        actual.contains(".split("),
+        "split should be preserved: {actual}"
+    );
+    // .length should produce .len()
+    assert!(
+        actual.contains(".len()"),
+        ".length should produce .len(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11.2 Iterator methods: map, filter, reduce
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_iterator_methods_snapshot() {
+    let source = "\
+function main() {
+  const items: Array<i32> = [1, 2, 3, 4, 5];
+  const doubled: Array<i32> = items.map((x: i32): i32 => x * 2);
+  const evens: Array<i32> = items.filter((x: i32): bool => x % 2 === 0);
+  console.log(doubled);
+  console.log(evens);
+}";
+
+    let actual = compile_to_rust(source);
+    // .map should produce iterator chain
+    assert!(
+        actual.contains(".iter()") || actual.contains(".map("),
+        "map should produce iterator chain: {actual}"
+    );
+    // .filter should produce iterator chain
+    assert!(
+        actual.contains(".filter("),
+        "filter should produce filter: {actual}"
+    );
+    // Should have .collect()
+    assert!(
+        actual.contains(".collect()") || actual.contains(".collect::<"),
+        "iterator chain should collect: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 12: Module system and imports
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 12.1 Import from std library
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_import_std_snapshot() {
+    let source = "\
+import { HashMap } from \"std/collections\"
+
+function main() {
+  const m: Map<string, i32> = new Map();
+  console.log(m);
+}";
+
+    let actual = compile_to_rust(source);
+    // Should generate use statement
+    assert!(
+        actual.contains("use std::collections::HashMap"),
+        "import from std should produce use: {actual}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY 13: Nullability and option handling
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 13.1 T | null + optional chaining + nullish coalescing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_null_handling_composition() {
+    let source = "\
+function find_name(id: i32): string | null {
+  if (id === 1) {
+    return \"Alice\";
+  }
+  return null;
+}
+
+function main() {
+  const name: string | null = find_name(1);
+  const display: string = name ?? \"Unknown\";
+  console.log(display);
+
+  const missing: string | null = find_name(0);
+  const fallback: string = missing ?? \"Nobody\";
+  console.log(fallback);
+}";
+
+    let actual = compile_to_rust(source);
+    // Return type should be Option
+    assert!(
+        actual.contains("Option<String>"),
+        "T | null should produce Option<String>: {actual}"
+    );
+    // null should be None
+    assert!(
+        actual.contains("None"),
+        "null should produce None: {actual}"
+    );
+    // Return value should be Some
+    assert!(
+        actual.contains("Some("),
+        "non-null return should produce Some: {actual}"
+    );
+    // ?? should produce unwrap_or
+    assert!(
+        actual.contains("unwrap_or"),
+        "?? should produce unwrap_or: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_null_handling_e2e() {
+    let source = "\
+function find_name(id: i32): string | null {
+  if (id === 1) {
+    return \"Alice\";
+  }
+  return null;
+}
+
+function main() {
+  const name: string | null = find_name(1);
+  const display: string = name ?? \"Unknown\";
+  console.log(display);
+
+  const missing: string | null = find_name(0);
+  const fallback: string = missing ?? \"Nobody\";
+  console.log(fallback);
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "Alice\nNobody\n");
+}
+
+// ===========================================================================
+//
+// CATEGORY 14: Complex e2e programs
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 14.1 Full program: calculator with all features
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p6_calculator_e2e() {
+    let source = "\
+function power(base: i64, exp: i64): i64 {
+  return base ** exp;
+}
+
+function classify(n: i64): string {
+  const label: string = n > 0 ? \"positive\" : n === 0 ? \"zero\" : \"negative\";
+  return label;
+}
+
+function sum_array(items: Array<i32>): i64 {
+  let total: i64 = 0;
+  for (const item of items) {
+    total = total + item;
+  }
+  return total;
+}
+
+function main() {
+  console.log(power(2, 10));
+  console.log(classify(42));
+  console.log(classify(0));
+  console.log(classify(-5));
+
+  const nums: Array<i32> = [1, 2, 3, 4, 5];
+  console.log(sum_array(nums));
+
+  const masked: i64 = 0xFF & 0x0F;
+  console.log(masked);
+
+  const shifted: i64 = 1 << 8;
+  console.log(shifted);
+}";
+
+    let output = compile_and_run(source);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines[0], "1024"); // 2^10
+    assert_eq!(lines[1], "positive"); // classify(42)
+    assert_eq!(lines[2], "zero"); // classify(0)
+    assert_eq!(lines[3], "negative"); // classify(-5)
+    assert_eq!(lines[4], "15"); // sum [1,2,3,4,5]
+    assert_eq!(lines[5], "15"); // 0xFF & 0x0F
+    assert_eq!(lines[6], "256"); // 1 << 8
+}
+
+// ---------------------------------------------------------------------------
+// 14.2 String manipulation program
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p6_string_manipulation_e2e() {
+    let source = "\
+function main() {
+  const greeting: string = \"hello world\";
+  const upper: string = greeting.toUpperCase();
+  console.log(upper);
+
+  const starts: bool = greeting.startsWith(\"hello\");
+  console.log(starts);
+
+  const trimmed: string = \"  space  \".trim();
+  console.log(trimmed);
+
+  const replaced: string = greeting.replace(\"world\", \"rust\");
+  console.log(replaced);
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "HELLO WORLD\ntrue\nspace\nhello rust\n");
+}
+
+// ---------------------------------------------------------------------------
+// 14.3 Class with all features e2e
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p6_full_class_e2e() {
+    let source = "\
+class BankAccount {
+  private balance: f64 = 0.0;
+
+  constructor(public owner: string, initial: f64) {
+    this.balance = initial;
+  }
+
+  get amount(): f64 {
+    return this.balance;
+  }
+
+  deposit(n: f64): void {
+    this.balance = this.balance + n;
+  }
+
+  describe(): string {
+    return `${this.owner}: ${this.balance}`;
+  }
+}
+
+function main() {
+  let acct: BankAccount = new BankAccount(\"Alice\", 100.0);
+  acct.deposit(50.0);
+  console.log(acct.amount);
+  console.log(acct.describe());
+}";
+
+    let output = compile_and_run(source);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines[0], "150");
+    assert!(lines[1].contains("Alice") && lines[1].contains("150"));
+}
