@@ -206,6 +206,9 @@ fn translate_type_names(input: &str) -> String {
     // 6. Async pattern names — translate Rust macro/function names back to RustScript
     output = translate_async_patterns(&output);
 
+    // 7. Abstract class / trait error messages
+    output = translate_trait_errors(&output);
+
     output
 }
 
@@ -720,6 +723,22 @@ fn find_top_level_comma(input: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Translate trait-related rustc errors into abstract class terminology.
+///
+/// Maps "trait `X` is not implemented for" → "abstract class `X` is not implemented for",
+/// and "required method" → "abstract method".
+fn translate_trait_errors(input: &str) -> String {
+    let output = input
+        .replace("the trait `", "the abstract class `")
+        .replace("trait `", "abstract class `")
+        .replace("required method", "abstract method");
+    // Only translate "field `X` of struct `Y` is private" to mention #field
+    output.replace(
+        "is private",
+        "is private (use `#field` syntax for private fields)",
+    )
 }
 
 #[cfg(test)]

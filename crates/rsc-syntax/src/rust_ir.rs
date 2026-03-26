@@ -198,7 +198,8 @@ pub struct RustTraitDef {
 
 /// A method signature in a Rust trait.
 ///
-/// Produced by lowering a `RustScript` [`InterfaceMethod`](crate::ast::InterfaceMethod).
+/// Produced by lowering a `RustScript` [`InterfaceMethod`](crate::ast::InterfaceMethod)
+/// or an abstract class definition.
 #[derive(Debug, Clone)]
 pub struct RustTraitMethod {
     /// The method name.
@@ -209,6 +210,10 @@ pub struct RustTraitMethod {
     pub return_type: Option<RustType>,
     /// Whether the method takes `&self` as the first parameter.
     pub has_self: bool,
+    /// Optional default method body (for concrete methods in abstract classes).
+    pub default_body: Option<RustBlock>,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }

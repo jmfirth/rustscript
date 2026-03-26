@@ -19,6 +19,7 @@
     { "include": "#import-export" },
     { "include": "#function-call" },
     { "include": "#type-annotation" },
+    { "include": "#private-field" },
     { "include": "#operators" },
     { "include": "#punctuation" }
   ],
@@ -333,6 +334,10 @@
           },
           "patterns": [
             {
+              "match": "\\b(type)\\b",
+              "name": "keyword.module.type.rustscript"
+            },
+            {
               "match": "\\b(from)\\b",
               "name": "keyword.module.from.rustscript"
             },
@@ -443,6 +448,11 @@
           "match": "\\?"
         }
       ]
+    },
+    "private-field": {
+      "comment": "private field with # prefix",
+      "match": "#[a-zA-Z_$][a-zA-Z0-9_$]*",
+      "name": "variable.other.private.rustscript"
     },
     "punctuation": {
       "patterns": [

@@ -570,6 +570,24 @@ static KEYWORD_HOVERS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock:
             markdown: "```\nfor await\n```\n\nAsync iteration --- iterates over an async stream.\n\n**Rust:** `while let Some(item) = stream.next().await { ... }`",
         },
     );
+    m.insert(
+        "abstract",
+        BuiltinHover {
+            markdown: "```\nabstract\n```\n\nAbstract class --- cannot be instantiated directly. Subclasses must implement abstract methods.\n\n**Rust:** trait definition.",
+        },
+    );
+    m.insert(
+        "override",
+        BuiltinHover {
+            markdown: "```\noverride\n```\n\nMethod override --- this method overrides a base class method.\n\n**Rust:** trait impl method (override is implicit).",
+        },
+    );
+    m.insert(
+        "satisfies",
+        BuiltinHover {
+            markdown: "```\nsatisfies\n```\n\nType satisfaction check --- compile-time assertion that the expression's type matches. No runtime code generated.",
+        },
+    );
 
     m
 });
@@ -885,5 +903,30 @@ mod tests {
             text.contains("stream.next().await"),
             "should mention stream.next().await: {text}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 067: Minor syntax completions keyword hover tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_keyword_abstract() {
+        let hover = lookup_keyword("abstract");
+        assert!(hover.is_some(), "abstract should have hover info");
+        assert!(hover.unwrap().contains("trait"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_override() {
+        let hover = lookup_keyword("override");
+        assert!(hover.is_some(), "override should have hover info");
+        assert!(hover.unwrap().contains("override"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_satisfies() {
+        let hover = lookup_keyword("satisfies");
+        assert!(hover.is_some(), "satisfies should have hover info");
+        assert!(hover.unwrap().contains("compile-time"));
     }
 }

@@ -265,6 +265,15 @@ impl<'a> Lexer<'a> {
             return Some(self.lex_number(start));
         }
 
+        // Hash-private identifier: `#field`
+        if byte == b'#'
+            && self
+                .peek_next()
+                .is_some_and(|next| next.is_ascii_alphabetic() || next == b'_')
+        {
+            return Some(self.lex_hash_ident(start));
+        }
+
         // Identifier or keyword
         if byte.is_ascii_alphabetic() || byte == b'_' {
             return Some(self.lex_ident(start));
@@ -832,11 +841,35 @@ impl<'a> Lexer<'a> {
             "rust" => TokenKind::Rust,
             "as" => TokenKind::As,
             "typeof" => TokenKind::TypeOf,
+            "abstract" => TokenKind::Abstract,
+            "override" => TokenKind::Override,
+            "satisfies" => TokenKind::Satisfies,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
         Token {
             kind,
+            span: self.span_from(start),
+        }
+    }
+
+    /// Lex a hash-private identifier: `#fieldName`.
+    ///
+    /// The `#` prefix is included in the token text (e.g., `#password`).
+    /// Produces an `Ident` token with the `#` prefix preserved.
+    fn lex_hash_ident(&mut self, start: usize) -> Token {
+        self.advance(); // consume `#`
+        while let Some(b) = self.peek() {
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let text = &self.source[start..self.pos];
+        Token {
+            kind: TokenKind::Ident(text.to_owned()),
             span: self.span_from(start),
         }
     }
@@ -1871,5 +1904,53 @@ mod tests {
         let tokens = tokenize("0");
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].kind, TokenKind::IntLit(0));
+    }
+
+    // --- Task 067: Minor Syntax Completions ---
+
+    // 78. `abstract` is tokenized as a keyword
+    #[test]
+    fn test_lexer_abstract_keyword() {
+        let tokens = tokenize("abstract");
+        assert_eq!(tokens[0].kind, TokenKind::Abstract);
+    }
+
+    // 79. `override` is tokenized as a keyword
+    #[test]
+    fn test_lexer_override_keyword() {
+        let tokens = tokenize("override");
+        assert_eq!(tokens[0].kind, TokenKind::Override);
+    }
+
+    // 80. `satisfies` is tokenized as a keyword
+    #[test]
+    fn test_lexer_satisfies_keyword() {
+        let tokens = tokenize("satisfies");
+        assert_eq!(tokens[0].kind, TokenKind::Satisfies);
+    }
+
+    // 81. `#field` is tokenized as an identifier with # prefix
+    #[test]
+    fn test_lexer_hash_private_field() {
+        let tokens = tokenize("#password");
+        assert_eq!(tokens[0].kind, TokenKind::Ident("#password".to_owned()));
+    }
+
+    // 82. `#` alone (not followed by identifier) is not a hash-private identifier
+    #[test]
+    fn test_lexer_hash_alone_is_invalid() {
+        let (tokens, diagnostics) = Lexer::new("# ", FileId(0)).tokenize();
+        // Should produce a diagnostic for unexpected character
+        assert!(
+            !diagnostics.is_empty(),
+            "bare # should produce a diagnostic"
+        );
+        // The hash should not produce an Ident token
+        assert!(
+            !tokens
+                .iter()
+                .any(|t| matches!(&t.kind, TokenKind::Ident(n) if n.starts_with('#'))),
+            "bare # should not produce a hash-ident"
+        );
     }
 }

@@ -115,21 +115,32 @@ impl Transform {
                 self.lower_struct_lit(slit, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::FieldAccess(fa) => {
-                // `this.field` → `self.field`
+                // Strip `#` prefix from hash-private field access
+                let field_name = fa.field.name.trim_start_matches('#');
+
+                // `this.field` or `this.#field` → `self.field`
                 if matches!(fa.object.kind, ast::ExprKind::This) {
                     return RustExpr::new(
                         RustExprKind::SelfFieldAccess {
-                            field: fa.field.name.clone(),
+                            field: field_name.to_owned(),
                         },
                         expr.span,
                     );
+                }
+
+                // External `obj.#field` access — emit diagnostic
+                if fa.field.name.starts_with('#') {
+                    ctx.emit_diagnostic(Diagnostic::error(format!(
+                        "cannot access private field `{}`",
+                        fa.field.name
+                    )));
                 }
 
                 // `.length` / `.size` on strings/arrays/maps/sets → `.len() as i64`
                 // The cast to i64 matches RustScript's default numeric type and avoids
                 // type mismatches when assigning to numeric fields (usize vs i64/u32).
                 // `.size` is the Map/Set equivalent of `.length`.
-                if fa.field.name == "length" || fa.field.name == "size" {
+                if field_name == "length" || field_name == "size" {
                     let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                     let len_call = RustExpr::new(
                         RustExprKind::MethodCall {
@@ -150,7 +161,7 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::FieldAccess {
                         object: Box::new(object),
-                        field: fa.field.name.clone(),
+                        field: field_name.to_owned(),
                     },
                     expr.span,
                 )
@@ -307,12 +318,13 @@ impl Transform {
             }
             ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),
             ast::ExprKind::FieldAssign(fa) => {
+                let assign_field_name = fa.field.name.trim_start_matches('#').to_owned();
                 // Check if this is `this.field = value` → `self.field = value`
                 if matches!(fa.object.kind, ast::ExprKind::This) {
                     let value = self.lower_expr(&fa.value, ctx, use_map, stmt_index);
                     RustExpr::new(
                         RustExprKind::SelfFieldAssign {
-                            field: fa.field.name.clone(),
+                            field: assign_field_name,
                             value: Box::new(value),
                         },
                         expr.span,
@@ -394,6 +406,10 @@ impl Transform {
                     "logical assignment operators (??=, ||=, &&=) can only be used as statements",
                 ));
                 self.lower_expr(&la.value, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::Satisfies(inner, _) => {
+                // `satisfies` is a compile-time assertion — strip it entirely
+                self.lower_expr(inner, ctx, use_map, stmt_index)
             }
         }
     }

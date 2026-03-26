@@ -178,6 +178,12 @@ pub(crate) enum TokenKind {
     PipePipeEq,
     /// `&&=` (logical AND assignment operator)
     AmpAmpEq,
+    /// `abstract` (abstract class/method keyword)
+    Abstract,
+    /// `override` (method override keyword)
+    Override,
+    /// `satisfies` (type satisfaction check)
+    Satisfies,
     /// `?` (question mark, used in optional parameters and ternary operator)
     Question,
 

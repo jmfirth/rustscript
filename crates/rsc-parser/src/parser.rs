@@ -289,6 +289,9 @@ impl<'src> Parser<'src> {
             TokenKind::Tilde => "`~`",
             TokenKind::As => "`as`",
             TokenKind::TypeOf => "`typeof`",
+            TokenKind::Abstract => "`abstract`",
+            TokenKind::Override => "`override`",
+            TokenKind::Satisfies => "`satisfies`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -316,7 +319,8 @@ impl<'src> Parser<'src> {
                 | TokenKind::Try
                 | TokenKind::Throw
                 | TokenKind::Interface
-                | TokenKind::Class => return,
+                | TokenKind::Class
+                | TokenKind::Abstract => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -402,7 +406,7 @@ impl<'src> Parser<'src> {
                     span,
                 }
             }),
-            TokenKind::Class => self.parse_class_def().map(|cls| {
+            TokenKind::Class => self.parse_class_def(false).map(|cls| {
                 let span = cls.span;
                 Item {
                     kind: ItemKind::Class(cls),
@@ -410,6 +414,35 @@ impl<'src> Parser<'src> {
                     span,
                 }
             }),
+            TokenKind::Abstract => {
+                if self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| t.kind == TokenKind::Class)
+                {
+                    self.advance(); // consume `abstract`
+                    self.parse_class_def(true).map(|cls| {
+                        let span = cls.span;
+                        Item {
+                            kind: ItemKind::Class(cls),
+                            exported: false,
+                            span,
+                        }
+                    })
+                } else {
+                    let current = self.current_token().clone();
+                    self.diagnostics.push(
+                        Diagnostic::error("expected `class` after `abstract`").with_label(
+                            current.span,
+                            self.file_id,
+                            "expected `class`",
+                        ),
+                    );
+                    self.advance();
+                    self.synchronize();
+                    None
+                }
+            }
             TokenKind::Import => self.parse_import_decl(),
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
@@ -445,6 +478,9 @@ impl<'src> Parser<'src> {
         let import_token = self.advance(); // consume `import`
         let start = import_token.span;
 
+        // Check for `import type { ... }` — type-only imports
+        let is_type_only = self.eat(&TokenKind::Type);
+
         self.expect(&TokenKind::LBrace)?;
         let names = self.parse_import_name_list();
         self.expect(&TokenKind::RBrace)?;
@@ -463,6 +499,7 @@ impl<'src> Parser<'src> {
             kind: ItemKind::Import(ImportDecl {
                 names,
                 source,
+                is_type_only,
                 span,
             }),
             exported: false,
@@ -476,7 +513,10 @@ impl<'src> Parser<'src> {
     /// - `export function ...` — exported function
     /// - `export type ...` — exported type/enum
     /// - `export interface ...` — exported interface
+    /// - `export abstract class ...` — exported abstract class
     /// - `export { Name } from "path"` — re-export
+    #[allow(clippy::too_many_lines)]
+    // Export parsing must disambiguate many syntactic forms; splitting would fragment the grammar
     fn parse_export_decl(&mut self) -> Option<Item> {
         let export_token = self.advance(); // consume `export`
         let start = export_token.span;
@@ -519,13 +559,40 @@ impl<'src> Parser<'src> {
                 Some(item)
             }
             TokenKind::Class => {
-                let cls = self.parse_class_def()?;
+                let cls = self.parse_class_def(false)?;
                 let span = start.merge(cls.span);
                 Some(Item {
                     kind: ItemKind::Class(cls),
                     exported: true,
                     span,
                 })
+            }
+            TokenKind::Abstract => {
+                if self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| t.kind == TokenKind::Class)
+                {
+                    self.advance(); // consume `abstract`
+                    let cls = self.parse_class_def(true)?;
+                    let span = start.merge(cls.span);
+                    Some(Item {
+                        kind: ItemKind::Class(cls),
+                        exported: true,
+                        span,
+                    })
+                } else {
+                    let current = self.current_token().clone();
+                    self.diagnostics.push(
+                        Diagnostic::error("expected `class` after `abstract`").with_label(
+                            current.span,
+                            self.file_id,
+                            "expected `class`",
+                        ),
+                    );
+                    self.synchronize();
+                    None
+                }
             }
             TokenKind::Interface => {
                 let iface = self.parse_interface_def()?;
@@ -572,7 +639,7 @@ impl<'src> Parser<'src> {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
                     Diagnostic::error(format!(
-                        "expected `function`, `type`, `interface`, `class`, or `{{` after `export`, found {}",
+                        "expected `function`, `type`, `interface`, `class`, `abstract`, or `{{` after `export`, found {}",
                         Self::describe_kind(&current.kind)
                     ))
                     .with_label(current.span, self.file_id, "unexpected token"),
@@ -1063,7 +1130,7 @@ impl<'src> Parser<'src> {
     // ---------------------------------------------------------------
 
     /// Parse a class definition: `class Name [<T>] [implements I1, I2] { members }`.
-    fn parse_class_def(&mut self) -> Option<ClassDef> {
+    fn parse_class_def(&mut self, is_abstract: bool) -> Option<ClassDef> {
         let doc_comment = self.take_pending_doc();
         let class_token = self.advance(); // consume `class`
         let start = class_token.span;
@@ -1073,6 +1140,14 @@ impl<'src> Parser<'src> {
         // Optional generic type parameters
         let type_params = if self.check(&TokenKind::Lt) {
             Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
+        // Optional extends clause (single inheritance)
+        let extends = if self.check(&TokenKind::Extends) {
+            self.advance(); // consume `extends`
+            Some(self.parse_ident()?)
         } else {
             None
         };
@@ -1117,8 +1192,10 @@ impl<'src> Parser<'src> {
         let span = start.merge(close.span);
 
         Some(ClassDef {
+            is_abstract,
             name,
             type_params,
+            extends,
             implements,
             members,
             doc_comment,
@@ -1220,6 +1297,12 @@ impl<'src> Parser<'src> {
             }
         }
 
+        // Check for `abstract` modifier
+        let is_abstract = self.eat(&TokenKind::Abstract);
+
+        // Check for `override` modifier
+        let is_override = self.eat(&TokenKind::Override);
+
         // Check for `static` modifier (contextual keyword)
         let is_static = self.eat_contextual_keyword("static");
 
@@ -1229,7 +1312,20 @@ impl<'src> Parser<'src> {
         // Check for optional `async` modifier before the method name
         let is_async = !readonly && self.eat(&TokenKind::Async);
 
+        // Check for hash-private field: `#field: Type;`
+        let is_hash_private = matches!(self.peek(), TokenKind::Ident(n) if n.starts_with('#'));
+
         let name = self.parse_ident()?;
+
+        // Strip `#` prefix from field name in the AST (privacy is tracked via is_hash_private)
+        let field_name = if is_hash_private {
+            Ident {
+                name: name.name.trim_start_matches('#').to_owned(),
+                span: name.span,
+            }
+        } else {
+            name.clone()
+        };
 
         // Field: `name: Type [= expr];` (only if not async — async fields don't exist)
         if !is_async && self.check(&TokenKind::Colon) {
@@ -1247,17 +1343,19 @@ impl<'src> Parser<'src> {
             let span = member_start.merge(self.previous_span());
             return Some(ClassMember::Field(ClassField {
                 visibility,
-                name,
+                name: field_name,
                 type_ann,
                 initializer,
                 readonly,
                 is_static,
+                is_hash_private,
                 doc_comment,
                 span,
             }));
         }
 
-        // Method: `[static] [async] name<T>(params): ReturnType { body }`
+        // Method: `[abstract] [override] [static] [async] name<T>(params): ReturnType { body }`
+        // or abstract method: `abstract name(params): ReturnType;` (no body)
         let type_params = if self.check(&TokenKind::Lt) {
             Some(self.parse_type_params()?)
         } else {
@@ -1270,12 +1368,40 @@ impl<'src> Parser<'src> {
 
         let return_type = self.parse_return_type_annotation();
 
+        // Abstract methods have no body — terminated with `;`
+        if is_abstract {
+            // Optional semicolon for abstract methods
+            if self.check(&TokenKind::Semicolon) {
+                self.advance();
+            }
+            let span = member_start.merge(self.previous_span());
+            return Some(ClassMember::Method(ClassMethod {
+                is_async,
+                is_static,
+                is_abstract: true,
+                is_override,
+                visibility,
+                name,
+                type_params,
+                params,
+                return_type,
+                body: Block {
+                    stmts: Vec::new(),
+                    span,
+                },
+                doc_comment,
+                span,
+            }));
+        }
+
         let body = self.parse_block()?;
         let span = member_start.merge(body.span);
 
         Some(ClassMember::Method(ClassMethod {
             is_async,
             is_static,
+            is_abstract: false,
+            is_override,
             visibility,
             name,
             type_params,
@@ -3006,6 +3132,14 @@ impl<'src> Parser<'src> {
                 let span = expr.span.merge(ty.span);
                 expr = Expr {
                     kind: ExprKind::Cast(Box::new(expr), ty),
+                    span,
+                };
+            } else if self.check(&TokenKind::Satisfies) {
+                self.advance(); // consume `satisfies`
+                let ty = self.parse_type_annotation()?;
+                let span = expr.span.merge(ty.span);
+                expr = Expr {
+                    kind: ExprKind::Satisfies(Box::new(expr), ty),
                     span,
                 };
             } else if self.check(&TokenKind::Bang) {
@@ -8098,6 +8232,152 @@ class Foo {
                 assert_eq!(for_of.variable.name, "item");
             }
             other => panic!("expected For statement, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 067: Minor Syntax Completions — parser tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parser_import_type_sets_is_type_only() {
+        let source = "import type { User } from \"./models\";";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "no diagnostics expected: {diagnostics:?}"
+        );
+        if let ItemKind::Import(import) = &module.items[0].kind {
+            assert!(import.is_type_only, "is_type_only should be true");
+            assert_eq!(import.names[0].name, "User");
+        } else {
+            panic!("Expected import");
+        }
+    }
+
+    #[test]
+    fn test_parser_regular_import_not_type_only() {
+        let source = "import { Post } from \"./models\";";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty());
+        if let ItemKind::Import(import) = &module.items[0].kind {
+            assert!(
+                !import.is_type_only,
+                "is_type_only should be false for regular import"
+            );
+        } else {
+            panic!("Expected import");
+        }
+    }
+
+    #[test]
+    fn test_parser_abstract_class() {
+        let source = "\
+abstract class Shape {
+  abstract area(): f64;
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            assert!(cls.is_abstract, "class should be abstract");
+            assert_eq!(cls.name.name, "Shape");
+            assert_eq!(cls.members.len(), 1);
+            if let ClassMember::Method(m) = &cls.members[0] {
+                assert!(m.is_abstract, "method should be abstract");
+                assert_eq!(m.name.name, "area");
+            } else {
+                panic!("Expected method member");
+            }
+        } else {
+            panic!("Expected class");
+        }
+    }
+
+    #[test]
+    fn test_parser_class_extends() {
+        let source = "\
+class Circle extends Shape {
+  radius: f64;
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            assert_eq!(
+                cls.extends.as_ref().map(|e| &e.name),
+                Some(&"Shape".to_owned())
+            );
+        } else {
+            panic!("Expected class");
+        }
+    }
+
+    #[test]
+    fn test_parser_override_method() {
+        let source = "\
+class Impl {
+  override greet(): string {
+    return \"hello\";
+  }
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            if let ClassMember::Method(m) = &cls.members[0] {
+                assert!(m.is_override, "method should be marked override");
+            } else {
+                panic!("Expected method");
+            }
+        } else {
+            panic!("Expected class");
+        }
+    }
+
+    #[test]
+    fn test_parser_hash_private_field() {
+        let source = "\
+class User {
+  #password: string;
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            if let ClassMember::Field(f) = &cls.members[0] {
+                assert!(f.is_hash_private, "field should be hash-private");
+                assert_eq!(
+                    f.name.name, "password",
+                    "# should be stripped from field name"
+                );
+            } else {
+                panic!("Expected field");
+            }
+        } else {
+            panic!("Expected class");
+        }
+    }
+
+    #[test]
+    fn test_parser_satisfies_expression() {
+        let source = "\
+function main() {
+  const x: i64 = 42 satisfies i64;
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+    }
+
+    #[test]
+    fn test_parser_export_abstract_class() {
+        let source = "\
+export abstract class Shape {
+  abstract area(): f64;
+}";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "no diagnostics: {diagnostics:?}");
+        assert!(module.items[0].exported, "should be exported");
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            assert!(cls.is_abstract);
+        } else {
+            panic!("Expected class");
         }
     }
 }
