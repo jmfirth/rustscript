@@ -724,6 +724,26 @@ impl Printer {
                 self.print_expr(inner);
                 self.write(")");
             }
+            ExprKind::Ternary(cond, then_expr, else_expr) => {
+                self.print_expr(cond);
+                self.write(" ? ");
+                self.print_expr(then_expr);
+                self.write(" : ");
+                self.print_expr(else_expr);
+            }
+            ExprKind::NonNullAssert(inner) => {
+                self.print_expr(inner);
+                self.write("!");
+            }
+            ExprKind::Cast(inner, ty) => {
+                self.print_expr(inner);
+                self.write(" as ");
+                self.print_type_annotation(ty);
+            }
+            ExprKind::TypeOf(inner) => {
+                self.write("typeof ");
+                self.print_expr(inner);
+            }
         }
     }
 
@@ -741,6 +761,7 @@ impl Printer {
         match u.op {
             UnaryOp::Neg => self.write("-"),
             UnaryOp::Not => self.write("!"),
+            UnaryOp::BitNot => self.write("~"),
         }
         self.print_expr(&u.operand);
     }

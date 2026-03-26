@@ -547,9 +547,38 @@ impl UseMap {
             }
             ast::ExprKind::Throw(inner)
             | ast::ExprKind::Await(inner)
-            | ast::ExprKind::Shared(inner) => {
+            | ast::ExprKind::Shared(inner)
+            | ast::ExprKind::NonNullAssert(inner)
+            | ast::ExprKind::TypeOf(inner)
+            | ast::ExprKind::Cast(inner, _) => {
                 Self::collect_expr_uses(
                     inner,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+            }
+            ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
+                Self::collect_expr_uses(
+                    cond,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    then_expr,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    else_expr,
                     stmt_index,
                     false,
                     is_ref_call,
@@ -1145,8 +1174,16 @@ fn collect_param_usage_expr(
         ast::ExprKind::Paren(inner)
         | ast::ExprKind::Throw(inner)
         | ast::ExprKind::Await(inner)
-        | ast::ExprKind::Shared(inner) => {
+        | ast::ExprKind::Shared(inner)
+        | ast::ExprKind::NonNullAssert(inner)
+        | ast::ExprKind::TypeOf(inner)
+        | ast::ExprKind::Cast(inner, _) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
+        }
+        ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
+            collect_param_usage_expr(cond, param_set, is_ref_call, result);
+            collect_param_usage_expr(then_expr, param_set, is_ref_call, result);
+            collect_param_usage_expr(else_expr, param_set, is_ref_call, result);
         }
         ast::ExprKind::IntLit(_)
         | ast::ExprKind::FloatLit(_)
@@ -1256,8 +1293,16 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         }
         ast::ExprKind::Throw(inner)
         | ast::ExprKind::Await(inner)
-        | ast::ExprKind::Shared(inner) => {
+        | ast::ExprKind::Shared(inner)
+        | ast::ExprKind::NonNullAssert(inner)
+        | ast::ExprKind::TypeOf(inner)
+        | ast::ExprKind::Cast(inner, _) => {
             collect_idents_in_expr(inner, names);
+        }
+        ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
+            collect_idents_in_expr(cond, names);
+            collect_idents_in_expr(then_expr, names);
+            collect_idents_in_expr(else_expr, names);
         }
         ast::ExprKind::Closure(_)
         | ast::ExprKind::IntLit(_)

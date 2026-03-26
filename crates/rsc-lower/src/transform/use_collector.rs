@@ -506,6 +506,15 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             }
         }
+        RustExprKind::IfExpr {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            scan_expr_for_collections(condition, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(then_expr, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(else_expr, needs_hashmap, needs_hashset);
+        }
         RustExprKind::IteratorChain {
             source,
             ops,

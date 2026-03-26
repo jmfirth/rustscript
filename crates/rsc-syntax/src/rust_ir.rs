@@ -939,6 +939,16 @@ pub enum RustExprKind {
     /// A type cast: `expr as Type`.
     /// Produced by lowering `.length` to `.len() as i64`.
     Cast(Box<RustExpr>, RustType),
+    /// An if expression: `if condition { then_expr } else { else_expr }`.
+    /// Produced by lowering the ternary operator `condition ? then_expr : else_expr`.
+    IfExpr {
+        /// The condition expression.
+        condition: Box<RustExpr>,
+        /// The then-branch expression.
+        then_expr: Box<RustExpr>,
+        /// The else-branch expression.
+        else_expr: Box<RustExpr>,
+    },
     /// An iterator chain: `source.iter().ops...terminal`.
     ///
     /// Produced by lowering TypeScript-style array method chains
@@ -1081,6 +1091,16 @@ pub enum RustBinaryOp {
     And,
     /// Logical OR (`||`).
     Or,
+    /// Bitwise AND (`&`).
+    BitAnd,
+    /// Bitwise OR (`|`).
+    BitOr,
+    /// Bitwise XOR (`^`).
+    BitXor,
+    /// Left shift (`<<`).
+    Shl,
+    /// Right shift (`>>`).
+    Shr,
 }
 
 impl std::fmt::Display for RustBinaryOp {
@@ -1099,6 +1119,11 @@ impl std::fmt::Display for RustBinaryOp {
             Self::Ge => ">=",
             Self::And => "&&",
             Self::Or => "||",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         };
         f.write_str(s)
     }
@@ -1111,13 +1136,15 @@ pub enum RustUnaryOp {
     Neg,
     /// Logical NOT (`!`).
     Not,
+    /// Bitwise NOT (`!` in Rust — same symbol, but on integer types).
+    BitNot,
 }
 
 impl std::fmt::Display for RustUnaryOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Neg => "-",
-            Self::Not => "!",
+            Self::Not | Self::BitNot => "!",
         };
         f.write_str(s)
     }

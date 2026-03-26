@@ -711,6 +711,8 @@ impl<'a> Lexer<'a> {
             "async" => TokenKind::Async,
             "await" => TokenKind::Await,
             "rust" => TokenKind::Rust,
+            "as" => TokenKind::As,
+            "typeof" => TokenKind::TypeOf,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -759,6 +761,7 @@ impl<'a> Lexer<'a> {
             (b'>', b'=') => TokenKind::GtEq,
             (b'&', b'&') => TokenKind::AmpAmp,
             (b'|', b'|') => TokenKind::PipePipe,
+            (b'*', b'*') => TokenKind::StarStar,
             (b'+', b'=') => TokenKind::PlusEq,
             (b'-', b'=') => TokenKind::MinusEq,
             (b'*', b'=') => TokenKind::StarEq,
@@ -802,6 +805,9 @@ impl<'a> Lexer<'a> {
             b'[' => Some(TokenKind::LBracket),
             b']' => Some(TokenKind::RBracket),
             b'&' => Some(TokenKind::Ampersand),
+            b'^' => Some(TokenKind::Caret),
+            b'~' => Some(TokenKind::Tilde),
+            b'?' => Some(TokenKind::Question),
             _ => None,
         }
     }
@@ -1410,5 +1416,70 @@ mod tests {
         let tokens = tokenize("await fetchData()");
         assert_eq!(tokens[0].kind, TokenKind::Await);
         assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "fetchData"));
+    }
+
+    // 51. `**` (exponentiation) produces StarStar token
+    #[test]
+    fn test_lexer_star_star_exponentiation() {
+        let tokens = tokenize("2 ** 3");
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(2));
+        assert_eq!(tokens[1].kind, TokenKind::StarStar);
+        assert_eq!(tokens[2].kind, TokenKind::IntLit(3));
+    }
+
+    // 52. `^` (bitwise XOR) produces Caret token
+    #[test]
+    fn test_lexer_caret_bitwise_xor() {
+        let tokens = tokenize("a ^ b");
+        assert_eq!(tokens[1].kind, TokenKind::Caret);
+    }
+
+    // 53. `~` (bitwise NOT) produces Tilde token
+    #[test]
+    fn test_lexer_tilde_bitwise_not() {
+        let tokens = tokenize("~x");
+        assert_eq!(tokens[0].kind, TokenKind::Tilde);
+    }
+
+    // 54. `as` is tokenized as a keyword
+    #[test]
+    fn test_lexer_as_keyword() {
+        let tokens = tokenize("x as f64");
+        assert!(matches!(tokens[0].kind, TokenKind::Ident(ref s) if s == "x"));
+        assert_eq!(tokens[1].kind, TokenKind::As);
+        assert!(matches!(tokens[2].kind, TokenKind::Ident(ref s) if s == "f64"));
+    }
+
+    // 55. `typeof` is tokenized as a keyword
+    #[test]
+    fn test_lexer_typeof_keyword() {
+        let tokens = tokenize("typeof x");
+        assert_eq!(tokens[0].kind, TokenKind::TypeOf);
+        assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "x"));
+    }
+
+    // 56. `?` (question mark) produces Question token
+    #[test]
+    fn test_lexer_question_mark() {
+        let tokens = tokenize("a ? b : c");
+        assert!(matches!(tokens[0].kind, TokenKind::Ident(_)));
+        assert_eq!(tokens[1].kind, TokenKind::Question);
+        assert!(matches!(tokens[2].kind, TokenKind::Ident(_)));
+        assert_eq!(tokens[3].kind, TokenKind::Colon);
+        assert!(matches!(tokens[4].kind, TokenKind::Ident(_)));
+    }
+
+    // 57. `?.` still lexes as QuestionDot, not Question + Dot
+    #[test]
+    fn test_lexer_question_dot_not_split() {
+        let tokens = tokenize("a?.b");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
+    }
+
+    // 58. `??` still lexes as QuestionQuestion, not two Questions
+    #[test]
+    fn test_lexer_question_question_not_split() {
+        let tokens = tokenize("a ?? b");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionQuestion);
     }
 }

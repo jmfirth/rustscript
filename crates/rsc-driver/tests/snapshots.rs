@@ -2806,3 +2806,258 @@ function main(): void {
         result_without.rust_source,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 054: Operators and Expressions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_ternary_emits_if_else_expr() {
+    let source = "\
+function main() {
+  const x: i64 = 5;
+  const result: i64 = x > 3 ? 1 : 0;
+  console.log(result);
+}";
+
+    let expected = "\
+fn main() {
+    let x: i64 = 5;
+    let result: i64 = if x > 3 { 1 } else { 0 };
+    println!(\"{}\", result);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("ternary_if_else", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_exponentiation_integer_emits_pow() {
+    let source = "\
+function main() {
+  const base: i64 = 2;
+  const result: i64 = base ** 10;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".pow(10 as u32)"),
+        "expected .pow(b as u32), got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_exponentiation_float_emits_powf() {
+    let source = "\
+function main() {
+  const result: f64 = 2.0 ** 0.5;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".powf(0.5)"),
+        "expected .powf(b), got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_triple_equals_emits_double_equals() {
+    let source = "\
+function main() {
+  const a: i64 = 1;
+  const b: i64 = 1;
+  const eq: bool = a === b;
+  const neq: bool = a !== b;
+  console.log(eq);
+  console.log(neq);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("a == b"),
+        "=== should emit ==, got: {actual}"
+    );
+    assert!(
+        actual.contains("a != b"),
+        "!== should emit !=, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_non_null_assert_emits_unwrap() {
+    let source = "\
+function main() {
+  const x: i64 | null = 42;
+  const y: i64 = x!;
+  console.log(y);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".unwrap()"),
+        "x! should emit .unwrap(), got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_as_cast_emits_rust_cast() {
+    let source = "\
+function main() {
+  const x: i64 = 42;
+  const y: f64 = x as f64;
+  console.log(y);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x as f64"),
+        "as cast should emit 'as f64', got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_typeof_number_emits_string_literal() {
+    let source = "\
+function main() {
+  const t: string = typeof 42;
+  console.log(t);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("\"number\""),
+        "typeof 42 should emit \"number\", got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_typeof_string_emits_string_literal() {
+    let source = "\
+function main() {
+  const t: string = typeof \"hello\";
+  console.log(t);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("\"string\""),
+        "typeof \"hello\" should emit \"string\", got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_typeof_boolean_emits_string_literal() {
+    let source = "\
+function main() {
+  const t: string = typeof true;
+  console.log(t);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("\"boolean\""),
+        "typeof true should emit \"boolean\", got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_bitwise_and_emits_ampersand() {
+    let source = "\
+function main() {
+  const x: i64 = 255;
+  const y: i64 = 15;
+  const result: i64 = x & y;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x & y"),
+        "bitwise AND should emit &, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_bitwise_or_emits_pipe() {
+    let source = "\
+function main() {
+  const x: i64 = 240;
+  const y: i64 = 15;
+  const result: i64 = x | y;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x | y"),
+        "bitwise OR should emit |, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_bitwise_xor_emits_caret() {
+    let source = "\
+function main() {
+  const x: i64 = 255;
+  const y: i64 = 15;
+  const result: i64 = x ^ y;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x ^ y"),
+        "bitwise XOR should emit ^, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_bitwise_not_emits_exclamation() {
+    let source = "\
+function main() {
+  const x: i64 = 255;
+  const result: i64 = ~x;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("!x"),
+        "bitwise NOT (~) should emit ! in Rust, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_left_shift_emits_shl() {
+    let source = "\
+function main() {
+  const x: i64 = 1;
+  const result: i64 = x << 4;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x << 4"),
+        "left shift should emit <<, got: {actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_right_shift_emits_shr() {
+    let source = "\
+function main() {
+  const x: i64 = 16;
+  const result: i64 = x >> 2;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x >> 2"),
+        "right shift should emit >>, got: {actual}"
+    );
+}

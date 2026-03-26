@@ -795,6 +795,13 @@ fn lower_binary_op(op: ast::BinaryOp) -> RustBinaryOp {
         ast::BinaryOp::Ge => RustBinaryOp::Ge,
         ast::BinaryOp::And => RustBinaryOp::And,
         ast::BinaryOp::Or => RustBinaryOp::Or,
+        ast::BinaryOp::BitAnd => RustBinaryOp::BitAnd,
+        ast::BinaryOp::BitOr => RustBinaryOp::BitOr,
+        ast::BinaryOp::BitXor => RustBinaryOp::BitXor,
+        ast::BinaryOp::Shl => RustBinaryOp::Shl,
+        ast::BinaryOp::Shr => RustBinaryOp::Shr,
+        // Pow is handled specially in expr_lower, not via this mapping.
+        ast::BinaryOp::Pow => unreachable!("Pow is handled specially in expr_lower"),
     }
 }
 
@@ -803,6 +810,7 @@ fn lower_unary_op(op: ast::UnaryOp) -> RustUnaryOp {
     match op {
         ast::UnaryOp::Neg => RustUnaryOp::Neg,
         ast::UnaryOp::Not => RustUnaryOp::Not,
+        ast::UnaryOp::BitNot => RustUnaryOp::BitNot,
     }
 }
 
