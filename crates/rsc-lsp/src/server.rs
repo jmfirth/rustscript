@@ -1009,7 +1009,11 @@ fn find_hover_in_expr(
         }
         ExprKind::ArrayLit(elems) => {
             for elem in elems {
-                if let Some(info) = find_hover_in_expr(elem, pos, cache) {
+                let inner = match elem {
+                    rsc_syntax::ast::ArrayElement::Expr(e)
+                    | rsc_syntax::ast::ArrayElement::Spread(e) => e,
+                };
+                if let Some(info) = find_hover_in_expr(inner, pos, cache) {
                     return Some(info);
                 }
             }

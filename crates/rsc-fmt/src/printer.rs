@@ -5,15 +5,15 @@
 //! indentation level and line position to produce clean output.
 
 use rsc_syntax::ast::{
-    ArrayDestructureStmt, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef, ClassGetter,
-    ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, DestructureStmt,
-    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
-    FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef,
-    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation,
-    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt,
-    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
-    VarDecl, Visibility, WhileStmt,
+    ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef,
+    ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
+    DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr,
+    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexExpr,
+    InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module,
+    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
+    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
+    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
+    UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -905,6 +905,13 @@ impl Printer {
             self.write(" ");
         }
         self.write("{ ");
+        if let Some(spread) = &s.spread {
+            self.write("...");
+            self.print_expr(spread);
+            if !s.fields.is_empty() {
+                self.write(", ");
+            }
+        }
         for (i, field) in s.fields.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
@@ -945,13 +952,19 @@ impl Printer {
     }
 
     /// Print an array literal.
-    fn print_array_lit(&mut self, items: &[Expr]) {
+    fn print_array_lit(&mut self, items: &[ArrayElement]) {
         self.write("[");
         for (i, item) in items.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
             }
-            self.print_expr(item);
+            match item {
+                ArrayElement::Expr(expr) => self.print_expr(expr),
+                ArrayElement::Spread(expr) => {
+                    self.write("...");
+                    self.print_expr(expr);
+                }
+            }
         }
         self.write("]");
     }

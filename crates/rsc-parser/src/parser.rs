@@ -7,16 +7,16 @@
 #[allow(clippy::wildcard_imports)]
 // Class completeness requires many AST types for the new member kinds
 use rsc_syntax::ast::{
-    ArrayDestructureStmt, AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr,
-    ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember, ClassMethod, ClassSetter,
-    ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, DestructureStmt, ElseClause, EnumDef,
-    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl,
-    ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef,
-    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
-    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt,
+    ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt,
+    CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember, ClassMethod,
+    ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, DestructureStmt,
+    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
+    FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InlineRustBlock,
+    InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
+    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
+    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -2992,10 +2992,16 @@ impl<'src> Parser<'src> {
         let after_brace = self.tokens.get(self.pos + 1).map(|t| &t.kind);
         let after_ident = self.tokens.get(self.pos + 2).map(|t| &t.kind);
 
-        matches!(
+        // `{ ident: expr, ... }` — standard struct literal
+        if matches!(
             (after_brace, after_ident),
             (Some(TokenKind::Ident(_)), Some(TokenKind::Colon))
-        )
+        ) {
+            return true;
+        }
+
+        // `{ ...expr }` — object spread literal
+        matches!(after_brace, Some(TokenKind::DotDotDot))
     }
 
     /// Parse a struct literal: `{ name: expr, ... }`.
@@ -3006,34 +3012,76 @@ impl<'src> Parser<'src> {
         let open = self.advance(); // consume `{`
         let start = type_name.as_ref().map_or(open.span, |n| n.span);
 
+        let mut spread = None;
         let mut fields = Vec::new();
 
         if !self.check(&TokenKind::RBrace) && !self.at_end() {
-            loop {
-                let field_start = self.current_token().span;
-                let Some(name) = self.parse_ident() else {
-                    break;
-                };
-                if self.expect(&TokenKind::Colon).is_none() {
-                    break;
-                }
-                let Some(value) = self.parse_expr() else {
-                    break;
-                };
-                let field_span = field_start.merge(value.span);
-                fields.push(FieldInit {
-                    name,
-                    value,
-                    span: field_span,
-                });
+            // Check for spread base: `{ ...expr, field: value }`
+            if self.check(&TokenKind::DotDotDot) {
+                self.advance(); // consume `...`
+                let spread_expr = self.parse_expr()?;
+                spread = Some(Box::new(spread_expr));
 
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
+                // Optionally consume comma and continue to field overrides
+                if self.eat(&TokenKind::Comma) && self.check(&TokenKind::RBrace) {
+                    // Trailing comma after spread with no fields — fall through
+                } else if spread.is_some() && !self.check(&TokenKind::RBrace) {
+                    // Parse field overrides after spread
+                    loop {
+                        let field_start = self.current_token().span;
+                        let Some(name) = self.parse_ident() else {
+                            break;
+                        };
+                        if self.expect(&TokenKind::Colon).is_none() {
+                            break;
+                        }
+                        let Some(value) = self.parse_expr() else {
+                            break;
+                        };
+                        let field_span = field_start.merge(value.span);
+                        fields.push(FieldInit {
+                            name,
+                            value,
+                            span: field_span,
+                        });
 
-                // Allow trailing comma
-                if self.check(&TokenKind::RBrace) {
-                    break;
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+
+                        if self.check(&TokenKind::RBrace) {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // No spread — parse fields as normal
+                loop {
+                    let field_start = self.current_token().span;
+                    let Some(name) = self.parse_ident() else {
+                        break;
+                    };
+                    if self.expect(&TokenKind::Colon).is_none() {
+                        break;
+                    }
+                    let Some(value) = self.parse_expr() else {
+                        break;
+                    };
+                    let field_span = field_start.merge(value.span);
+                    fields.push(FieldInit {
+                        name,
+                        value,
+                        span: field_span,
+                    });
+
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+
+                    // Allow trailing comma
+                    if self.check(&TokenKind::RBrace) {
+                        break;
+                    }
                 }
             }
         }
@@ -3042,7 +3090,11 @@ impl<'src> Parser<'src> {
         let span = start.merge(close.span);
 
         Some(Expr {
-            kind: ExprKind::StructLit(StructLitExpr { type_name, fields }),
+            kind: ExprKind::StructLit(StructLitExpr {
+                type_name,
+                spread,
+                fields,
+            }),
             span,
         })
     }
@@ -3465,8 +3517,20 @@ impl<'src> Parser<'src> {
 
         if !self.check(&TokenKind::RBracket) && !self.at_end() {
             loop {
-                let elem = self.parse_expr()?;
-                elements.push(elem);
+                // Check for spread element: `...expr`
+                if self.check(&TokenKind::DotDotDot) {
+                    let spread_start = self.current_token().span;
+                    self.advance(); // consume `...`
+                    let inner = self.parse_expr()?;
+                    let span = spread_start.merge(inner.span);
+                    elements.push(ArrayElement::Spread(Expr {
+                        kind: inner.kind,
+                        span,
+                    }));
+                } else {
+                    let elem = self.parse_expr()?;
+                    elements.push(ArrayElement::Expr(elem));
+                }
 
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -5083,9 +5147,27 @@ function test(dir: Direction): Direction {
         match &decl.init.kind {
             ExprKind::ArrayLit(elements) => {
                 assert_eq!(elements.len(), 3);
-                assert!(matches!(elements[0].kind, ExprKind::IntLit(1)));
-                assert!(matches!(elements[1].kind, ExprKind::IntLit(2)));
-                assert!(matches!(elements[2].kind, ExprKind::IntLit(3)));
+                assert!(matches!(
+                    elements[0],
+                    ArrayElement::Expr(Expr {
+                        kind: ExprKind::IntLit(1),
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    elements[1],
+                    ArrayElement::Expr(Expr {
+                        kind: ExprKind::IntLit(2),
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    elements[2],
+                    ArrayElement::Expr(Expr {
+                        kind: ExprKind::IntLit(3),
+                        ..
+                    })
+                ));
             }
             _ => panic!("expected ArrayLit, got {:?}", decl.init.kind),
         }
@@ -7192,5 +7274,126 @@ function main(): void {
         assert_eq!(methods, 2, "2 methods (create, increment)");
         assert_eq!(getters, 1, "1 getter");
         assert_eq!(setters, 1, "1 setter");
+    }
+
+    // ---------------------------------------------------------------
+    // Task 056: Spread operator in arrays and objects
+    // ---------------------------------------------------------------
+
+    // T056-P1: Single spread in array literal
+    #[test]
+    fn test_parser_array_spread_single() {
+        let source = "function main() { const x = [...arr]; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::ArrayLit(elements) = &decl.init.kind {
+            assert_eq!(elements.len(), 1);
+            assert!(
+                matches!(&elements[0], ArrayElement::Spread(_)),
+                "expected Spread element"
+            );
+        } else {
+            panic!("expected ArrayLit");
+        }
+    }
+
+    // T056-P2: Spread then elements
+    #[test]
+    fn test_parser_array_spread_then_elements() {
+        let source = "function main() { const x = [...arr, 1, 2]; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::ArrayLit(elements) = &decl.init.kind {
+            assert_eq!(elements.len(), 3);
+            assert!(matches!(&elements[0], ArrayElement::Spread(_)));
+            assert!(matches!(&elements[1], ArrayElement::Expr(_)));
+            assert!(matches!(&elements[2], ArrayElement::Expr(_)));
+        } else {
+            panic!("expected ArrayLit");
+        }
+    }
+
+    // T056-P3: Elements then spread
+    #[test]
+    fn test_parser_array_elements_then_spread() {
+        let source = "function main() { const x = [1, 2, ...arr]; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::ArrayLit(elements) = &decl.init.kind {
+            assert_eq!(elements.len(), 3);
+            assert!(matches!(&elements[0], ArrayElement::Expr(_)));
+            assert!(matches!(&elements[1], ArrayElement::Expr(_)));
+            assert!(matches!(&elements[2], ArrayElement::Spread(_)));
+        } else {
+            panic!("expected ArrayLit");
+        }
+    }
+
+    // T056-P4: Multiple spreads
+    #[test]
+    fn test_parser_array_multiple_spreads() {
+        let source = "function main() { const x = [...a, ...b]; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::ArrayLit(elements) = &decl.init.kind {
+            assert_eq!(elements.len(), 2);
+            assert!(matches!(&elements[0], ArrayElement::Spread(_)));
+            assert!(matches!(&elements[1], ArrayElement::Spread(_)));
+        } else {
+            panic!("expected ArrayLit");
+        }
+    }
+
+    // T056-P5: Object spread with field overrides
+    #[test]
+    fn test_parser_struct_spread_with_fields() {
+        let source = "function main() { const x: User = { ...obj, name: \"Bob\" }; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::StructLit(slit) = &decl.init.kind {
+            assert!(slit.spread.is_some(), "expected spread base");
+            assert_eq!(slit.fields.len(), 1);
+            assert_eq!(slit.fields[0].name.name, "name");
+        } else {
+            panic!("expected StructLit, got {:?}", decl.init.kind);
+        }
+    }
+
+    // T056-P6: Pure object copy
+    #[test]
+    fn test_parser_struct_spread_pure_copy() {
+        let source = "function main() { const x: User = { ...obj }; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        if let ExprKind::StructLit(slit) = &decl.init.kind {
+            assert!(slit.spread.is_some(), "expected spread base");
+            assert!(slit.fields.is_empty(), "expected no field overrides");
+        } else {
+            panic!("expected StructLit, got {:?}", decl.init.kind);
+        }
     }
 }

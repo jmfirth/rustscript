@@ -2234,6 +2234,7 @@ mod tests {
             init: Expr {
                 kind: ExprKind::StructLit(ast::StructLitExpr {
                     type_name: None,
+                    spread: None,
                     fields: vec![
                         ast::FieldInit {
                             name: ident("x", 0, 1),
@@ -2811,9 +2812,9 @@ mod tests {
                 type_ann: None,
                 init: Expr {
                     kind: ExprKind::ArrayLit(vec![
-                        int_expr(1, 0, 1),
-                        int_expr(2, 3, 4),
-                        int_expr(3, 6, 7),
+                        ast::ArrayElement::Expr(int_expr(1, 0, 1)),
+                        ast::ArrayElement::Expr(int_expr(2, 3, 4)),
+                        ast::ArrayElement::Expr(int_expr(3, 6, 7)),
                     ]),
                     span: span(0, 8),
                 },

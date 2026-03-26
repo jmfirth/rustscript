@@ -8,7 +8,7 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustType,
+    ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustType, SpreadOp,
 };
 
 use crate::context::LoweringContext;
@@ -159,11 +159,7 @@ impl Transform {
                 self.lower_template_lit(tpl, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::ArrayLit(elements) => {
-                let lowered: Vec<RustExpr> = elements
-                    .iter()
-                    .map(|e| self.lower_expr(e, ctx, use_map, stmt_index))
-                    .collect();
-                RustExpr::new(RustExprKind::VecLit(lowered), expr.span)
+                self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::New(new_expr) => {
                 self.lower_new_expr(new_expr, expr.span, ctx, use_map, stmt_index)
@@ -253,7 +249,12 @@ impl Transform {
                 {
                     let lowered_elements: Vec<RustExpr> = elements
                         .iter()
-                        .map(|e| self.lower_expr(e, ctx, use_map, stmt_index))
+                        .filter_map(|e| match e {
+                            ast::ArrayElement::Expr(e) => {
+                                Some(self.lower_expr(e, ctx, use_map, stmt_index))
+                            }
+                            ast::ArrayElement::Spread(_) => None,
+                        })
                         .collect();
                     return RustExpr::new(RustExprKind::TokioJoin(lowered_elements), expr.span);
                 }
@@ -870,6 +871,9 @@ impl Transform {
     /// from the surrounding variable declaration context. The lowering pass
     /// stores the current expected type when processing `VarDecl` with a
     /// struct literal initializer.
+    ///
+    /// Handles spread syntax: `{ ...base, field: value }` lowers to Rust
+    /// struct update syntax `Type { field: value, ..base.clone() }`.
     fn lower_struct_lit(
         &self,
         slit: &ast::StructLitExpr,
@@ -888,7 +892,7 @@ impl Transform {
                 "_UnknownStruct".to_owned()
             });
 
-        let fields = slit
+        let fields: Vec<(String, RustExpr)> = slit
             .fields
             .iter()
             .map(|f| {
@@ -897,7 +901,103 @@ impl Transform {
             })
             .collect();
 
+        // Handle spread: `{ ...base, field: value }` → struct update syntax
+        if let Some(spread_expr) = &slit.spread {
+            // If there are no field overrides, it's a simple clone
+            if fields.is_empty() {
+                let base = self.lower_expr(spread_expr, ctx, use_map, stmt_index);
+                return RustExpr::new(RustExprKind::Clone(Box::new(base)), span);
+            }
+
+            let base = self.lower_expr(spread_expr, ctx, use_map, stmt_index);
+            return RustExpr::new(
+                RustExprKind::StructUpdate {
+                    type_name,
+                    fields,
+                    base: Box::new(RustExpr::new(
+                        RustExprKind::Clone(Box::new(base)),
+                        spread_expr.span,
+                    )),
+                },
+                span,
+            );
+        }
+
         RustExpr::new(RustExprKind::StructLit { type_name, fields }, span)
+    }
+
+    /// Lower an array literal expression.
+    ///
+    /// Without spread elements, lowers to `vec![a, b, c]`.
+    /// With spread elements, lowers to a `SpreadArray` IR node that emits
+    /// a block expression with extend/push operations.
+    fn lower_array_lit(
+        &self,
+        elements: &[ast::ArrayElement],
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let has_spread = elements
+            .iter()
+            .any(|e| matches!(e, ast::ArrayElement::Spread(_)));
+
+        if !has_spread {
+            // No spread — plain vec literal
+            let lowered: Vec<RustExpr> = elements
+                .iter()
+                .map(|e| match e {
+                    ast::ArrayElement::Expr(expr) => {
+                        self.lower_expr(expr, ctx, use_map, stmt_index)
+                    }
+                    ast::ArrayElement::Spread(_) => unreachable!(),
+                })
+                .collect();
+            return RustExpr::new(RustExprKind::VecLit(lowered), span);
+        }
+
+        // Simple copy case: `[...arr]` → `arr.clone()`
+        if elements.len() == 1
+            && let ast::ArrayElement::Spread(expr) = &elements[0]
+        {
+            let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+            return RustExpr::new(RustExprKind::Clone(Box::new(lowered)), span);
+        }
+
+        // Spread case: collect initial elements (before first spread)
+        // and then build push/extend operations.
+        let mut initial = Vec::new();
+        let mut ops = Vec::new();
+        let mut seen_spread = false;
+
+        for elem in elements {
+            match elem {
+                ast::ArrayElement::Expr(expr) => {
+                    let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                    if seen_spread {
+                        ops.push(SpreadOp::Push(lowered));
+                    } else {
+                        initial.push(lowered);
+                    }
+                }
+                ast::ArrayElement::Spread(expr) => {
+                    let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                    if !seen_spread && initial.is_empty() {
+                        // First spread is at the beginning — clone it as the base
+                        ops.push(SpreadOp::Extend(RustExpr::new(
+                            RustExprKind::Clone(Box::new(lowered)),
+                            expr.span,
+                        )));
+                    } else {
+                        ops.push(SpreadOp::Extend(lowered));
+                    }
+                    seen_spread = true;
+                }
+            }
+        }
+
+        RustExpr::new(RustExprKind::SpreadArray { initial, ops }, span)
     }
 
     /// Lower a template literal expression.

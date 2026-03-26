@@ -982,6 +982,27 @@ pub enum RustExprKind {
         /// The terminal operation (collect, fold, find, any, all, `for_each`).
         terminal: IteratorTerminal,
     },
+    /// Array spread construction: `[...arr, x, ...arr2]`.
+    ///
+    /// Represents a sequence of push/extend operations building a `Vec`.
+    /// Lowered from `RustScript` array literals containing spread elements.
+    SpreadArray {
+        /// Initial elements before the first spread (may be empty).
+        initial: Vec<RustExpr>,
+        /// Sequence of push (single element) or extend (spread) operations.
+        ops: Vec<SpreadOp>,
+    },
+    /// Struct construction with update syntax: `Type { field: val, ..base }`.
+    ///
+    /// Produced by lowering `{ ...base, field: value }` in `RustScript`.
+    StructUpdate {
+        /// The struct type name.
+        type_name: String,
+        /// The overridden field name-value pairs.
+        fields: Vec<(String, RustExpr)>,
+        /// The base expression (cloned at runtime).
+        base: Box<RustExpr>,
+    },
 }
 
 /// A single intermediate iterator operation in a chain.
@@ -1029,6 +1050,18 @@ pub enum IteratorTerminal {
     All(RustClosureParam, Box<RustExpr>),
     /// `.for_each(|param| body)` — execute side effect for each element.
     ForEach(RustClosureParam, Box<RustExpr>),
+}
+
+/// An operation in an array spread construction.
+///
+/// Each operation either pushes a single element or extends from an iterable
+/// (the spread source).
+#[derive(Debug, Clone)]
+pub enum SpreadOp {
+    /// Push a single element: `__spread.push(expr)`.
+    Push(RustExpr),
+    /// Extend from an iterable: `__spread.extend(expr.iter().cloned())`.
+    Extend(RustExpr),
 }
 
 /// A closure parameter (may omit type for inference).
