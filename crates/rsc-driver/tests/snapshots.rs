@@ -3701,3 +3701,67 @@ fn add(a: i32, b: i32) -> i32 {
     let actual = compile_to_rust(source);
     assert_snapshot("059_jsdoc_no_comment", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 062: Destructuring rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_destructure_rename() {
+    let source = "\
+type Point = { x: i32, y: i32 }
+function main() {
+  const pt: Point = { x: 10, y: 20 };
+  const { x: a, y: b } = pt;
+  console.log(a);
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+fn main() {
+    let pt = Point { x: 10, y: 20 };
+    let Point { x: a, y: b, .. } = pt;
+    println!(\"{}\", a);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("destructure_rename", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Task 062: Destructuring mixed rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_destructure_mixed_rename() {
+    let source = "\
+type User = { name: string, age: u32 }
+function main() {
+  const user: User = { name: \"Alice\", age: 30 };
+  const { name, age: a } = user;
+  console.log(name);
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    pub name: String,
+    pub age: u32,
+}
+
+fn main() {
+    let user = User { name: \"Alice\".to_string(), age: 30 };
+    let User { name, age: a, .. } = user;
+    println!(\"{}\", name);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("destructure_mixed_rename", &actual, expected);
+}

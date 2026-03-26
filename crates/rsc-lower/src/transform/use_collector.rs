@@ -400,6 +400,14 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
         RustStmt::TupleDestructure(td) => {
             scan_expr_for_collections(&td.init, needs_hashmap, needs_hashset);
         }
+        RustStmt::DestructureDefaults(dd) => {
+            for field in &dd.fields {
+                scan_expr_for_collections(&field.access_expr, needs_hashmap, needs_hashset);
+                if let Some(default_val) = &field.default_value {
+                    scan_expr_for_collections(default_val, needs_hashmap, needs_hashset);
+                }
+            }
+        }
         RustStmt::TryFinally(tf) => {
             scan_block_for_collections(&tf.try_block, needs_hashmap, needs_hashset);
             for s in &tf.finally_stmts {

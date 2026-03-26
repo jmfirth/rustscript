@@ -7,16 +7,17 @@
 #[allow(clippy::wildcard_imports)]
 // Class completeness requires many AST types for the new member kinds
 use rsc_syntax::ast::{
-    ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt,
-    CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember, ClassMethod,
-    ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, DestructureStmt,
-    ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
-    FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InlineRustBlock,
-    InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    ArrayDestructureElement, ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, BinaryOp,
+    Block, BreakStmt, CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember,
+    ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt,
+    DestructureField, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
+    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
+    ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef,
+    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility,
+    WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -2209,20 +2210,54 @@ impl<'src> Parser<'src> {
         Some(Stmt::Expr(expr))
     }
 
-    /// Parse a destructuring statement: `{ field, ... } = expr ;`.
+    /// Parse a destructuring statement: `{ field, field: local, field = default, ... } = expr ;`.
     ///
     /// The keyword (`const`/`let`) and binding have already been consumed.
+    /// Supports rename (`field: localName`) and defaults (`field = expr`),
+    /// as well as combined rename + default (`field: local = expr`).
     fn parse_destructure(&mut self, binding: VarBinding, start: Span) -> Option<Stmt> {
         self.advance(); // consume `{`
 
         let mut fields = Vec::new();
         if !self.check(&TokenKind::RBrace) && !self.at_end() {
             loop {
+                let field_start = self.current_token().span;
                 let Some(field_name) = self.parse_ident() else {
                     self.synchronize();
                     return None;
                 };
-                fields.push(field_name);
+
+                // Check for rename: `field: localName`
+                let local_name = if self.eat(&TokenKind::Colon) {
+                    let Some(local) = self.parse_ident() else {
+                        self.synchronize();
+                        return None;
+                    };
+                    Some(local)
+                } else {
+                    None
+                };
+
+                // Check for default: `field = expr` or `field: local = expr`
+                let default_value = if self.eat(&TokenKind::Eq) {
+                    let Some(default_expr) = self.parse_expr() else {
+                        self.synchronize();
+                        return None;
+                    };
+                    Some(Box::new(default_expr))
+                } else {
+                    None
+                };
+
+                let field_end = local_name.as_ref().map_or(field_name.span, |l| l.span);
+                let field_end = default_value.as_ref().map_or(field_end, |d| d.span);
+
+                fields.push(DestructureField {
+                    field_name,
+                    local_name,
+                    default_value,
+                    span: field_start.merge(field_end),
+                });
 
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -2266,18 +2301,30 @@ impl<'src> Parser<'src> {
 
     /// Parse an array destructuring statement: `const [a, b, c] = expr;`.
     ///
-    /// Lowers to Rust tuple destructuring: `let (a, b, c) = expr;`.
+    /// Supports rest elements: `const [first, ...rest] = arr;`.
+    /// Lowers to Rust tuple destructuring or indexed access with rest slice.
     fn parse_array_destructure(&mut self, binding: VarBinding, start: Span) -> Option<Stmt> {
         self.advance(); // consume `[`
 
         let mut elements = Vec::new();
         if !self.check(&TokenKind::RBracket) && !self.at_end() {
             loop {
+                // Check for rest element: `...name`
+                if self.eat(&TokenKind::DotDotDot) {
+                    let Some(rest_name) = self.parse_ident() else {
+                        self.synchronize();
+                        return None;
+                    };
+                    elements.push(ArrayDestructureElement::Rest(rest_name));
+                    // Rest must be last element
+                    break;
+                }
+
                 let Some(elem_name) = self.parse_ident() else {
                     self.synchronize();
                     return None;
                 };
-                elements.push(elem_name);
+                elements.push(ArrayDestructureElement::Single(elem_name));
 
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -4787,8 +4834,12 @@ mod tests {
             Stmt::Destructure(destr) => {
                 assert_eq!(destr.binding, VarBinding::Const);
                 assert_eq!(destr.fields.len(), 2);
-                assert_eq!(destr.fields[0].name, "name");
-                assert_eq!(destr.fields[1].name, "age");
+                assert_eq!(destr.fields[0].field_name.name, "name");
+                assert!(destr.fields[0].local_name.is_none());
+                assert!(destr.fields[0].default_value.is_none());
+                assert_eq!(destr.fields[1].field_name.name, "age");
+                assert!(destr.fields[1].local_name.is_none());
+                assert!(destr.fields[1].default_value.is_none());
                 match &destr.init.kind {
                     ExprKind::Ident(ident) => assert_eq!(ident.name, "user"),
                     _ => panic!("expected Ident init"),
@@ -6505,8 +6556,14 @@ class Foo implements Bar, Baz {
             ItemKind::Function(f) => match &f.body.stmts[0] {
                 Stmt::ArrayDestructure(adestr) => {
                     assert_eq!(adestr.elements.len(), 2);
-                    assert_eq!(adestr.elements[0].name, "user");
-                    assert_eq!(adestr.elements[1].name, "posts");
+                    match &adestr.elements[0] {
+                        ArrayDestructureElement::Single(ident) => assert_eq!(ident.name, "user"),
+                        other => panic!("expected Single, got {other:?}"),
+                    }
+                    match &adestr.elements[1] {
+                        ArrayDestructureElement::Single(ident) => assert_eq!(ident.name, "posts"),
+                        other => panic!("expected Single, got {other:?}"),
+                    }
                     assert_eq!(adestr.binding, VarBinding::Const);
                 }
                 other => panic!("expected ArrayDestructure, got {other:?}"),
@@ -6528,6 +6585,196 @@ class Foo implements Bar, Baz {
                 Stmt::ArrayDestructure(adestr) => {
                     assert_eq!(adestr.elements.len(), 3);
                     assert_eq!(adestr.binding, VarBinding::Let);
+                }
+                other => panic!("expected ArrayDestructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 062: Destructuring rename, defaults, and array rest tests
+    // ---------------------------------------------------------------
+
+    // Test: const { name: n } = user; parses with rename
+    #[test]
+    fn test_parse_destructure_rename() {
+        let source = r#"function test() {
+            const { name: n } = user;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::Destructure(destr) => {
+                    assert_eq!(destr.fields.len(), 1);
+                    assert_eq!(destr.fields[0].field_name.name, "name");
+                    assert_eq!(
+                        destr.fields[0].local_name.as_ref().map(|l| &l.name[..]),
+                        Some("n")
+                    );
+                    assert!(destr.fields[0].default_value.is_none());
+                }
+                other => panic!("expected Destructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const { x: a, y: b } = point; parses multiple renames
+    #[test]
+    fn test_parse_destructure_multiple_renames() {
+        let source = r#"function test() {
+            const { x: a, y: b } = point;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::Destructure(destr) => {
+                    assert_eq!(destr.fields.len(), 2);
+                    assert_eq!(destr.fields[0].field_name.name, "x");
+                    assert_eq!(
+                        destr.fields[0].local_name.as_ref().map(|l| &l.name[..]),
+                        Some("a")
+                    );
+                    assert_eq!(destr.fields[1].field_name.name, "y");
+                    assert_eq!(
+                        destr.fields[1].local_name.as_ref().map(|l| &l.name[..]),
+                        Some("b")
+                    );
+                }
+                other => panic!("expected Destructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const { name, age: a } = user; mixed rename and simple
+    #[test]
+    fn test_parse_destructure_mixed_rename() {
+        let source = r#"function test() {
+            const { name, age: a } = user;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::Destructure(destr) => {
+                    assert_eq!(destr.fields.len(), 2);
+                    assert_eq!(destr.fields[0].field_name.name, "name");
+                    assert!(destr.fields[0].local_name.is_none());
+                    assert_eq!(destr.fields[1].field_name.name, "age");
+                    assert_eq!(
+                        destr.fields[1].local_name.as_ref().map(|l| &l.name[..]),
+                        Some("a")
+                    );
+                }
+                other => panic!("expected Destructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const { name = "x" } = config; parses with default
+    #[test]
+    fn test_parse_destructure_default() {
+        let source = r#"function test() {
+            const { name = "x" } = config;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::Destructure(destr) => {
+                    assert_eq!(destr.fields.len(), 1);
+                    assert_eq!(destr.fields[0].field_name.name, "name");
+                    assert!(destr.fields[0].local_name.is_none());
+                    assert!(destr.fields[0].default_value.is_some());
+                }
+                other => panic!("expected Destructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const { name: n = "x" } = config; rename + default
+    #[test]
+    fn test_parse_destructure_rename_and_default() {
+        let source = r#"function test() {
+            const { name: n = "x" } = config;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::Destructure(destr) => {
+                    assert_eq!(destr.fields.len(), 1);
+                    assert_eq!(destr.fields[0].field_name.name, "name");
+                    assert_eq!(
+                        destr.fields[0].local_name.as_ref().map(|l| &l.name[..]),
+                        Some("n")
+                    );
+                    assert!(destr.fields[0].default_value.is_some());
+                }
+                other => panic!("expected Destructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const [first, ...rest] = arr; parses with rest element
+    #[test]
+    fn test_parse_array_destructure_rest() {
+        let source = r#"function test() {
+            const [first, ...rest] = arr;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::ArrayDestructure(adestr) => {
+                    assert_eq!(adestr.elements.len(), 2);
+                    match &adestr.elements[0] {
+                        ArrayDestructureElement::Single(ident) => {
+                            assert_eq!(ident.name, "first");
+                        }
+                        other => panic!("expected Single, got {other:?}"),
+                    }
+                    match &adestr.elements[1] {
+                        ArrayDestructureElement::Rest(ident) => {
+                            assert_eq!(ident.name, "rest");
+                        }
+                        other => panic!("expected Rest, got {other:?}"),
+                    }
+                }
+                other => panic!("expected ArrayDestructure, got {other:?}"),
+            },
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Test: const [a, b, ...rest] = arr; multiple single + rest
+    #[test]
+    fn test_parse_array_destructure_multi_then_rest() {
+        let source = r#"function test() {
+            const [a, b, ...rest] = arr;
+        }"#;
+        let (module, diags) = parse_source(source);
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => match &f.body.stmts[0] {
+                Stmt::ArrayDestructure(adestr) => {
+                    assert_eq!(adestr.elements.len(), 3);
+                    assert!(
+                        matches!(&adestr.elements[0], ArrayDestructureElement::Single(i) if i.name == "a")
+                    );
+                    assert!(
+                        matches!(&adestr.elements[1], ArrayDestructureElement::Single(i) if i.name == "b")
+                    );
+                    assert!(
+                        matches!(&adestr.elements[2], ArrayDestructureElement::Rest(i) if i.name == "rest")
+                    );
                 }
                 other => panic!("expected ArrayDestructure, got {other:?}"),
             },
