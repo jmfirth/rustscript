@@ -783,6 +783,7 @@ dependencies = [
  "dashmap 6.1.0",
  "rsc-driver",
  "rsc-fmt",
+ "rsc-lower",
  "rsc-parser",
  "rsc-syntax",
  "serde_json",
