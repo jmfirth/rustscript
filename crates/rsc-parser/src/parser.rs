@@ -4,17 +4,19 @@
 //! Implements error recovery at statement boundaries so that parsing continues
 //! past syntax errors, accumulating diagnostics along the way.
 
+#[allow(clippy::wildcard_imports)]
+// Class completeness requires many AST types for the new member kinds
 use rsc_syntax::ast::{
     ArrayDestructureStmt, AssignExpr, BinaryExpr, BinaryOp, Block, BreakStmt, CallExpr,
-    ClassConstructor, ClassDef, ClassField, ClassMember, ClassMethod, ClosureBody, ClosureExpr,
-    ContinueStmt, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
-    ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
-    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
-    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
-    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef,
-    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility,
-    WhileStmt,
+    ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember, ClassMethod, ClassSetter,
+    ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, DestructureStmt, ElseClause, EnumDef,
+    EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl,
+    ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef,
+    InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
+    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
+    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -1075,16 +1077,25 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a single class member: field, constructor, or method.
+    /// Check whether the current token is an identifier matching the given name.
+    ///
+    /// Used for contextual keywords (`get`, `set`, `static`, `readonly`) that are
+    /// only special in certain positions and should remain valid identifiers elsewhere.
+    fn check_contextual_keyword(&self, name: &str) -> bool {
+        matches!(self.peek(), TokenKind::Ident(ident_name) if ident_name == name)
+    }
+
+    /// Parse a single class member: field, constructor, method, getter, or setter.
     ///
     /// Disambiguates based on leading tokens:
     /// - `constructor(` → constructor
-    /// - `private name :` → private field
-    /// - `public name :` → public field
-    /// - `private name (` → private method
-    /// - `public name (` → public method
-    /// - `name :` → public field (default visibility)
-    /// - `name (` → public method (default visibility)
+    /// - `get name()` → getter
+    /// - `set name(param)` → setter
+    /// - `[private|public] [static] [readonly] name: Type [= expr];` → field
+    /// - `[private|public] [static] [async] name(params): ReturnType { body }` → method
+    #[allow(clippy::too_many_lines)]
+    // Class member parsing must disambiguate many syntactic forms; splitting would
+    // fragment the grammar-driven structure.
     fn parse_class_member(&mut self) -> Option<ClassMember> {
         // Check for constructor
         if matches!(self.peek(), TokenKind::Constructor) {
@@ -1106,26 +1117,93 @@ impl<'src> Parser<'src> {
 
         let member_start = self.current_token().span;
 
+        // Check for getter: `get name(): Type { ... }`
+        // Lookahead to disambiguate: `get name(` means getter, `get(` means method named "get"
+        if self.check_contextual_keyword("get") {
+            let next_is_ident_or_keyword = self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| matches!(t.kind, TokenKind::Ident(_)));
+            if next_is_ident_or_keyword {
+                self.advance(); // consume `get`
+                let name = self.parse_ident()?;
+                self.expect(&TokenKind::LParen)?;
+                self.expect(&TokenKind::RParen)?;
+                let return_type = self.parse_return_type_annotation();
+                let body = self.parse_block()?;
+                let span = member_start.merge(body.span);
+                return Some(ClassMember::Getter(ClassGetter {
+                    visibility,
+                    name,
+                    return_type,
+                    body,
+                    span,
+                }));
+            }
+        }
+
+        // Check for setter: `set name(param: Type) { ... }`
+        if self.check_contextual_keyword("set") {
+            let next_is_ident_or_keyword = self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| matches!(t.kind, TokenKind::Ident(_)));
+            if next_is_ident_or_keyword {
+                self.advance(); // consume `set`
+                let name = self.parse_ident()?;
+                self.expect(&TokenKind::LParen)?;
+                let params = self.parse_param_list();
+                let param = params.into_iter().next()?;
+                self.expect(&TokenKind::RParen)?;
+                let body = self.parse_block()?;
+                let span = member_start.merge(body.span);
+                return Some(ClassMember::Setter(ClassSetter {
+                    visibility,
+                    name,
+                    param,
+                    body,
+                    span,
+                }));
+            }
+        }
+
+        // Check for `static` modifier (contextual keyword)
+        let is_static = self.eat_contextual_keyword("static");
+
+        // Check for `readonly` modifier (contextual keyword)
+        let readonly = self.eat_contextual_keyword("readonly");
+
         // Check for optional `async` modifier before the method name
-        let is_async = self.eat(&TokenKind::Async);
+        let is_async = !readonly && self.eat(&TokenKind::Async);
 
         let name = self.parse_ident()?;
 
-        // Field: `name: Type;` (only if not async — async fields don't exist)
+        // Field: `name: Type [= expr];` (only if not async — async fields don't exist)
         if !is_async && self.check(&TokenKind::Colon) {
             self.advance(); // consume `:`
             let type_ann = self.parse_type_annotation()?;
+
+            // Optional initializer: `= expr`
+            let initializer = if self.eat(&TokenKind::Eq) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
             self.expect(&TokenKind::Semicolon)?;
             let span = member_start.merge(self.previous_span());
             return Some(ClassMember::Field(ClassField {
                 visibility,
                 name,
                 type_ann,
+                initializer,
+                readonly,
+                is_static,
                 span,
             }));
         }
 
-        // Method: `[async] name<T>(params): ReturnType { body }`
+        // Method: `[static] [async] name<T>(params): ReturnType { body }`
         let type_params = if self.check(&TokenKind::Lt) {
             Some(self.parse_type_params()?)
         } else {
@@ -1143,6 +1221,7 @@ impl<'src> Parser<'src> {
 
         Some(ClassMember::Method(ClassMethod {
             is_async,
+            is_static,
             visibility,
             name,
             type_params,
@@ -1153,19 +1232,67 @@ impl<'src> Parser<'src> {
         }))
     }
 
-    /// Parse a class constructor: `constructor(params) { body }`.
+    /// Parse a class constructor: `constructor([public|private] params) { body }`.
+    ///
+    /// Constructor parameters may have visibility modifiers to create parameter properties.
     fn parse_class_constructor(&mut self) -> Option<ClassConstructor> {
         let ctor_token = self.advance(); // consume `constructor`
         let start = ctor_token.span;
 
         self.expect(&TokenKind::LParen)?;
-        let params = self.parse_param_list();
+        let params = self.parse_constructor_param_list();
         self.expect(&TokenKind::RParen)?;
 
         let body = self.parse_block()?;
         let span = start.merge(body.span);
 
         Some(ClassConstructor { params, body, span })
+    }
+
+    /// Parse a constructor parameter list with optional visibility modifiers.
+    ///
+    /// Each parameter may be prefixed with `public` or `private` to create
+    /// a parameter property that auto-generates a field.
+    fn parse_constructor_param_list(&mut self) -> Vec<ConstructorParam> {
+        use rsc_syntax::ast::ConstructorParam;
+        let mut params = Vec::new();
+        while !self.check(&TokenKind::RParen) && !self.at_end() {
+            let param_start = self.current_token().span;
+
+            // Check for optional visibility modifier (parameter property)
+            let property_visibility = match self.peek() {
+                TokenKind::Public => {
+                    self.advance();
+                    Some(Visibility::Public)
+                }
+                TokenKind::Private => {
+                    self.advance();
+                    Some(Visibility::Private)
+                }
+                _ => None,
+            };
+
+            let Some(name) = self.parse_ident() else {
+                break;
+            };
+            if !self.eat(&TokenKind::Colon) {
+                break;
+            }
+            let Some(type_ann) = self.parse_type_annotation() else {
+                break;
+            };
+            let span = param_start.merge(self.previous_span());
+            params.push(ConstructorParam {
+                property_visibility,
+                name,
+                type_ann,
+                span,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        params
     }
 
     // ---------------------------------------------------------------
@@ -6044,5 +6171,240 @@ function main(): void {
             diagnostics.iter().any(|d| d.message.contains("shared")),
             "expected shared-related diagnostic, got: {diagnostics:?}"
         );
+    }
+
+    // ---- Task 057: Class Completeness parser tests ----
+
+    /// Helper: extract the first class definition from a module.
+    fn first_class(module: &Module) -> &ClassDef {
+        for item in &module.items {
+            if let ItemKind::Class(cls) = &item.kind {
+                return cls;
+            }
+        }
+        panic!("expected class item");
+    }
+
+    #[test]
+    fn test_parser_class_field_initializer() {
+        let module = parse_ok(
+            "class Config {
+                host: string = \"localhost\";
+                port: i32 = 8080;
+                constructor() {}
+            }",
+        );
+        let cls = first_class(&module);
+        let fields: Vec<&ClassField> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ClassMember::Field(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert!(
+            fields[0].initializer.is_some(),
+            "host should have initializer"
+        );
+        assert!(
+            fields[1].initializer.is_some(),
+            "port should have initializer"
+        );
+        assert_eq!(fields[0].name.name, "host");
+        assert_eq!(fields[1].name.name, "port");
+    }
+
+    #[test]
+    fn test_parser_constructor_param_properties() {
+        let module = parse_ok(
+            "class User {
+                constructor(public name: string, private age: i32) {}
+            }",
+        );
+        let cls = first_class(&module);
+        let ctor = cls.members.iter().find_map(|m| match m {
+            ClassMember::Constructor(c) => Some(c),
+            _ => None,
+        });
+        let ctor = ctor.expect("should have constructor");
+        assert_eq!(ctor.params.len(), 2);
+        assert_eq!(ctor.params[0].property_visibility, Some(Visibility::Public));
+        assert_eq!(ctor.params[0].name.name, "name");
+        assert_eq!(
+            ctor.params[1].property_visibility,
+            Some(Visibility::Private)
+        );
+        assert_eq!(ctor.params[1].name.name, "age");
+    }
+
+    #[test]
+    fn test_parser_static_method() {
+        let module = parse_ok(
+            "class Service {
+                static create(): Service { return new Service(); }
+            }",
+        );
+        let cls = first_class(&module);
+        let method = cls.members.iter().find_map(|m| match m {
+            ClassMember::Method(m) => Some(m),
+            _ => None,
+        });
+        let method = method.expect("should have method");
+        assert!(method.is_static, "method should be static");
+        assert_eq!(method.name.name, "create");
+    }
+
+    #[test]
+    fn test_parser_static_field() {
+        let module = parse_ok(
+            "class Config {
+                static DEFAULT_PORT: i32 = 8080;
+                constructor() {}
+            }",
+        );
+        let cls = first_class(&module);
+        let field = cls.members.iter().find_map(|m| match m {
+            ClassMember::Field(f) => Some(f),
+            _ => None,
+        });
+        let field = field.expect("should have field");
+        assert!(field.is_static, "field should be static");
+        assert_eq!(field.name.name, "DEFAULT_PORT");
+        assert!(
+            field.initializer.is_some(),
+            "static field should have initializer"
+        );
+    }
+
+    #[test]
+    fn test_parser_getter_declaration() {
+        let module = parse_ok(
+            "class User {
+                private _name: string;
+                constructor(name: string) { this._name = name; }
+                get name(): string { return this._name; }
+            }",
+        );
+        let cls = first_class(&module);
+        let getter = cls.members.iter().find_map(|m| match m {
+            ClassMember::Getter(g) => Some(g),
+            _ => None,
+        });
+        let getter = getter.expect("should have getter");
+        assert_eq!(getter.name.name, "name");
+    }
+
+    #[test]
+    fn test_parser_setter_declaration() {
+        let module = parse_ok(
+            "class User {
+                private _name: string;
+                constructor(name: string) { this._name = name; }
+                set name(value: string) { this._name = value; }
+            }",
+        );
+        let cls = first_class(&module);
+        let setter = cls.members.iter().find_map(|m| match m {
+            ClassMember::Setter(s) => Some(s),
+            _ => None,
+        });
+        let setter = setter.expect("should have setter");
+        assert_eq!(setter.name.name, "name");
+        assert_eq!(setter.param.name.name, "value");
+    }
+
+    #[test]
+    fn test_parser_readonly_field() {
+        let module = parse_ok(
+            "class Config {
+                readonly host: string = \"localhost\";
+                constructor() {}
+            }",
+        );
+        let cls = first_class(&module);
+        let field = cls.members.iter().find_map(|m| match m {
+            ClassMember::Field(f) => Some(f),
+            _ => None,
+        });
+        let field = field.expect("should have field");
+        assert!(field.readonly, "field should be readonly");
+        assert_eq!(field.name.name, "host");
+    }
+
+    #[test]
+    fn test_parser_method_named_get_is_not_getter() {
+        // A method named `get` with `()` directly should be a regular method,
+        // not a getter (since getter syntax is `get name()`)
+        let module = parse_ok(
+            "class Counter {
+                private count: i32;
+                constructor(initial: i32) { this.count = initial; }
+                get(): i32 { return this.count; }
+            }",
+        );
+        let cls = first_class(&module);
+        // Should be a regular method named "get", not a getter
+        let method = cls.members.iter().find_map(|m| match m {
+            ClassMember::Method(m) if m.name.name == "get" => Some(m),
+            _ => None,
+        });
+        assert!(method.is_some(), "should be a regular method named 'get'");
+        let getter = cls.members.iter().find_map(|m| match m {
+            ClassMember::Getter(_) => Some(()),
+            _ => None,
+        });
+        assert!(getter.is_none(), "should not have a getter");
+    }
+
+    #[test]
+    fn test_parser_class_combined_all_features() {
+        let module = parse_ok(
+            "class Complete {
+                static MAX: i32 = 100;
+                private _value: i32;
+                public label: string = \"default\";
+                readonly id: i32;
+
+                constructor(public name: string, id: i32) {
+                    this._value = 0;
+                    this.id = id;
+                }
+
+                static create(name: string): Complete {
+                    return new Complete(name, 0);
+                }
+
+                get value(): i32 { return this._value; }
+                set value(v: i32) { this._value = v; }
+
+                increment(): void {
+                    this._value = this._value + 1;
+                }
+            }",
+        );
+        let cls = first_class(&module);
+
+        // Count member types
+        let mut fields = 0;
+        let mut ctors = 0;
+        let mut methods = 0;
+        let mut getters = 0;
+        let mut setters = 0;
+        for m in &cls.members {
+            match m {
+                ClassMember::Field(_) => fields += 1,
+                ClassMember::Constructor(_) => ctors += 1,
+                ClassMember::Method(_) => methods += 1,
+                ClassMember::Getter(_) => getters += 1,
+                ClassMember::Setter(_) => setters += 1,
+            }
+        }
+        assert_eq!(fields, 4, "4 fields (MAX, _value, label, id)");
+        assert_eq!(ctors, 1, "1 constructor");
+        assert_eq!(methods, 2, "2 methods (create, increment)");
+        assert_eq!(getters, 1, "1 getter");
+        assert_eq!(setters, 1, "1 setter");
     }
 }

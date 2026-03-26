@@ -481,7 +481,13 @@ impl Transform {
     ///
     /// First checks if the method call matches a builtin. If so, lowers
     /// the arguments first then delegates to the builtin lowering function.
-    /// Then checks string methods registered in the builtin registry.
+    /// Then checks static method calls on class names (`ClassName.method()`
+    /// → `ClassName::method()`). Then checks string methods registered in
+    /// the builtin registry.
+    #[allow(clippy::too_many_lines)]
+    // Method call lowering checks builtins, static methods, string methods,
+    // collection methods, shared<T> sugar, and fallback; splitting would
+    // fragment the dispatch logic.
     fn lower_method_call(
         &self,
         mc: &ast::MethodCallExpr,
@@ -503,6 +509,27 @@ impl Transform {
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
             return lowering_fn(lowered_args, span);
+        }
+
+        // Check for static method call: `ClassName.method()` → `ClassName::method()`
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && self
+                .type_registry
+                .has_static_method(&obj_ident.name, &mc.method.name)
+        {
+            let args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: obj_ident.name.clone(),
+                    method: mc.method.name.clone(),
+                    args,
+                },
+                span,
+            );
         }
 
         // Check for string method: if the method name matches a registered

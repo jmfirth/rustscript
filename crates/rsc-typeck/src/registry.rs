@@ -29,6 +29,17 @@ pub enum TypeDefKind {
     /// An interface (trait) with method signatures.
     /// Each method has a name and a list of parameter types plus a return type.
     Interface(Vec<InterfaceMethodSig>),
+    /// A class type with fields, getters, setters, and static methods.
+    Class {
+        /// The struct fields of the class.
+        fields: Vec<(String, Type)>,
+        /// Names of getter accessors (property-style read access).
+        getters: Vec<String>,
+        /// Names of setter accessors (property-style write access).
+        setters: Vec<String>,
+        /// Names of static methods (called via `ClassName.method()`).
+        static_methods: Vec<String>,
+    },
 }
 
 /// A method signature in a registered interface.
@@ -43,13 +54,13 @@ pub struct InterfaceMethodSig {
 }
 
 impl RegisteredTypeDef {
-    /// Get the struct fields if this is a struct type.
+    /// Get the struct fields if this is a struct or class type.
     ///
     /// Returns `None` for enum types.
     #[must_use]
     pub fn struct_fields(&self) -> Option<&[(String, Type)]> {
         match &self.kind {
-            TypeDefKind::Struct(fields) => Some(fields),
+            TypeDefKind::Struct(fields) | TypeDefKind::Class { fields, .. } => Some(fields),
             _ => None,
         }
     }
@@ -80,6 +91,29 @@ impl TypeRegistry {
             RegisteredTypeDef {
                 name,
                 kind: TypeDefKind::Struct(fields),
+            },
+        );
+    }
+
+    /// Register a class type with getters, setters, and static methods.
+    pub fn register_class(
+        &mut self,
+        name: String,
+        fields: Vec<(String, Type)>,
+        getters: Vec<String>,
+        setters: Vec<String>,
+        static_methods: Vec<String>,
+    ) {
+        self.types.insert(
+            name.clone(),
+            RegisteredTypeDef {
+                name,
+                kind: TypeDefKind::Class {
+                    fields,
+                    getters,
+                    setters,
+                    static_methods,
+                },
             },
         );
     }
@@ -146,6 +180,35 @@ impl TypeRegistry {
         self.types.get(name).and_then(|td| match &td.kind {
             TypeDefKind::Interface(methods) => Some(methods.as_slice()),
             _ => None,
+        })
+    }
+
+    /// Check whether a class has a getter for a given field name.
+    #[must_use]
+    pub fn has_getter(&self, class_name: &str, field_name: &str) -> bool {
+        self.types.get(class_name).is_some_and(|td| match &td.kind {
+            TypeDefKind::Class { getters, .. } => getters.iter().any(|g| g == field_name),
+            _ => false,
+        })
+    }
+
+    /// Check whether a class has a setter for a given field name.
+    #[must_use]
+    pub fn has_setter(&self, class_name: &str, field_name: &str) -> bool {
+        self.types.get(class_name).is_some_and(|td| match &td.kind {
+            TypeDefKind::Class { setters, .. } => setters.iter().any(|s| s == field_name),
+            _ => false,
+        })
+    }
+
+    /// Check whether a registered type has a static method with the given name.
+    #[must_use]
+    pub fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
+        self.types.get(class_name).is_some_and(|td| match &td.kind {
+            TypeDefKind::Class { static_methods, .. } => {
+                static_methods.iter().any(|m| m == method_name)
+            }
+            _ => false,
         })
     }
 }
@@ -286,5 +349,78 @@ mod tests {
             }
             _ => panic!("expected Interface"),
         }
+    }
+
+    // ---- Task 057: Class registration tests ----
+
+    #[test]
+    fn test_registry_register_class_with_getters_setters_static_methods() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "User".to_owned(),
+            vec![
+                ("name".to_owned(), Type::String),
+                ("age".to_owned(), Type::Primitive(PrimitiveType::U32)),
+            ],
+            vec!["full_name".to_owned()],
+            vec!["full_name".to_owned()],
+            vec!["create".to_owned()],
+        );
+
+        let td = reg.lookup("User");
+        assert!(td.is_some());
+
+        // Check struct_fields works for Class kind
+        let fields = td.unwrap().struct_fields();
+        assert!(fields.is_some());
+        assert_eq!(fields.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_registry_has_getter_for_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "User".to_owned(),
+            vec![],
+            vec!["name".to_owned()],
+            vec![],
+            vec![],
+        );
+
+        assert!(reg.has_getter("User", "name"));
+        assert!(!reg.has_getter("User", "age"));
+        assert!(!reg.has_getter("Missing", "name"));
+    }
+
+    #[test]
+    fn test_registry_has_setter_for_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "User".to_owned(),
+            vec![],
+            vec![],
+            vec!["name".to_owned()],
+            vec![],
+        );
+
+        assert!(reg.has_setter("User", "name"));
+        assert!(!reg.has_setter("User", "age"));
+    }
+
+    #[test]
+    fn test_registry_has_static_method_for_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "Factory".to_owned(),
+            vec![],
+            vec![],
+            vec![],
+            vec!["create".to_owned(), "default".to_owned()],
+        );
+
+        assert!(reg.has_static_method("Factory", "create"));
+        assert!(reg.has_static_method("Factory", "default"));
+        assert!(!reg.has_static_method("Factory", "instance_method"));
+        assert!(!reg.has_static_method("Missing", "create"));
     }
 }

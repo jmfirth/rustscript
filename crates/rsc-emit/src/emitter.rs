@@ -359,7 +359,7 @@ impl Emitter {
         self.writeln("}");
     }
 
-    /// Emit an inherent impl block: `impl TypeName { methods }`.
+    /// Emit an inherent impl block: `impl TypeName { consts + methods }`.
     fn emit_impl_block(&mut self, imp: &RustImplBlock) {
         self.set_span(imp.span);
         self.write_indent();
@@ -369,11 +369,21 @@ impl Emitter {
         self.writeln(" {");
         self.push_indent();
 
-        for (i, method) in imp.methods.iter().enumerate() {
-            if i > 0 {
+        let mut item_count = 0;
+        for c in &imp.associated_consts {
+            if item_count > 0 {
+                self.newline();
+            }
+            self.emit_const_item(c);
+            item_count += 1;
+        }
+
+        for method in &imp.methods {
+            if item_count > 0 {
                 self.newline();
             }
             self.emit_method(method);
+            item_count += 1;
         }
 
         self.pop_indent();
@@ -3522,6 +3532,7 @@ fn main() {
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Counter".to_owned(),
                 type_params: vec![],
+                associated_consts: vec![],
                 methods: vec![RustMethod {
                     is_async: false,
                     name: "new".to_owned(),
@@ -3644,6 +3655,7 @@ fn main() {
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Foo".to_owned(),
                 type_params: vec![],
+                associated_consts: vec![],
                 methods: vec![RustMethod {
                     is_async: false,
                     name: "mutate".to_owned(),
@@ -3778,6 +3790,7 @@ fn main() {
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Server".to_owned(),
                 type_params: vec![],
+                associated_consts: vec![],
                 methods: vec![RustMethod {
                     is_async: true,
                     name: "handle".to_owned(),
