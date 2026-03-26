@@ -231,7 +231,10 @@ impl Transform {
         // Option<T>. Override the variable's type so that returning this variable
         // from an Option-returning function doesn't double-wrap in Some().
         let ty = if returns_option(&init, ctx) {
-            RustType::Option(Box::new(ty))
+            let opt_ty = RustType::Option(Box::new(ty));
+            // Re-declare the variable with the corrected Option type
+            ctx.declare_variable(decl.name.name.clone(), opt_ty.clone());
+            opt_ty
         } else {
             ty
         };
