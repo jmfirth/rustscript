@@ -1021,23 +1021,16 @@ impl Transform {
             _ => None,
         }?;
 
-        // Lower the call expression WITHOUT the ? operator
-        let lowered_call = match &call_expr.kind {
-            ast::ExprKind::Call(call) => {
-                let args: Vec<RustExpr> = call
-                    .args
-                    .iter()
-                    .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
-                    .collect();
-                RustExpr::new(
-                    RustExprKind::Call {
-                        func: call.callee.name.clone(),
-                        args,
-                    },
-                    call_expr.span,
-                )
-            }
-            _ => return None,
+        // Lower the call expression WITHOUT the ? operator.
+        // Use lower_call_expr (not raw lower_expr on each arg) so that
+        // Tier 2 borrow transforms and reference-variable clone insertion apply.
+        let lowered_call = self.lower_expr(call_expr, ctx, use_map, stmt_index);
+        // lower_expr on a Call produces a RustExprKind::Call (or QuestionMark-wrapped
+        // for throws functions). For simple try/catch we need the unwrapped call,
+        // so strip the QuestionMark wrapper if present.
+        let lowered_call = match lowered_call.kind {
+            RustExprKind::QuestionMark(inner) => *inner,
+            _ => lowered_call,
         };
 
         // Build the Ok arm body: the remaining statements after the var decl
