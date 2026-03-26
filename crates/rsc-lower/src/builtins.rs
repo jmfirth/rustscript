@@ -1211,13 +1211,10 @@ fn lower_map_set(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExp
     )
 }
 
-/// Lower `.has(key)` to `.contains_key(&key)` for Map, `.contains(&key)` for Set.
+/// Lower `.has(key)` to `.contains_key(&key)` — Map-specific.
 ///
-/// Since both Map and Set register this, we use `contains_key` (Map convention).
-/// Set's `.has()` is handled separately — but in practice, `has` is registered once
-/// and the emitted `contains_key` works for `HashMap`. For `HashSet`, the Set-specific
-/// method `lower_set_has` would be used — but since method names are unique in the
-/// registry, we use `contains_key` here and register a separate path for Set if needed.
+/// This handles `HashMap.has()`. For `HashSet.has()`, the call site dispatches
+/// to [`lower_set_has`] instead, which emits `.contains()`.
 fn lower_map_has(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let key = args
         .into_iter()
@@ -1384,6 +1381,28 @@ fn lower_entries(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustEx
 // ---------------------------------------------------------------------------
 // Phase 5: Set method lowering functions
 // ---------------------------------------------------------------------------
+
+/// Lower `.has(value)` to `.contains(&value)` — Set-specific.
+///
+/// Unlike Map's `.has()` which lowers to `.contains_key()`, Set uses `.contains()`.
+/// This is dispatched from the call site when the receiver is known to be a `HashSet`.
+pub(crate) fn lower_set_has(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let key = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "contains".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Borrow(Box::new(
+                strip_to_string(key),
+            )))],
+        },
+        span,
+    )
+}
 
 /// Lower `.add(value)` to `.insert(value)` — Set-specific.
 fn lower_set_add(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
@@ -3372,6 +3391,19 @@ mod tests {
                 assert!(matches!(args[0].kind, RustExprKind::Borrow(_)));
             }
             other => panic!("expected MethodCall(contains_key), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_set_has_produces_contains() {
+        let result = lower_set_has(set_receiver(), vec![string_arg("hello")], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "contains");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0].kind, RustExprKind::Borrow(_)));
+            }
+            other => panic!("expected MethodCall(contains), got {other:?}"),
         }
     }
 

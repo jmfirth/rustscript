@@ -679,8 +679,73 @@ impl<'a> Lexer<'a> {
     }
 
     /// Lex a numeric literal (integer or float).
+    ///
+    /// Supports decimal, hexadecimal (`0x`/`0X`), binary (`0b`/`0B`), and
+    /// octal (`0o`/`0O`) integer literals, as well as decimal floats.
     fn lex_number(&mut self, start: usize) -> Token {
-        // Consume all leading digits
+        // Check for radix prefix: 0x, 0b, 0o.
+        // At entry, self.pos == start and the byte at start is the first digit.
+        // If it's `0`, peek at the next byte for a radix prefix.
+        if self.bytes.get(start) == Some(&b'0')
+            && let Some(prefix) = self.bytes.get(start + 1).copied()
+        {
+            match prefix {
+                b'x' | b'X' => {
+                    self.advance(); // consume '0'
+                    self.advance(); // consume 'x'/'X'
+                    while let Some(b) = self.peek() {
+                        if b.is_ascii_hexdigit() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = &self.source[start + 2..self.pos];
+                    let val = i64::from_str_radix(digits, 16).unwrap_or(0);
+                    return Token {
+                        kind: TokenKind::IntLit(val),
+                        span: self.span_from(start),
+                    };
+                }
+                b'b' | b'B' => {
+                    self.advance(); // consume '0'
+                    self.advance(); // consume 'b'/'B'
+                    while let Some(b) = self.peek() {
+                        if b == b'0' || b == b'1' {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = &self.source[start + 2..self.pos];
+                    let val = i64::from_str_radix(digits, 2).unwrap_or(0);
+                    return Token {
+                        kind: TokenKind::IntLit(val),
+                        span: self.span_from(start),
+                    };
+                }
+                b'o' | b'O' => {
+                    self.advance(); // consume '0'
+                    self.advance(); // consume 'o'/'O'
+                    while let Some(b) = self.peek() {
+                        if (b'0'..=b'7').contains(&b) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    let digits = &self.source[start + 2..self.pos];
+                    let val = i64::from_str_radix(digits, 8).unwrap_or(0);
+                    return Token {
+                        kind: TokenKind::IntLit(val),
+                        span: self.span_from(start),
+                    };
+                }
+                _ => {}
+            }
+        }
+
+        // Consume remaining decimal digits
         while let Some(b) = self.peek() {
             if b.is_ascii_digit() {
                 self.advance();
@@ -1687,5 +1752,72 @@ mod tests {
         let tokens = tokenize("/** docs */function foo() {}");
         assert!(matches!(&tokens[0].kind, TokenKind::JsDoc(_)));
         assert_eq!(tokens[1].kind, TokenKind::Function);
+    }
+
+    // --- Hex, binary, and octal integer literals ---
+
+    // 70. Hex literal `0xFF` → IntLit(255)
+    #[test]
+    fn test_lexer_hex_literal_lowercase() {
+        let tokens = tokenize("0xff");
+        assert_eq!(tokens.len(), 2); // IntLit, Eof
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(255));
+    }
+
+    // 71. Hex literal `0XFF` → IntLit(255) (uppercase prefix)
+    #[test]
+    fn test_lexer_hex_literal_uppercase() {
+        let tokens = tokenize("0XFF");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(255));
+    }
+
+    // 72. Binary literal `0b1100` → IntLit(12)
+    #[test]
+    fn test_lexer_binary_literal() {
+        let tokens = tokenize("0b1100");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(12));
+    }
+
+    // 73. Binary literal `0B1010` → IntLit(10) (uppercase prefix)
+    #[test]
+    fn test_lexer_binary_literal_uppercase() {
+        let tokens = tokenize("0B1010");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(10));
+    }
+
+    // 74. Octal literal `0o77` → IntLit(63)
+    #[test]
+    fn test_lexer_octal_literal() {
+        let tokens = tokenize("0o77");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(63));
+    }
+
+    // 75. Octal literal `0O10` → IntLit(8) (uppercase prefix)
+    #[test]
+    fn test_lexer_octal_literal_uppercase() {
+        let tokens = tokenize("0O10");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(8));
+    }
+
+    // 76. Hex literal in expression: `0xFF + 1`
+    #[test]
+    fn test_lexer_hex_literal_in_expression() {
+        let tokens = tokenize("0xFF + 1");
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(255));
+        assert_eq!(tokens[1].kind, TokenKind::Plus);
+        assert_eq!(tokens[2].kind, TokenKind::IntLit(1));
+    }
+
+    // 77. Plain `0` still works as IntLit(0)
+    #[test]
+    fn test_lexer_zero_still_works() {
+        let tokens = tokenize("0");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::IntLit(0));
     }
 }

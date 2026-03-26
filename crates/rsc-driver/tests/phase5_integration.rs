@@ -227,14 +227,9 @@ function main() {
         actual.contains("x as f64"),
         "as cast should be present: {actual}"
     );
-    // NOTE: The compiler currently emits .pow(2.0 as u32) even for f64 variables
-    // when the exponent is a literal. This is a known limitation — the compiler
-    // does not track that y is f64 at the expression level; it sees a float literal
-    // exponent and uses .pow() with a u32 cast. Ideally it would emit .powf(2.0).
-    // Documenting rather than fixing per task spec.
     assert!(
-        actual.contains(".pow(") || actual.contains(".powf("),
-        "f64 exponent should use pow/powf: {actual}"
+        actual.contains(".powf("),
+        "f64 variable ** should use .powf(): {actual}"
     );
 }
 
@@ -757,13 +752,9 @@ function main() {
         actual.contains(".insert("),
         "set.add should lower to .insert(): {actual}"
     );
-    // BUG: Set.has currently emits .contains_key() instead of .contains().
-    // The map_set_methods dispatch uses the same `lower_map_has` function for both
-    // Map and Set, which always emits .contains_key(). For HashSet, it should emit
-    // .contains(). Documenting as a known bug — not fixing per task spec boundary.
     assert!(
-        actual.contains(".contains_key(") || actual.contains(".contains("),
-        "set.has should lower to .contains() (currently uses .contains_key()): {actual}"
+        actual.contains(".contains(") && !actual.contains(".contains_key("),
+        "set.has should lower to .contains(), not .contains_key(): {actual}"
     );
     assert!(
         actual.contains(".remove("),
@@ -1681,12 +1672,10 @@ function main() {
 
 #[test]
 fn test_p5_integration_all_bitwise_ops() {
-    // NOTE: The parser does not support hex literal syntax (0xFF, 0x0F).
-    // Documenting as a known limitation.
     let source = "\
 function main() {
-  const a: i64 = 255;
-  const b: i64 = 15;
+  const a: i64 = 0xFF;
+  const b: i64 = 0x0F;
   const and_result: i64 = a & b;
   const or_result: i64 = a | b;
   const xor_result: i64 = a ^ b;

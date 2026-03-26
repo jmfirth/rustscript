@@ -643,7 +643,14 @@ impl Transform {
         let base = self.lower_expr(left, ctx, use_map, stmt_index);
         let exp = self.lower_expr(right, ctx, use_map, stmt_index);
 
-        let is_float = matches!(left.kind, ast::ExprKind::FloatLit(_));
+        let is_float_literal = matches!(left.kind, ast::ExprKind::FloatLit(_));
+        let is_float_var = if let ast::ExprKind::Ident(ident) = &left.kind {
+            ctx.lookup_variable(&ident.name)
+                .is_some_and(|info| matches!(info.ty, RustType::F32 | RustType::F64))
+        } else {
+            false
+        };
+        let is_float = is_float_literal || is_float_var;
 
         if is_float {
             // `a.powf(b)`
@@ -752,21 +759,29 @@ impl Transform {
         // get/set/has/delete/clear/keys/values/entries/add that would conflict
         // with user-defined class methods if dispatched by name alone.
         if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
-            && ctx.lookup_variable(&obj_ident.name).is_some_and(|info| {
-                matches!(
-                    &info.ty,
-                    RustType::Generic(base, _)
-                        if matches!(base.as_ref(), RustType::Named(n) if n == "HashMap" || n == "HashSet")
-                )
-            })
+            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+            && matches!(
+                &var_info.ty,
+                RustType::Generic(base, _)
+                    if matches!(base.as_ref(), RustType::Named(n) if n == "HashMap" || n == "HashSet")
+            )
             && let Some(lowering_fn) = self.builtins.lookup_map_set_method(&mc.method.name)
         {
+            let is_set = matches!(
+                &var_info.ty,
+                RustType::Generic(base, _)
+                    if matches!(base.as_ref(), RustType::Named(n) if n == "HashSet")
+            );
             let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
             let lowered_args: Vec<RustExpr> = mc
                 .args
                 .iter()
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
+            // HashSet.has() uses .contains() instead of HashMap's .contains_key()
+            if is_set && mc.method.name == "has" {
+                return crate::builtins::lower_set_has(receiver, lowered_args, span);
+            }
             return lowering_fn(receiver, lowered_args, span);
         }
 
