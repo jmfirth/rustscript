@@ -1,0 +1,29 @@
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+
+/** A simple REST API server using axum */
+
+type User = {
+  id: u32,
+  name: string,
+}
+
+function hello(): string {
+  return "Hello from RustScript!";
+}
+
+function listUsers(): string {
+  const alice: User = { id: 1, name: "Alice" };
+  const bob: User = { id: 2, name: "Bob" };
+  const users: Array<User> = [alice, bob];
+  return JSON.stringify(users);
+}
+
+async function main() {
+  const app = new Router()
+    .route("/", get(hello))
+    .route("/users", get(listUsers));
+
+  console.log("Listening on http://0.0.0.0:3000");
+  serve("0.0.0.0:3000", app);
+}

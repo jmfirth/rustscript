@@ -1,0 +1,60 @@
+/** Background job processor — the microservice pattern every team needs */
+
+type Job = {
+  id: u32,
+  kind: string,
+  payload: string,
+  retries: u32,
+}
+
+type JobResult = {
+  jobId: u32,
+  success: bool,
+  message: string,
+}
+
+/** Process a single job */
+function processJob(job: Job): JobResult throws string {
+  if (job.kind === "email") {
+    return { jobId: job.id, success: true, message: `Sent email: ${job.payload}` };
+  }
+  if (job.kind === "webhook") {
+    if (job.retries > 2) {
+      throw `max retries exceeded for job ${job.id}`;
+    }
+    return { jobId: job.id, success: true, message: `Webhook delivered: ${job.payload}` };
+  }
+  throw `unknown job type: ${job.kind}`;
+}
+
+/** Process a batch of jobs, collecting results */
+function processBatch(jobs: Array<Job>): void {
+  let succeeded: i64 = 0;
+  let failed: i64 = 0;
+
+  for (const job of jobs) {
+    try {
+      const result = processJob(job);
+      console.log(`  ✓ Job ${result.jobId}: ${result.message}`);
+      succeeded += 1;
+    } catch (err: string) {
+      console.log(`  ✗ Job ${job.id}: ${err}`);
+      failed += 1;
+    }
+  }
+
+  console.log(`\nBatch complete: ${succeeded} succeeded, ${failed} failed`);
+}
+
+function main() {
+  const jobs: Array<Job> = [
+    { id: 1, kind: "email", payload: "welcome@user.com", retries: 0 },
+    { id: 2, kind: "webhook", payload: "https://api.example.com/hook", retries: 0 },
+    { id: 3, kind: "webhook", payload: "https://api.example.com/hook", retries: 5 },
+    { id: 4, kind: "unknown", payload: "???", retries: 0 },
+    { id: 5, kind: "email", payload: "notify@admin.com", retries: 0 },
+  ];
+
+  console.log("Processing job batch:");
+  processBatch(jobs);
+}

@@ -1,0 +1,53 @@
+import { Router, serve } from "axum";
+import { get, post } from "axum/routing";
+import { Serialize, Deserialize } from "serde";
+
+/** A REST API — the #1 thing TypeScript developers build */
+
+type Todo = {
+  id: u32,
+  title: string,
+  completed: bool,
+}
+
+type CreateTodo = {
+  title: string,
+}
+
+/** In-memory store */
+function getTodos(): Array<Todo> {
+  const t1: Todo = { id: 1, title: "Learn RustScript", completed: true };
+  const t2: Todo = { id: 2, title: "Build an API", completed: false };
+  const t3: Todo = { id: 3, title: "Deploy to production", completed: false };
+  return [t1, t2, t3];
+}
+
+/** GET /todos — list all todos */
+function handleList(): string {
+  return JSON.stringify(getTodos());
+}
+
+/** GET /todos/pending — list incomplete todos */
+function handlePending(): string {
+  const todos = getTodos();
+  const pending = todos.filter(t => !t.completed);
+  return JSON.stringify(pending);
+}
+
+/** GET /stats — summary statistics */
+function handleStats(): string {
+  const todos = getTodos();
+  const total = todos.length;
+  const done = todos.filter(t => t.completed).length;
+  return `{"total": ${total}, "completed": ${done}, "pending": ${total - done}}`;
+}
+
+async function main() {
+  const app = new Router()
+    .route("/todos", get(handleList))
+    .route("/todos/pending", get(handlePending))
+    .route("/stats", get(handleStats));
+
+  console.log("Todo API listening on http://0.0.0.0:3000");
+  serve("0.0.0.0:3000", app);
+}

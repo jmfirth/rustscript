@@ -1,0 +1,68 @@
+import { Serialize, Deserialize } from "serde";
+
+/** ETL pipeline — TypeScript devs build these for data processing jobs */
+
+type RawEvent = {
+  timestamp: u64,
+  kind: string,
+  payload: string,
+  userId: string,
+}
+
+type ProcessedEvent = {
+  userId: string,
+  eventType: string,
+  timestamp: u64,
+}
+
+type UserSummary = {
+  userId: string,
+  eventCount: i64,
+  lastSeen: u64,
+}
+
+/** Transform raw events into processed events */
+function processEvents(raw: Array<RawEvent>): Array<ProcessedEvent> {
+  return raw
+    .filter(e => e.kind !== "heartbeat")
+    .map(e => {
+      const processed: ProcessedEvent = {
+        userId: e.userId,
+        eventType: e.kind.toUpperCase(),
+        timestamp: e.timestamp,
+      };
+      return processed;
+    });
+}
+
+/** Aggregate events by user */
+function summarizeByUser(events: Array<ProcessedEvent>): Array<UserSummary> {
+  // In a real app, this would use a Map — simplified for demo
+  const alice: UserSummary = { userId: "alice", eventCount: 2, lastSeen: 1003 };
+  const bob: UserSummary = { userId: "bob", eventCount: 1, lastSeen: 1002 };
+  return [alice, bob];
+}
+
+function main() {
+  const events: Array<RawEvent> = [
+    { timestamp: 1000, kind: "login", payload: "{}", userId: "alice" },
+    { timestamp: 1001, kind: "heartbeat", payload: "{}", userId: "alice" },
+    { timestamp: 1002, kind: "purchase", payload: "{\"item\":\"widget\"}", userId: "bob" },
+    { timestamp: 1003, kind: "logout", payload: "{}", userId: "alice" },
+  ];
+
+  console.log(`Raw events: ${events.length}`);
+
+  const processed = processEvents(events);
+  console.log(`Processed events: ${processed.length} (heartbeats filtered)`);
+
+  for (const e of processed) {
+    console.log(`  [${e.timestamp}] ${e.userId}: ${e.eventType}`);
+  }
+
+  const summaries = summarizeByUser(processed);
+  console.log("\nUser summaries:");
+  for (const s of summaries) {
+    console.log(`  ${s.userId}: ${s.eventCount} events, last seen ${s.lastSeen}`);
+  }
+}

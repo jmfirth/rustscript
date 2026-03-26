@@ -1,0 +1,31 @@
+import { Command } from "clap";
+
+/** A file search utility — the kind of CLI tool a TS dev builds when they need performance */
+
+type SearchResult = {
+  path: string,
+  line: u32,
+  content: string,
+}
+
+function formatResult(result: SearchResult): string {
+  return `${result.path}:${result.line}: ${result.content.trim()}`;
+}
+
+function main() {
+  const results: Array<SearchResult> = [
+    { path: "src/main.rs", line: 10, content: "  fn main() {" },
+    { path: "src/lib.rs", line: 25, content: "  pub fn search(query: &str) {" },
+    { path: "README.md", line: 3, content: "A fast file search tool" },
+  ];
+
+  console.log(`Found ${results.length} matches:`);
+  console.log("");
+
+  for (const result of results) {
+    console.log(formatResult(result));
+  }
+
+  const rustFiles = results.filter(r => r.path.endsWith(".rs"));
+  console.log(`\n${rustFiles.length} matches in Rust files`);
+}
