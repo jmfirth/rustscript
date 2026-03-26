@@ -128,6 +128,13 @@ pub fn resolve_type_annotation(
             let inner_ty = resolve_type_annotation(inner, diagnostics);
             Type::ArcMutex(Box::new(inner_ty))
         }
+        ast::TypeKind::Tuple(types) => {
+            let resolved: Vec<Type> = types
+                .iter()
+                .map(|t| resolve_type_annotation(t, diagnostics))
+                .collect();
+            Type::Tuple(resolved)
+        }
     }
 }
 
@@ -240,6 +247,20 @@ pub fn resolve_type_annotation_with_generics(
                 diagnostics,
             );
             Type::ArcMutex(Box::new(inner_ty))
+        }
+        ast::TypeKind::Tuple(types) => {
+            let resolved: Vec<Type> = types
+                .iter()
+                .map(|t| {
+                    resolve_type_annotation_with_generics(
+                        t,
+                        registry,
+                        generic_param_names,
+                        diagnostics,
+                    )
+                })
+                .collect();
+            Type::Tuple(resolved)
         }
     }
 }

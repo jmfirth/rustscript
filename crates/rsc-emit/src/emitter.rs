@@ -1388,6 +1388,20 @@ impl Emitter {
                 self.emit_expr(base);
                 self.write(" }");
             }
+            RustExprKind::Tuple(elements) => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(elem);
+                }
+                self.write(")");
+            }
+            RustExprKind::TupleField { object, index } => {
+                self.emit_expr(object);
+                self.write(&format!(".{index}"));
+            }
         }
     }
 

@@ -34,6 +34,7 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             Box::new(type_to_rust_type(err)),
         ),
         Type::ArcMutex(inner) => RustType::ArcMutex(Box::new(type_to_rust_type(inner))),
+        Type::Tuple(types) => RustType::Tuple(types.iter().map(type_to_rust_type).collect()),
         Type::Unit | Type::Error => RustType::Unit,
     }
 }
@@ -195,6 +196,34 @@ mod tests {
         assert_eq!(
             type_to_rust_type(&Type::ArcMutex(Box::new(Type::String))),
             RustType::ArcMutex(Box::new(RustType::String))
+        );
+    }
+
+    #[test]
+    fn test_bridge_tuple_type_produces_tuple() {
+        assert_eq!(
+            type_to_rust_type(&Type::Tuple(vec![
+                Type::String,
+                Type::Primitive(PrimitiveType::I32)
+            ])),
+            RustType::Tuple(vec![RustType::String, RustType::I32])
+        );
+    }
+
+    #[test]
+    fn test_bridge_nested_tuple_type_produces_nested_tuple() {
+        assert_eq!(
+            type_to_rust_type(&Type::Tuple(vec![
+                Type::String,
+                Type::Tuple(vec![
+                    Type::Primitive(PrimitiveType::I32),
+                    Type::Primitive(PrimitiveType::Bool)
+                ])
+            ])),
+            RustType::Tuple(vec![
+                RustType::String,
+                RustType::Tuple(vec![RustType::I32, RustType::Bool])
+            ])
         );
     }
 }

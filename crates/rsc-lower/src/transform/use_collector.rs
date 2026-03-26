@@ -202,6 +202,11 @@ fn scan_type_for_arc_mutex(ty: &RustType, needs_arc_mutex: &mut bool) {
             scan_type_for_arc_mutex(ok, needs_arc_mutex);
             scan_type_for_arc_mutex(err, needs_arc_mutex);
         }
+        RustType::Tuple(types) => {
+            for ty in types {
+                scan_type_for_arc_mutex(ty, needs_arc_mutex);
+            }
+        }
         _ => {}
     }
 }
@@ -302,6 +307,11 @@ fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hash
         RustType::Result(ok, err) => {
             scan_type_for_collections(ok, needs_hashmap, needs_hashset);
             scan_type_for_collections(err, needs_hashmap, needs_hashset);
+        }
+        RustType::Tuple(types) => {
+            for ty in types {
+                scan_type_for_collections(ty, needs_hashmap, needs_hashset);
+            }
         }
         _ => {}
     }
@@ -435,7 +445,7 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
             }
         }
-        RustExprKind::VecLit(elems) => {
+        RustExprKind::VecLit(elems) | RustExprKind::Tuple(elems) => {
             for elem in elems {
                 scan_expr_for_collections(elem, needs_hashmap, needs_hashset);
             }
@@ -485,7 +495,7 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(val, needs_hashmap, needs_hashset);
             }
         }
-        RustExprKind::FieldAccess { object, .. } => {
+        RustExprKind::FieldAccess { object, .. } | RustExprKind::TupleField { object, .. } => {
             scan_expr_for_collections(object, needs_hashmap, needs_hashset);
         }
         RustExprKind::IntLit(_)

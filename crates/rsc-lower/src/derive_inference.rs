@@ -97,6 +97,7 @@ fn supports_partial_eq(ty: &RustType) -> bool {
         RustType::Generic(base, args) => {
             supports_partial_eq(base) && args.iter().all(supports_partial_eq)
         }
+        RustType::Tuple(types) => types.iter().all(supports_partial_eq),
         RustType::TypeParam(_)
         | RustType::ImplFn(_, _)
         | RustType::SelfType
@@ -130,6 +131,7 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::SelfType
         | RustType::Infer
         | RustType::ArcMutex(_) => false,
+        RustType::Tuple(types) => types.iter().all(supports_eq),
         RustType::Option(inner) => supports_eq(inner),
         RustType::Result(ok, err) => supports_eq(ok) && supports_eq(err),
         RustType::Generic(base, args) => supports_eq(base) && args.iter().all(supports_eq),

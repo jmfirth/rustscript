@@ -32,6 +32,8 @@ pub enum Type {
     TypeVar(String),
     /// `Arc<Mutex<T>>` — from `shared<T>`.
     ArcMutex(Box<Type>),
+    /// A tuple type: `(T1, T2, ...)` — from `[T1, T2]`.
+    Tuple(Vec<Type>),
     /// Type could not be resolved — used for error recovery.
     Error,
 }

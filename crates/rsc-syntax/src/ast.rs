@@ -510,6 +510,9 @@ pub enum TypeKind {
     /// A shared type: `shared<T>` in `RustScript`.
     /// Lowers to `Arc<Mutex<T>>` in Rust.
     Shared(Box<TypeAnnotation>),
+    /// A tuple type: `[string, i32, bool]` in `RustScript`.
+    /// Lowers to `(String, i32, bool)` in Rust.
+    Tuple(Vec<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
@@ -690,6 +693,8 @@ pub struct ArrayDestructureStmt {
     pub binding: VarBinding,
     /// The element bindings being extracted (positional).
     pub elements: Vec<ArrayDestructureElement>,
+    /// Optional type annotation for the tuple: `[string, i32]`.
+    pub type_ann: Option<TypeAnnotation>,
     /// The initializer expression being destructured.
     pub init: Expr,
     /// The span covering the entire array destructuring statement.

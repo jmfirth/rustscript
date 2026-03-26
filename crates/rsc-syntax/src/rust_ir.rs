@@ -404,6 +404,9 @@ pub enum RustType {
     /// `Arc<Mutex<T>>` — from `shared<T>`.
     /// Keeps the inner type explicit for derive analysis and display.
     ArcMutex(Box<RustType>),
+    /// Tuple type: `(T1, T2, ...)`.
+    /// Produced by lowering `[T1, T2]` tuple type annotations.
+    Tuple(Vec<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -448,6 +451,16 @@ impl std::fmt::Display for RustType {
             Self::SelfType => "Self",
             Self::Infer => "_",
             Self::ArcMutex(inner) => return write!(f, "Arc<Mutex<{inner}>>"),
+            Self::Tuple(types) => {
+                write!(f, "(")?;
+                for (i, ty) in types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{ty}")?;
+                }
+                return write!(f, ")");
+            }
         };
         f.write_str(s)
     }
@@ -1056,6 +1069,17 @@ pub enum RustExprKind {
         /// The base expression (cloned at runtime).
         base: Box<RustExpr>,
     },
+    /// Tuple construction: `(a, b, c)`.
+    /// Produced by lowering array literals in tuple type context.
+    Tuple(Vec<RustExpr>),
+    /// Tuple field access: `expr.0`, `expr.1`, etc.
+    /// Produced by lowering `expr[0]` on a tuple-typed value.
+    TupleField {
+        /// The tuple expression.
+        object: Box<RustExpr>,
+        /// The field index (0-based).
+        index: usize,
+    },
 }
 
 /// A single intermediate iterator operation in a chain.
@@ -1424,5 +1448,26 @@ mod tests {
         );
         let ty = RustType::ArcMutex(Box::new(inner));
         assert_eq!(ty.to_string(), "Arc<Mutex<Vec<i32>>>");
+    }
+
+    #[test]
+    fn test_rust_type_tuple_display_two_elements() {
+        let ty = RustType::Tuple(vec![RustType::String, RustType::I32]);
+        assert_eq!(ty.to_string(), "(String, i32)");
+    }
+
+    #[test]
+    fn test_rust_type_tuple_display_three_elements() {
+        let ty = RustType::Tuple(vec![RustType::String, RustType::I32, RustType::Bool]);
+        assert_eq!(ty.to_string(), "(String, i32, bool)");
+    }
+
+    #[test]
+    fn test_rust_type_tuple_display_nested() {
+        let ty = RustType::Tuple(vec![
+            RustType::String,
+            RustType::Tuple(vec![RustType::I32, RustType::Bool]),
+        ]);
+        assert_eq!(ty.to_string(), "(String, (i32, bool))");
     }
 }

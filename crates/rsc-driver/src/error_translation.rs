@@ -197,6 +197,9 @@ fn translate_type_names(input: &str) -> String {
     output = translate_arc_mutex_type(&output);
     output = translate_box_dyn_type(&output);
 
+    // 4c. Tuple types: `(String, i32)` → `[string, i32]`
+    output = translate_tuple_type(&output);
+
     // 5. impl Trait (after Fn translations to avoid double-matching)
     output = translate_impl_trait(&output);
 
@@ -355,6 +358,96 @@ fn translate_box_dyn_type(input: &str) -> String {
 
     result.push_str(remaining);
     result
+}
+
+/// Translate Rust tuple types `(String, i32)` → `[string, i32]`.
+///
+/// Matches tuples that appear in type contexts — parenthesized comma-separated types.
+/// Each element is recursively translated via [`translate_type_names`].
+fn translate_tuple_type(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.char_indices().peekable();
+    let mut last_end = 0;
+
+    while let Some(&(i, ch)) = chars.peek() {
+        if ch == '(' {
+            // Check if this looks like a tuple type (has a comma inside balanced parens)
+            // but NOT a function type (preceded by `Fn`, `FnMut`, `FnOnce`, or `=>`)
+            let before = &input[..i];
+            let is_fn_type = before.ends_with("Fn")
+                || before.ends_with("FnMut")
+                || before.ends_with("FnOnce")
+                || before.ends_with("fn");
+
+            if !is_fn_type && let Some(close) = find_balanced_paren(&input[i + 1..]) {
+                let inner = &input[i + 1..i + 1 + close];
+                // Only convert if there's at least one comma (multi-element tuple)
+                if inner.contains(',') {
+                    result.push_str(&input[last_end..i]);
+                    // Split by commas (respecting nesting) and translate each element
+                    let elements = split_type_list(inner);
+                    result.push('[');
+                    for (idx, elem) in elements.iter().enumerate() {
+                        if idx > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&translate_type_names(elem.trim()));
+                    }
+                    result.push(']');
+                    last_end = i + 1 + close + 1;
+                    // Advance past the close paren
+                    for _ in 0..=close {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+        }
+        chars.next();
+    }
+
+    result.push_str(&input[last_end..]);
+    result
+}
+
+/// Find the matching closing `)` for a `(`, respecting nesting.
+///
+/// Returns the index of the closing `)` relative to the start of `input`.
+fn find_balanced_paren(input: &str) -> Option<usize> {
+    let mut depth = 0;
+    for (i, ch) in input.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split a comma-separated type list, respecting nested brackets and parens.
+fn split_type_list(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0;
+    let mut last = 0;
+    for (i, ch) in input.char_indices() {
+        match ch {
+            '(' | '<' | '[' => depth += 1,
+            ')' | '>' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&input[last..i]);
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&input[last..]);
+    parts
 }
 
 /// Replace a generic type like `Vec<T>` → `Array<T>` with balanced bracket matching.
@@ -1083,5 +1176,19 @@ mod tests {
         let input = "found Box<dyn Display>, expected String";
         let result = translate_type_names(input);
         assert_eq!(result, "found Display, expected string");
+    }
+
+    #[test]
+    fn test_translate_tuple_type_to_bracket_syntax() {
+        let input = "expected (String, i32)";
+        let result = translate_type_names(input);
+        assert_eq!(result, "expected [string, i32]");
+    }
+
+    #[test]
+    fn test_translate_tuple_type_three_elements() {
+        let input = "found (String, i32, bool)";
+        let result = translate_type_names(input);
+        assert_eq!(result, "found [string, i32, bool]");
     }
 }
