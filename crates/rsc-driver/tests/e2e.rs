@@ -815,3 +815,109 @@ function main(): void {
     let stdout = String::from_utf8(output.stdout).expect("not utf-8");
     assert_eq!(stdout.trim(), "hello");
 }
+
+// ===========================================================================
+// Task 058: Control Flow Completeness — finally block, === / !== verification
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// finally block runs after successful try
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_finally_runs_after_successful_try() {
+    let source = "\
+function main() {
+  try {
+    console.log(\"try\");
+  } finally {
+    console.log(\"finally\");
+  }
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "try\nfinally");
+}
+
+// ---------------------------------------------------------------------------
+// finally block runs after caught error
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_finally_runs_after_caught_error() {
+    let source = "\
+function riskyOp(): i32 throws string {
+  throw \"oops\";
+}
+function main() {
+  try {
+    const val = riskyOp();
+    console.log(val);
+  } catch (err: string) {
+    console.log(\"caught\");
+  } finally {
+    console.log(\"finally\");
+  }
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "caught\nfinally");
+}
+
+// ---------------------------------------------------------------------------
+// === / !== returns correct boolean for all types
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_strict_eq_integers_returns_correct_bool() {
+    let source = "\
+function main() {
+  const a: i32 = 5;
+  const b: i32 = 5;
+  const c: i32 = 10;
+  console.log(a === b);
+  console.log(a === c);
+  console.log(a !== c);
+  console.log(a !== b);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "true\nfalse\ntrue\nfalse");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_strict_eq_strings_returns_correct_bool() {
+    let source = "\
+function main() {
+  const a: string = \"hello\";
+  const b: string = \"hello\";
+  const c: string = \"world\";
+  console.log(a === b);
+  console.log(a === c);
+  console.log(a !== c);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "true\nfalse\ntrue");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_strict_eq_booleans_returns_correct_bool() {
+    let source = "\
+function main() {
+  const a: bool = true;
+  const b: bool = true;
+  const c: bool = false;
+  console.log(a === b);
+  console.log(a === c);
+  console.log(a !== c);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "true\nfalse\ntrue");
+}

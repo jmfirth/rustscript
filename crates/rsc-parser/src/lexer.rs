@@ -694,6 +694,7 @@ impl<'a> Lexer<'a> {
             "throws" => TokenKind::Throws,
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
+            "finally" => TokenKind::Finally,
             "move" => TokenKind::Move,
             "interface" => TokenKind::Interface,
             "for" => TokenKind::For,
@@ -1301,6 +1302,14 @@ mod tests {
         let tokens = tokenize("catch");
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].kind, TokenKind::Catch);
+    }
+
+    // `finally` keyword tokenizes correctly
+    #[test]
+    fn test_lexer_finally_keyword_produces_finally_token() {
+        let tokens = tokenize("finally");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Finally);
     }
 
     // ---------------------------------------------------------------

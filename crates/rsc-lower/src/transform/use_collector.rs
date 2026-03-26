@@ -385,6 +385,9 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(&match_result.expr, needs_hashmap, needs_hashset);
             scan_block_for_collections(&match_result.ok_block, needs_hashmap, needs_hashset);
             scan_block_for_collections(&match_result.err_block, needs_hashmap, needs_hashset);
+            for s in &match_result.finally_stmts {
+                scan_stmt_for_collections(s, needs_hashmap, needs_hashset);
+            }
         }
         RustStmt::ForIn(for_in) => {
             scan_expr_for_collections(&for_in.iterable, needs_hashmap, needs_hashset);
@@ -396,6 +399,12 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
         }
         RustStmt::TupleDestructure(td) => {
             scan_expr_for_collections(&td.init, needs_hashmap, needs_hashset);
+        }
+        RustStmt::TryFinally(tf) => {
+            scan_block_for_collections(&tf.try_block, needs_hashmap, needs_hashset);
+            for s in &tf.finally_stmts {
+                scan_stmt_for_collections(s, needs_hashmap, needs_hashset);
+            }
         }
         RustStmt::Break(_) | RustStmt::Continue(_) | RustStmt::RawRust(_) => {}
     }

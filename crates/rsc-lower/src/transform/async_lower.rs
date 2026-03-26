@@ -52,7 +52,15 @@ fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
             expr_needs_async_runtime(&f.iterable) || block_needs_async_runtime(&f.body)
         }
         ast::Stmt::TryCatch(tc) => {
-            block_needs_async_runtime(&tc.try_block) || block_needs_async_runtime(&tc.catch_block)
+            block_needs_async_runtime(&tc.try_block)
+                || tc
+                    .catch_block
+                    .as_ref()
+                    .is_some_and(block_needs_async_runtime)
+                || tc
+                    .finally_block
+                    .as_ref()
+                    .is_some_and(block_needs_async_runtime)
         }
         _ => false,
     }
@@ -111,7 +119,9 @@ fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
         ast::Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
         ast::Stmt::For(f) => expr_contains_await(&f.iterable) || block_contains_await(&f.body),
         ast::Stmt::TryCatch(tc) => {
-            block_contains_await(&tc.try_block) || block_contains_await(&tc.catch_block)
+            block_contains_await(&tc.try_block)
+                || tc.catch_block.as_ref().is_some_and(block_contains_await)
+                || tc.finally_block.as_ref().is_some_and(block_contains_await)
         }
         _ => false,
     }

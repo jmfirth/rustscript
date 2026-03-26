@@ -9,7 +9,7 @@ use rsc_syntax::rust_ir::{
     RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
     RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt,
     RustMethod, RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
-    RustTraitImplBlock, RustType, RustTypeParam,
+    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam,
 };
 use rsc_syntax::span::Span;
 
@@ -772,6 +772,12 @@ impl Emitter {
                 self.writeln("continue;");
             }
             RustStmt::RawRust(code) => self.emit_raw_rust(code, true),
+            RustStmt::TryFinally(tf) => {
+                self.set_span(tf.span);
+                self.write_indent();
+                self.emit_try_finally(tf);
+                self.newline();
+            }
         }
     }
 
@@ -823,7 +829,18 @@ impl Emitter {
     }
 
     /// Emit a `match` on `Result` for try/catch lowering.
+    ///
+    /// When `finally_stmts` is non-empty, the match and finally are wrapped in
+    /// a block so finally runs after the match regardless of which arm executed.
     fn emit_match_result(&mut self, m: &RustMatchResultStmt) {
+        let has_finally = !m.finally_stmts.is_empty();
+
+        if has_finally {
+            self.writeln("{");
+            self.push_indent();
+            self.write_indent();
+        }
+
         self.write("match ");
         self.emit_expr(&m.expr);
         self.writeln(" {");
@@ -844,6 +861,35 @@ impl Emitter {
         self.write(") => ");
         self.emit_block(&m.err_block);
         self.newline();
+
+        self.pop_indent();
+        self.write_indent();
+        self.write("}");
+
+        if has_finally {
+            self.newline();
+            for stmt in &m.finally_stmts {
+                self.emit_stmt(stmt);
+            }
+            self.pop_indent();
+            self.write_indent();
+            self.write("}");
+        }
+    }
+
+    /// Emit a `try {} finally {}` block (no catch).
+    ///
+    /// Emits the try body followed by the finally statements in a single block.
+    fn emit_try_finally(&mut self, tf: &RustTryFinallyStmt) {
+        self.writeln("{");
+        self.push_indent();
+
+        for stmt in &tf.try_block.stmts {
+            self.emit_stmt(stmt);
+        }
+        for stmt in &tf.finally_stmts {
+            self.emit_stmt(stmt);
+        }
 
         self.pop_indent();
         self.write_indent();
@@ -3030,6 +3076,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                finally_stmts: vec![],
                 span: None,
             })],
             None,

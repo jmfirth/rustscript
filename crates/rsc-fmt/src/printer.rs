@@ -647,18 +647,24 @@ impl Printer {
         self.dedent();
     }
 
-    /// Print a try/catch statement.
+    /// Print a try/catch/finally statement.
     fn print_try_catch_stmt(&mut self, t: &TryCatchStmt) {
         self.write("try ");
         self.print_block(&t.try_block);
-        self.write(" catch (");
-        self.write(&t.catch_binding.name);
-        if let Some(ty) = &t.catch_type {
-            self.write(": ");
-            self.print_type_annotation(ty);
+        if let (Some(binding), Some(block)) = (&t.catch_binding, &t.catch_block) {
+            self.write(" catch (");
+            self.write(&binding.name);
+            if let Some(ty) = &t.catch_type {
+                self.write(": ");
+                self.print_type_annotation(ty);
+            }
+            self.write(") ");
+            self.print_block(block);
         }
-        self.write(") ");
-        self.print_block(&t.catch_block);
+        if let Some(finally_block) = &t.finally_block {
+            self.write(" finally ");
+            self.print_block(finally_block);
+        }
         self.newline();
     }
 
