@@ -1,0 +1,99 @@
+{
+  "name": "rustscript",
+  "displayName": "RustScript",
+  "description": "RustScript language support — Write TypeScript, Ship Rust",
+  "version": "0.1.0",
+  "publisher": "rustscript",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rustscript/rsc"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:rustscript"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "rustscript",
+        "aliases": [
+          "RustScript",
+          "rustscript",
+          "rts"
+        ],
+        "extensions": [
+          ".rts"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/rts-icon.png",
+          "dark": "./icons/rts-icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rustscript",
+        "scopeName": "source.rustscript",
+        "path": "./syntaxes/rustscript.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "RustScript",
+      "properties": {
+        "rustscript.serverPath": {
+          "type": "string",
+          "default": "rsc",
+          "description": "Path to the rsc binary"
+        },
+        "rustscript.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the RustScript language server"
+        },
+        "rustscript.lsp.args": {
+          "type": "array",
+          "default": [
+            "lsp"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to the rsc binary to start the language server"
+        },
+        "rustscript.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication between VS Code and the RustScript language server"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run compile -- --watch",
+    "lint": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0",
+    "esbuild": "^0.20.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}
