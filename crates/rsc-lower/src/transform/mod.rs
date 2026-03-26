@@ -1036,6 +1036,12 @@ impl Transform {
                     .copied()
                     .unwrap_or(ParamMode::Owned);
 
+                // Borrowed parameters are already references — mark them so
+                // downstream lowering (e.g., for-of) avoids double-borrowing.
+                if matches!(mode, ParamMode::Borrowed | ParamMode::BorrowedStr) {
+                    ctx.mark_as_reference(p.name.name.clone());
+                }
+
                 RustParam {
                     name: p.name.name.clone(),
                     ty,
@@ -1107,6 +1113,13 @@ impl Transform {
 
         // Lower the body
         let body = self.lower_block(&f.body, ctx, &use_map, 0, &reassigned);
+
+        // Unmark borrowed parameters so their names don't leak into sibling functions.
+        for param in &params {
+            if matches!(param.mode, ParamMode::Borrowed | ParamMode::BorrowedStr) {
+                ctx.unmark_reference(&param.name);
+            }
+        }
 
         ctx.set_return_type(None);
         ctx.set_fn_throws(false);

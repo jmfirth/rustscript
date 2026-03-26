@@ -570,6 +570,14 @@ impl Transform {
     ) -> RustForInStmt {
         let iterable = self.lower_expr(&for_of.iterable, ctx, use_map, stmt_index);
 
+        // Check if the iterable is already a reference (e.g., a borrowed parameter).
+        // If so, the emitter must skip adding `&` to avoid `&&Vec<T>`.
+        let iterable_is_borrowed = if let ast::ExprKind::Ident(ref ident) = for_of.iterable.kind {
+            ctx.is_reference_variable(&ident.name)
+        } else {
+            false
+        };
+
         // Determine if the element type is Copy to use a deref pattern.
         // For `for n in &items` where items: Vec<i32>, we emit `for &n in &items`
         // so that n has type i32 instead of &i32.
@@ -600,6 +608,7 @@ impl Transform {
             iterable,
             body,
             deref_pattern,
+            iterable_is_borrowed,
             span: Some(for_of.span),
         }
     }

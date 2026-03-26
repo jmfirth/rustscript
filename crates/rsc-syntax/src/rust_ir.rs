@@ -702,6 +702,9 @@ pub struct RustForInStmt {
     /// instead of a plain variable pattern (`for n in &items`).
     /// Set to true for Copy element types so the loop variable has value type.
     pub deref_pattern: bool,
+    /// Whether the iterable is already a reference (e.g., a borrowed parameter).
+    /// When true, the emitter omits the `&` prefix to avoid double-borrowing (`&&Vec<T>`).
+    pub iterable_is_borrowed: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
