@@ -317,7 +317,7 @@ struct Event {
 fn countErrors(events: &Vec<Event>) -> String {
     let errors = events.iter().filter(|e| e.kind == "error".to_string()).cloned().collect::<Vec<_>>();
     let infos = events.iter().filter(|e| e.kind == "info".to_string()).cloned().collect::<Vec<_>>();
-    return format!("Errors: {}, Info: {}", errors.len(), infos.len());
+    return format!("Errors: {}, Info: {}", errors.len() as i64, infos.len() as i64);
 }
 
 fn main() {
@@ -563,7 +563,7 @@ fn validate(config: DatabaseConfig) -> Option<String> {
     if config.port == 0 {
         return Some("port must be non-zero".to_string());
     }
-    if config.host.len() == 0 {
+    if config.host.len() as i64 == 0 {
         return Some("host cannot be empty".to_string());
     }
     return None;
@@ -656,7 +656,7 @@ fn main() {
     for result in &results {
         println!("{}", result);
     }
-    println!("{}", format!("Total: {} items", results.len()));
+    println!("{}", format!("Total: {} items", results.len() as i64));
 }
 "#;
 

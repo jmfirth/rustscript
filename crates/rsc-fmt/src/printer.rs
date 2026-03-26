@@ -144,6 +144,7 @@ impl Printer {
             ItemKind::ReExport(re) => self.print_re_export(re),
             ItemKind::Class(c) => self.print_class_def(c),
             ItemKind::RustBlock(rb) => self.print_rust_block(rb),
+            ItemKind::Const(decl) => self.print_var_decl(decl),
         }
     }
 

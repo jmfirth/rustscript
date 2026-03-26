@@ -335,7 +335,7 @@ function main(): void {
 
     let expected = "\
 fn len(s: &str) -> i64 {
-    return s.len();
+    return s.len() as i64;
 }
 
 fn main() {

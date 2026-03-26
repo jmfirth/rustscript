@@ -5,11 +5,11 @@
 //! output, records the corresponding `.rts` [`Span`] (if any).
 
 use rsc_syntax::rust_ir::{
-    IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustElse, RustEnumDef,
-    RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
-    RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt, RustMethod,
-    RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
-    RustType, RustTypeParam,
+    IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustConstItem, RustElse,
+    RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
+    RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt,
+    RustMethod, RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
+    RustTraitImplBlock, RustType, RustTypeParam,
 };
 use rsc_syntax::span::Span;
 
@@ -154,7 +154,24 @@ impl Emitter {
             RustItem::Impl(imp) => self.emit_impl_block(imp),
             RustItem::TraitImpl(ti) => self.emit_trait_impl_block(ti),
             RustItem::RawRust(code) => self.emit_raw_rust(code, false),
+            RustItem::Const(c) => self.emit_const_item(c),
         }
+    }
+
+    /// Emit a module-level `const` declaration.
+    fn emit_const_item(&mut self, c: &RustConstItem) {
+        self.set_span(c.span);
+        self.write_indent();
+        if c.public {
+            self.write("pub ");
+        }
+        self.write("const ");
+        self.write(&c.name);
+        self.write(": ");
+        self.write(&c.ty.to_string());
+        self.write(" = ");
+        self.emit_expr(&c.init);
+        self.writeln(";");
     }
 
     /// Emit a struct definition.
@@ -1166,6 +1183,11 @@ impl Emitter {
                 self.emit_expr(inner);
                 self.write("))");
             }
+            RustExprKind::Cast(expr, ty) => {
+                self.emit_expr(expr);
+                self.write(" as ");
+                self.write(&ty.to_string());
+            }
         }
     }
 
@@ -1221,7 +1243,10 @@ impl Emitter {
                 self.write(", ");
                 self.write(item_param);
                 self.write("| ");
-                self.emit_expr(body);
+                match body {
+                    RustClosureBody::Expr(expr) => self.emit_expr(expr),
+                    RustClosureBody::Block(block) => self.emit_block(block),
+                }
                 self.write(")");
             }
             IteratorTerminal::Find(param, body) => {
@@ -3952,11 +3977,11 @@ fn main() {
                 init: Box::new(syn(RustExprKind::IntLit(0))),
                 acc_param: "acc".into(),
                 item_param: "x".into(),
-                body: Box::new(syn(RustExprKind::Binary {
+                body: RustClosureBody::Expr(Box::new(syn(RustExprKind::Binary {
                     op: RustBinaryOp::Add,
                     left: Box::new(ident("acc")),
                     right: Box::new(ident("x")),
-                })),
+                }))),
             },
         });
         let file = wrap_expr_in_file(chain);

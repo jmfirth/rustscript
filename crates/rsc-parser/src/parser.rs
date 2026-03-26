@@ -364,6 +364,7 @@ impl<'src> Parser<'src> {
             TokenKind::Import => self.parse_import_decl(),
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
+            TokenKind::Const | TokenKind::Let => self.parse_top_level_const(),
             _ => {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
@@ -377,6 +378,9 @@ impl<'src> Parser<'src> {
                         "unexpected token",
                     ),
                 );
+                // Advance past the unexpected token to prevent infinite loops
+                // when synchronize() stops on the same token.
+                self.advance();
                 self.synchronize();
                 None
             }
@@ -508,6 +512,12 @@ impl<'src> Parser<'src> {
                     exported: true,
                     span,
                 })
+            }
+            TokenKind::Const | TokenKind::Let => {
+                let mut item = self.parse_top_level_const()?;
+                item.exported = true;
+                item.span = start.merge(item.span);
+                Some(item)
             }
             _ => {
                 let current = self.current_token().clone();
@@ -3133,6 +3143,64 @@ impl<'src> Parser<'src> {
         let span = rust_block.span;
         Some(Item {
             kind: ItemKind::RustBlock(rust_block),
+            exported: false,
+            span,
+        })
+    }
+
+    /// Parse a top-level `const` or `let` declaration as a module-level item.
+    ///
+    /// Syntax: `const name: Type = expr;` or `let name: Type = expr;`
+    /// Produces an `ItemKind::Const(VarDecl)`.
+    fn parse_top_level_const(&mut self) -> Option<Item> {
+        let keyword = self.advance();
+        let start = keyword.span;
+        let binding = match keyword.kind {
+            TokenKind::Const => VarBinding::Const,
+            _ => VarBinding::Let,
+        };
+
+        let Some(name) = self.parse_ident() else {
+            self.synchronize();
+            return None;
+        };
+
+        // Optional type annotation
+        let type_ann = if self.eat(&TokenKind::Colon) {
+            let Some(t) = self.parse_type_annotation() else {
+                self.synchronize();
+                return None;
+            };
+            Some(t)
+        } else {
+            None
+        };
+
+        if self.expect(&TokenKind::Eq).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        let Some(init) = self.parse_expr() else {
+            self.synchronize();
+            return None;
+        };
+
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            init.span
+        };
+
+        let span = start.merge(end);
+        Some(Item {
+            kind: ItemKind::Const(VarDecl {
+                binding,
+                name,
+                type_ann,
+                init,
+                span,
+            }),
             exported: false,
             span,
         })

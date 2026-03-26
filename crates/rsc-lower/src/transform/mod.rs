@@ -17,9 +17,9 @@ use std::collections::HashSet;
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustEnumDef, RustEnumVariant,
-    RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam, RustStructDef, RustTraitDef,
-    RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+    ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
+    RustEnumVariant, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam, RustStructDef,
+    RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -96,7 +96,8 @@ impl Transform {
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
-                | ast::ItemKind::RustBlock(_) => {}
+                | ast::ItemKind::RustBlock(_)
+                | ast::ItemKind::Const(_) => {}
             }
         }
 
@@ -164,6 +165,10 @@ impl Transform {
                 }
                 ast::ItemKind::RustBlock(rb) => {
                     items.push(RustItem::RawRust(rb.code.clone()));
+                }
+                ast::ItemKind::Const(decl) => {
+                    let lowered = self.lower_top_level_const(decl, exported, &mut ctx);
+                    items.push(lowered);
                 }
             }
         }
@@ -535,6 +540,43 @@ impl Transform {
         );
     }
 
+    /// Lower a top-level `const`/`let` declaration to a Rust `const` item.
+    ///
+    /// Resolves the type from annotation or literal inference, then lowers
+    /// the initializer expression. Produces a `RustItem::Const`.
+    fn lower_top_level_const(
+        &self,
+        decl: &ast::VarDecl,
+        exported: bool,
+        ctx: &mut LoweringContext,
+    ) -> RustItem {
+        let mut diags = Vec::new();
+        let ty = if let Some(ann) = &decl.type_ann {
+            let ty_inner = rsc_typeck::resolve::resolve_type_annotation_with_registry(
+                ann,
+                &self.type_registry,
+                &mut diags,
+            );
+            rsc_typeck::bridge::type_to_rust_type(&ty_inner)
+        } else {
+            rsc_typeck::resolve::infer_literal_rust_type(&decl.init).unwrap_or(RustType::I64)
+        };
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        let use_map = UseMap::empty();
+        let init = self.lower_expr(&decl.init, ctx, &use_map, 0);
+
+        RustItem::Const(RustConstItem {
+            public: exported,
+            name: decl.name.name.clone(),
+            ty,
+            init,
+            span: Some(decl.span),
+        })
+    }
+
     /// Lower a function declaration.
     ///
     /// Performs two-pass analysis: first finds reassigned variables and builds
@@ -851,13 +893,21 @@ fn element_type_is_copy(ty: &RustType) -> bool {
 fn extract_named_type(ty: &RustType) -> Option<String> {
     match ty {
         RustType::Named(name) => Some(name.clone()),
-        RustType::Generic(base, _) => {
+        RustType::Generic(base, args) => {
             if let RustType::Named(name) = base.as_ref() {
+                // For collection types (Vec, HashSet), extract the element type name
+                // so struct literal context resolves to the element type, not the container.
+                // e.g., Vec<Todo> → "Todo", not "Vec"
+                if (name == "Vec" || name == "HashSet") && args.len() == 1 {
+                    return extract_named_type(&args[0]);
+                }
                 Some(name.clone())
             } else {
                 None
             }
         }
+        RustType::Option(inner) => extract_named_type(inner),
+        RustType::Result(ok, _) => extract_named_type(ok),
         _ => None,
     }
 }

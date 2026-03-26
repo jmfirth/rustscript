@@ -267,7 +267,7 @@ async function main() {
 #[tokio::main]
 async fn main() {
     let names = getNames().await;
-    println!("{}", names.len());
+    println!("{}", names.len() as i64);
 }
 "#;
 
@@ -435,7 +435,7 @@ fn test_snapshot_p2_string_split_method() {
 
     let expected = r#"fn main() {
     let parts = "a,b,c".to_string().split(",").map(|s| s.to_string()).collect::<Vec<String>>();
-    println!("{}", parts.len());
+    println!("{}", parts.len() as i64);
 }
 "#;
 
@@ -586,7 +586,7 @@ fn test_snapshot_p2_string_length_property() {
 
     let expected = r#"fn main() {
     let name = "Alice".to_string();
-    let len = name.len();
+    let len = name.len() as i64;
     println!("{}", len);
 }
 "#;
