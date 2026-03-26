@@ -227,6 +227,15 @@ impl Transform {
 
         ctx.set_struct_type_name(None);
 
+        // If the init expression is an iterator .find() chain, the result type is
+        // Option<T>. Override the variable's type so that returning this variable
+        // from an Option-returning function doesn't double-wrap in Some().
+        let ty = if returns_option(&init, ctx) {
+            RustType::Option(Box::new(ty))
+        } else {
+            ty
+        };
+
         // When the target type is a generated union, wrap the init with `.into()`
         // so the From impl converts the concrete type to the union enum.
         let init = if matches!(&ty, RustType::GeneratedUnion { .. }) {
