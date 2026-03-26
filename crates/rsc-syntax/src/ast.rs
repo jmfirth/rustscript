@@ -646,16 +646,36 @@ pub struct WhileStmt {
 
 /// A destructuring declaration: `const { name, age } = user;`.
 ///
-/// Lowers to Rust `let TypeName { field1, field2, .. } = expr;`.
+/// Supports rename (`{ name: n }`) and defaults (`{ name = "x" }`).
+/// Lowers to Rust `let TypeName { field1, field2, .. } = expr;` when simple,
+/// or individual `let` statements when renames or defaults are present.
 #[derive(Debug, Clone)]
 pub struct DestructureStmt {
     /// Whether this is a `const` or `let` binding.
     pub binding: VarBinding,
-    /// The field names being extracted.
-    pub fields: Vec<Ident>,
+    /// The fields being extracted, with optional rename and default.
+    pub fields: Vec<DestructureField>,
     /// The initializer expression being destructured.
     pub init: Expr,
     /// The span covering the entire destructuring statement.
+    pub span: Span,
+}
+
+/// A destructured field: `name`, `name: localName`, or `name = defaultExpr`.
+///
+/// Represents a single field in an object destructuring pattern. The field
+/// name is the property being accessed on the source object. The optional
+/// local name provides a rename for the binding. The optional default value
+/// is used when the field type is `Option<T>`.
+#[derive(Debug, Clone)]
+pub struct DestructureField {
+    /// The field being accessed on the source object.
+    pub field_name: Ident,
+    /// The local binding name. If `None`, same as `field_name`.
+    pub local_name: Option<Ident>,
+    /// Default value when field is `None`/missing (only applies to `Option<T>` fields).
+    pub default_value: Option<Box<Expr>>,
+    /// The span covering this field entry.
     pub span: Span,
 }
 
@@ -663,17 +683,28 @@ pub struct DestructureStmt {
 ///
 /// Lowers to Rust tuple destructuring: `let (a, b) = expr;`.
 /// Used primarily for `Promise.all` results where the concurrent
-/// futures return a tuple.
+/// futures return a tuple. Supports rest elements: `const [first, ...rest] = arr;`.
 #[derive(Debug, Clone)]
 pub struct ArrayDestructureStmt {
     /// Whether this is a `const` or `let` binding.
     pub binding: VarBinding,
-    /// The element names being extracted (positional).
-    pub elements: Vec<Ident>,
+    /// The element bindings being extracted (positional).
+    pub elements: Vec<ArrayDestructureElement>,
     /// The initializer expression being destructured.
     pub init: Expr,
     /// The span covering the entire array destructuring statement.
     pub span: Span,
+}
+
+/// An element in an array destructuring pattern.
+///
+/// Either a single binding (`x`) or a rest binding (`...rest`).
+#[derive(Debug, Clone)]
+pub enum ArrayDestructureElement {
+    /// Single positional binding: `x`.
+    Single(Ident),
+    /// Rest binding: `...rest`. Collects remaining elements.
+    Rest(Ident),
 }
 
 /// A switch statement for pattern matching over enums.

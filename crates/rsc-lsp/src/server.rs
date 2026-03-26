@@ -678,6 +678,8 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+// Statement hover covers all statement kinds including destructure variants
 /// Search statements for hover-relevant nodes at the given position.
 fn find_hover_in_stmts(
     stmts: &[rsc_syntax::ast::Stmt],
@@ -772,6 +774,76 @@ fn find_hover_in_stmts(
                 if let Some(finally_block) = &tc.finally_block
                     && let Some(info) = find_hover_in_stmts(&finally_block.stmts, pos, cache)
                 {
+                    return Some(info);
+                }
+            }
+            Stmt::Destructure(d) => {
+                // Hover on destructure fields: show rename/default info.
+                for field in &d.fields {
+                    if let Some(local) = &field.local_name
+                        && local.span.contains(pos)
+                    {
+                        return Some(format!(
+                            "```rustscript\n(destructure) {} — renamed from `{}`\n```",
+                            local.name, field.field_name.name
+                        ));
+                    }
+                    if field.field_name.span.contains(pos) {
+                        let type_str = if let Some(ci) = cache
+                            && let Some(t) = ci.variable_types.get(&field.field_name.name)
+                        {
+                            t.clone()
+                        } else {
+                            "(inferred)".to_owned()
+                        };
+                        return Some(format!(
+                            "```rustscript\n(destructure field) {}: {type_str}\n```",
+                            field.field_name.name
+                        ));
+                    }
+                    if let Some(default_val) = &field.default_value
+                        && default_val.span.contains(pos)
+                    {
+                        return Some(format!(
+                            "```rustscript\n(default value) for `{}`\n```",
+                            field.field_name.name
+                        ));
+                    }
+                }
+                if let Some(info) = find_hover_in_expr(&d.init, pos, cache) {
+                    return Some(info);
+                }
+            }
+            Stmt::ArrayDestructure(a) => {
+                for elem in &a.elements {
+                    use rsc_syntax::ast::ArrayDestructureElement;
+                    match elem {
+                        ArrayDestructureElement::Rest(ident) => {
+                            if ident.span.contains(pos) {
+                                return Some(format!(
+                                    "```rustscript\n(rest element) ...{}: Array<T>\n```",
+                                    ident.name
+                                ));
+                            }
+                        }
+                        ArrayDestructureElement::Single(ident) => {
+                            if ident.span.contains(pos) {
+                                let type_str = if let Some(ci) = cache
+                                    && let Some(t) = ci.variable_types.get(&ident.name)
+                                {
+                                    t.clone()
+                                } else {
+                                    "(inferred)".to_owned()
+                                };
+                                return Some(format!(
+                                    "```rustscript\n(array element) {}: {type_str}\n```",
+                                    ident.name
+                                ));
+                            }
+                        }
+                    }
+                }
+                if let Some(info) = find_hover_in_expr(&a.init, pos, cache) {
                     return Some(info);
                 }
             }

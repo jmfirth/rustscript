@@ -696,6 +696,8 @@ impl Printer {
     }
 
     /// Print a destructure statement.
+    ///
+    /// Formats rename (`{ name: n }`) and default (`{ name = expr }`) syntax.
     fn print_destructure_stmt(&mut self, d: &DestructureStmt) {
         match d.binding {
             VarBinding::Const => self.write("const "),
@@ -706,15 +708,31 @@ impl Printer {
             if i > 0 {
                 self.write(", ");
             }
-            self.write(&field.name);
+            self.print_destructure_field(field);
         }
         self.write(" } = ");
         self.print_expr(&d.init);
         self.writeln(";");
     }
 
+    /// Print a single destructure field with optional rename and default.
+    fn print_destructure_field(&mut self, field: &rsc_syntax::ast::DestructureField) {
+        self.write(&field.field_name.name);
+        if let Some(local) = &field.local_name {
+            self.write(": ");
+            self.write(&local.name);
+        }
+        if let Some(default_val) = &field.default_value {
+            self.write(" = ");
+            self.print_expr(default_val);
+        }
+    }
+
     /// Print an array destructure statement.
+    ///
+    /// Formats rest elements (`[first, ...rest]`).
     fn print_array_destructure_stmt(&mut self, a: &ArrayDestructureStmt) {
+        use rsc_syntax::ast::ArrayDestructureElement;
         match a.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
@@ -724,7 +742,13 @@ impl Printer {
             if i > 0 {
                 self.write(", ");
             }
-            self.write(&elem.name);
+            match elem {
+                ArrayDestructureElement::Single(ident) => self.write(&ident.name),
+                ArrayDestructureElement::Rest(ident) => {
+                    self.write("...");
+                    self.write(&ident.name);
+                }
+            }
         }
         self.write("] = ");
         self.print_expr(&a.init);

@@ -333,4 +333,56 @@ mod tests {
             "const x = `url: http://example.com`;"
         ));
     }
+
+    // ---------------------------------------------------------------
+    // Task 062: Destructuring completeness formatting
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_format_destructure_rename() {
+        let input = "function foo() { const { name: n, age: a } = user; }";
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("const { name: n, age: a } = user;"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_destructure_default() {
+        let input = r#"function foo() { const { name = "x" } = config; }"#;
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains(r#"const { name = "x" } = config;"#),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_destructure_rename_and_default() {
+        let input = r#"function foo() { const { name: n = "x" } = config; }"#;
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains(r#"const { name: n = "x" } = config;"#),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_array_destructure_rest() {
+        let input = "function foo() { const [first, ...rest] = arr; }";
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("const [first, ...rest] = arr;"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_destructure_roundtrip() {
+        let input = "function foo() {\n  const { name: n, age = 0 } = user;\n}\n";
+        let result = format_source(input).expect("should format");
+        let result2 = format_source(&result).expect("should format again");
+        assert_eq!(result, result2, "round-trip should be stable");
+    }
 }

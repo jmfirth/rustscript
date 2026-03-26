@@ -500,6 +500,9 @@ pub enum RustStmt {
     /// Tuple destructuring: `let (a, b, c) = expr;`.
     /// Produced by lowering `const [a, b] = await Promise.all([...])`.
     TupleDestructure(RustTupleDestructureStmt),
+    /// Destructuring with defaults: individual `let` bindings with `unwrap_or_else`.
+    /// Produced when destructuring fields have default values.
+    DestructureDefaults(RustDestructureDefaultsStmt),
     /// A `break;` statement.
     Break(Option<Span>),
     /// A `continue;` statement.
@@ -606,18 +609,56 @@ pub struct RustForInStmt {
 /// A Rust destructuring let statement.
 ///
 /// Corresponds to `let TypeName { field1, field2, .. } = expr;`.
+/// Supports field renames: `let TypeName { field: local, .. } = expr;`.
 #[derive(Debug, Clone)]
 pub struct RustDestructureStmt {
     /// The struct type name for the destructuring pattern.
     pub type_name: String,
-    /// The field names to extract.
-    pub fields: Vec<String>,
+    /// The fields to extract, each with an optional rename (local binding name).
+    pub fields: Vec<RustDestructureField>,
     /// The initializer expression.
     pub init: RustExpr,
     /// Whether the bindings are `mut`.
     pub mutable: bool,
     /// The source span, if derived from source.
     pub span: Option<Span>,
+}
+
+/// A single field in a Rust struct destructuring pattern.
+///
+/// Represents either `field` or `field: local_name` in a pattern.
+#[derive(Debug, Clone)]
+pub struct RustDestructureField {
+    /// The struct field name being matched.
+    pub field_name: String,
+    /// The local binding name. If different from `field_name`, emits `field: local`.
+    pub local_name: Option<String>,
+}
+
+/// A destructuring-with-defaults statement, emitted as individual `let` bindings.
+///
+/// When destructuring fields have default values, struct pattern destructuring
+/// cannot be used. Instead, each field is extracted individually with
+/// `unwrap_or_else` for `Option` fields.
+#[derive(Debug, Clone)]
+pub struct RustDestructureDefaultsStmt {
+    /// The individual field extractions.
+    pub fields: Vec<RustDestructureDefaultField>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A single field extraction with an optional default value.
+#[derive(Debug, Clone)]
+pub struct RustDestructureDefaultField {
+    /// The local variable name to bind.
+    pub local_name: String,
+    /// The expression to access the field: `source.field_name`.
+    pub access_expr: RustExpr,
+    /// If present, the default value expression for `unwrap_or_else`.
+    pub default_value: Option<RustExpr>,
+    /// Whether the binding is `mut`.
+    pub mutable: bool,
 }
 
 /// A Rust tuple destructuring statement: `let (a, b, c) = expr;`.

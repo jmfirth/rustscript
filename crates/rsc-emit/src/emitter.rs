@@ -751,11 +751,39 @@ impl Emitter {
                     if i > 0 {
                         self.write(", ");
                     }
-                    self.write(field);
+                    if let Some(local) = &field.local_name {
+                        self.write(&field.field_name);
+                        self.write(": ");
+                        self.write(local);
+                    } else {
+                        self.write(&field.field_name);
+                    }
                 }
                 self.write(", .. } = ");
                 self.emit_expr(&destr.init);
                 self.writeln(";");
+            }
+            RustStmt::DestructureDefaults(dd) => {
+                self.set_span(dd.span);
+                for field in &dd.fields {
+                    self.write_indent();
+                    if field.mutable {
+                        self.write("let mut ");
+                    } else {
+                        self.write("let ");
+                    }
+                    self.write(&field.local_name);
+                    self.write(" = ");
+                    if let Some(default_val) = &field.default_value {
+                        self.emit_expr(&field.access_expr);
+                        self.write(".unwrap_or_else(|| ");
+                        self.emit_expr(default_val);
+                        self.write(")");
+                    } else {
+                        self.emit_expr(&field.access_expr);
+                    }
+                    self.writeln(";");
+                }
             }
             RustStmt::TupleDestructure(td) => {
                 self.set_span(td.span);
@@ -1658,12 +1686,13 @@ pub fn emit(file: &RustFile) -> EmitResult {
 mod tests {
     use rsc_syntax::rust_ir::{
         IteratorOp, IteratorTerminal, ParamMode, RustBinaryOp, RustBlock, RustClosureBody,
-        RustClosureParam, RustDestructureStmt, RustElse, RustEnumDef, RustEnumVariant, RustExpr,
-        RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt, RustIfStmt,
-        RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
-        RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt, RustSelfParam, RustStmt,
-        RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam,
-        RustUnaryOp, RustUseDecl, RustWhileStmt, SpreadOp,
+        RustClosureParam, RustDestructureField, RustDestructureStmt, RustElse, RustEnumDef,
+        RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustForInStmt,
+        RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm,
+        RustMatchResultStmt, RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern,
+        RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
+        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
+        SpreadOp,
     };
 
     use super::emit;
@@ -2744,7 +2773,16 @@ fn main() {
             "main",
             vec![RustStmt::Destructure(RustDestructureStmt {
                 type_name: "User".to_owned(),
-                fields: vec!["name".to_owned(), "age".to_owned()],
+                fields: vec![
+                    RustDestructureField {
+                        field_name: "name".to_owned(),
+                        local_name: None,
+                    },
+                    RustDestructureField {
+                        field_name: "age".to_owned(),
+                        local_name: None,
+                    },
+                ],
                 init: ident("user"),
                 mutable: false,
                 span: None,
@@ -2756,6 +2794,110 @@ fn main() {
             output.contains("let User { name, age, .. } = user;"),
             "output: {output}"
         );
+    }
+
+    // Test T062: Emit destructuring with field rename
+    #[test]
+    fn test_emit_destructuring_with_rename() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Destructure(RustDestructureStmt {
+                type_name: "Point".to_owned(),
+                fields: vec![
+                    RustDestructureField {
+                        field_name: "x".to_owned(),
+                        local_name: Some("a".to_owned()),
+                    },
+                    RustDestructureField {
+                        field_name: "y".to_owned(),
+                        local_name: Some("b".to_owned()),
+                    },
+                ],
+                init: ident("pt"),
+                mutable: false,
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let Point { x: a, y: b, .. } = pt;"),
+            "output: {output}"
+        );
+    }
+
+    // Test T062: Emit destructuring with mixed rename
+    #[test]
+    fn test_emit_destructuring_mixed_rename() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Destructure(RustDestructureStmt {
+                type_name: "User".to_owned(),
+                fields: vec![
+                    RustDestructureField {
+                        field_name: "name".to_owned(),
+                        local_name: None,
+                    },
+                    RustDestructureField {
+                        field_name: "age".to_owned(),
+                        local_name: Some("a".to_owned()),
+                    },
+                ],
+                init: ident("user"),
+                mutable: false,
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let User { name, age: a, .. } = user;"),
+            "output: {output}"
+        );
+    }
+
+    // Test T062: Emit destructure defaults
+    #[test]
+    fn test_emit_destructure_defaults() {
+        use rsc_syntax::rust_ir::{RustDestructureDefaultField, RustDestructureDefaultsStmt};
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::DestructureDefaults(RustDestructureDefaultsStmt {
+                fields: vec![
+                    RustDestructureDefaultField {
+                        local_name: "name".to_owned(),
+                        access_expr: syn(RustExprKind::FieldAccess {
+                            object: Box::new(ident("config")),
+                            field: "name".to_owned(),
+                        }),
+                        default_value: Some(syn(RustExprKind::MethodCall {
+                            receiver: Box::new(syn(RustExprKind::StringLit("default".to_owned()))),
+                            method: "to_string".to_owned(),
+                            type_args: vec![],
+                            args: vec![],
+                        })),
+                        mutable: false,
+                    },
+                    RustDestructureDefaultField {
+                        local_name: "age".to_owned(),
+                        access_expr: syn(RustExprKind::FieldAccess {
+                            object: Box::new(ident("config")),
+                            field: "age".to_owned(),
+                        }),
+                        default_value: None,
+                        mutable: false,
+                    },
+                ],
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let name = config.name.unwrap_or_else(|| \"default\".to_string());"),
+            "output: {output}"
+        );
+        assert!(output.contains("let age = config.age;"), "output: {output}");
     }
 
     // Test T14-14: Emit RustType::Named

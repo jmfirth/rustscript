@@ -8,8 +8,9 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBlock, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt, RustIfLetStmt,
-    RustIfStmt, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt, RustStmt,
+    RustBlock, RustDestructureDefaultField, RustDestructureDefaultsStmt, RustDestructureField,
+    RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt, RustIfLetStmt, RustIfStmt,
+    RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt, RustStmt,
     RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileStmt,
 };
 
@@ -483,8 +484,9 @@ impl Transform {
 
     /// Lower a destructuring statement.
     ///
-    /// Resolves the type name from the init expression's type in the context,
-    /// then produces a `RustDestructureStmt`.
+    /// When no defaults are present, produces a `RustDestructureStmt` with optional
+    /// field renames. When defaults are present, produces a `RustDestructureDefaultsStmt`
+    /// with individual field access expressions and `unwrap_or_else` for Option fields.
     fn lower_destructure(
         &self,
         destr: &ast::DestructureStmt,
@@ -494,9 +496,10 @@ impl Transform {
     ) -> RustStmt {
         let init = self.lower_expr(&destr.init, ctx, use_map, stmt_index);
 
-        // Infer the type name from the init expression. If the init is an
-        // identifier, look up its type in the context. Emit a diagnostic if
-        // the type cannot be resolved — "Unknown" sentinels produce invalid Rust.
+        // Check if any field has a default value — that requires individual statements.
+        let has_defaults = destr.fields.iter().any(|f| f.default_value.is_some());
+
+        // Infer the type name from the init expression.
         let type_name = match &destr.init.kind {
             ast::ExprKind::Ident(ident) => ctx
                 .lookup_variable(&ident.name)
@@ -508,36 +511,93 @@ impl Transform {
             return RustStmt::Semi(init);
         };
 
-        let fields = destr.fields.iter().map(|f| f.name.clone()).collect();
-
         // Declare the extracted fields as variables in the current scope.
         // Look up their types from the type registry.
         if let Some(td) = self.type_registry.lookup(&type_name)
-            && let Some(fields) = td.struct_fields()
+            && let Some(struct_fields) = td.struct_fields()
         {
-            for field_ident in &destr.fields {
-                let field_ty = fields
+            for field in &destr.fields {
+                let binding_name = field
+                    .local_name
+                    .as_ref()
+                    .map_or(&field.field_name.name, |l| &l.name);
+                let field_ty = struct_fields
                     .iter()
-                    .find(|(name, _)| name == &field_ident.name)
+                    .find(|(name, _)| name == &field.field_name.name)
                     .map_or(RustType::Unit, |(_, ty)| {
                         rsc_typeck::bridge::type_to_rust_type(ty)
                     });
-                ctx.declare_variable(field_ident.name.clone(), field_ty);
+                ctx.declare_variable(binding_name.clone(), field_ty);
             }
         }
 
-        RustStmt::Destructure(RustDestructureStmt {
-            type_name,
-            fields,
-            init,
-            mutable: destr.binding == ast::VarBinding::Let,
-            span: Some(destr.span),
-        })
+        if has_defaults {
+            // Emit individual `let` statements with field access and defaults.
+            let init_name = match &destr.init.kind {
+                ast::ExprKind::Ident(ident) => ident.name.clone(),
+                _ => "source".to_owned(),
+            };
+
+            let fields = destr
+                .fields
+                .iter()
+                .map(|f| {
+                    let local_name = f
+                        .local_name
+                        .as_ref()
+                        .map_or(f.field_name.name.clone(), |l| l.name.clone());
+                    let access_expr = RustExpr {
+                        kind: RustExprKind::FieldAccess {
+                            object: Box::new(RustExpr {
+                                kind: RustExprKind::Ident(init_name.clone()),
+                                span: None,
+                            }),
+                            field: f.field_name.name.clone(),
+                        },
+                        span: None,
+                    };
+                    let default_value = f
+                        .default_value
+                        .as_ref()
+                        .map(|dv| self.lower_expr(dv, ctx, use_map, stmt_index));
+                    RustDestructureDefaultField {
+                        local_name,
+                        access_expr,
+                        default_value,
+                        mutable: destr.binding == ast::VarBinding::Let,
+                    }
+                })
+                .collect();
+
+            RustStmt::DestructureDefaults(RustDestructureDefaultsStmt {
+                fields,
+                span: Some(destr.span),
+            })
+        } else {
+            // Simple struct pattern destructuring, with optional renames.
+            let fields = destr
+                .fields
+                .iter()
+                .map(|f| RustDestructureField {
+                    field_name: f.field_name.name.clone(),
+                    local_name: f.local_name.as_ref().map(|l| l.name.clone()),
+                })
+                .collect();
+
+            RustStmt::Destructure(RustDestructureStmt {
+                type_name,
+                fields,
+                init,
+                mutable: destr.binding == ast::VarBinding::Let,
+                span: Some(destr.span),
+            })
+        }
     }
 
     /// Lower an array destructuring statement.
     ///
     /// `const [a, b] = expr;` → `let (a, b) = expr;`
+    /// `const [first, ...rest] = arr;` → indexed access with rest slice.
     /// Typically used with `Promise.all` results.
     fn lower_array_destructure(
         &self,
@@ -547,20 +607,72 @@ impl Transform {
         stmt_index: usize,
     ) -> RustStmt {
         let init = self.lower_expr(&adestr.init, ctx, use_map, stmt_index);
-        let bindings = adestr.elements.iter().map(|e| e.name.clone()).collect();
 
-        // Declare the extracted variables in the current scope with inferred types.
-        // We use Unit as a placeholder — the actual types are inferred by Rust.
-        for elem in &adestr.elements {
-            ctx.declare_variable(elem.name.clone(), RustType::Unit);
+        // Check if any element is a rest element.
+        let has_rest = adestr
+            .elements
+            .iter()
+            .any(|e| matches!(e, ast::ArrayDestructureElement::Rest(_)));
+
+        if has_rest {
+            // Emit individual indexed access statements with rest slice.
+            // Uses `arr[N].clone()` for single elements and `arr[N..].to_vec()` for rest.
+            // Since the IR doesn't have range expressions, emit as raw Rust.
+            let init_name = match &adestr.init.kind {
+                ast::ExprKind::Ident(ident) => ident.name.clone(),
+                _ => "source".to_owned(),
+            };
+
+            let mutable = adestr.binding == ast::VarBinding::Let;
+            let let_kw = if mutable { "let mut" } else { "let" };
+            let mut raw_lines = Vec::new();
+            for (i, elem) in adestr.elements.iter().enumerate() {
+                match elem {
+                    ast::ArrayDestructureElement::Single(ident) => {
+                        ctx.declare_variable(ident.name.clone(), RustType::Unit);
+                        raw_lines.push(format!(
+                            "{let_kw} {} = {init_name}[{i}].clone();",
+                            ident.name
+                        ));
+                    }
+                    ast::ArrayDestructureElement::Rest(ident) => {
+                        ctx.declare_variable(ident.name.clone(), RustType::Unit);
+                        raw_lines.push(format!(
+                            "{let_kw} {} = {init_name}[{i}..].to_vec();",
+                            ident.name
+                        ));
+                    }
+                }
+            }
+
+            RustStmt::RawRust(raw_lines.join("\n"))
+        } else {
+            // Simple tuple destructuring (no rest element).
+            let bindings = adestr
+                .elements
+                .iter()
+                .map(|e| match e {
+                    ast::ArrayDestructureElement::Single(ident)
+                    | ast::ArrayDestructureElement::Rest(ident) => ident.name.clone(),
+                })
+                .collect();
+
+            // Declare the extracted variables in the current scope with inferred types.
+            for elem in &adestr.elements {
+                let name = match elem {
+                    ast::ArrayDestructureElement::Single(ident)
+                    | ast::ArrayDestructureElement::Rest(ident) => &ident.name,
+                };
+                ctx.declare_variable(name.clone(), RustType::Unit);
+            }
+
+            RustStmt::TupleDestructure(RustTupleDestructureStmt {
+                bindings,
+                init,
+                mutable: adestr.binding == ast::VarBinding::Let,
+                span: Some(adestr.span),
+            })
         }
-
-        RustStmt::TupleDestructure(RustTupleDestructureStmt {
-            bindings,
-            init,
-            mutable: adestr.binding == ast::VarBinding::Let,
-            span: Some(adestr.span),
-        })
     }
 
     /// Lower a `try/catch` or `try/catch/finally` or `try/finally` statement.
