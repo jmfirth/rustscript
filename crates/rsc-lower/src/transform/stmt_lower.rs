@@ -195,6 +195,19 @@ impl Transform {
 
         ctx.set_struct_type_name(None);
 
+        // When the target type is a generated union, wrap the init with `.into()`
+        // so the From impl converts the concrete type to the union enum.
+        let init = if matches!(&ty, RustType::GeneratedUnion { .. }) {
+            RustExpr::synthetic(RustExprKind::MethodCall {
+                receiver: Box::new(init),
+                method: "into".to_owned(),
+                type_args: vec![],
+                args: vec![],
+            })
+        } else {
+            init
+        };
+
         // Omit the type annotation when it's inferable from the literal initializer
         // and the user didn't write an explicit annotation.
         // Named types in struct construction don't need the type annotation since
@@ -255,6 +268,10 @@ impl Transform {
             .current_return_type()
             .is_some_and(|ty| matches!(ty, RustType::Tuple(_)));
 
+        let is_union_return = ctx
+            .current_return_type()
+            .is_some_and(|ty| matches!(ty, RustType::GeneratedUnion { .. }));
+
         let value = ret.value.as_ref().map(|v| {
             if is_throws {
                 let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
@@ -268,6 +285,14 @@ impl Transform {
                 // Non-null return in Option context → wrap in Some(...)
                 let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
                 RustExpr::synthetic(RustExprKind::Some(Box::new(lowered)))
+            } else if is_union_return {
+                let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
+                RustExpr::synthetic(RustExprKind::MethodCall {
+                    receiver: Box::new(lowered),
+                    method: "into".to_owned(),
+                    type_args: vec![],
+                    args: vec![],
+                })
             } else {
                 self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return)
             }

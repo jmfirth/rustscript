@@ -213,13 +213,17 @@ pub struct RustEnumDef {
 
 /// A Rust enum variant.
 ///
-/// Fieldless for simple enums, with fields for data enums.
+/// Fieldless for simple enums, with named fields for data enums,
+/// or with tuple types for generated union enums.
 #[derive(Debug, Clone)]
 pub struct RustEnumVariant {
-    /// The variant name (e.g., `North`, `Circle`).
+    /// The variant name (e.g., `North`, `Circle`, `String`).
     pub name: String,
-    /// The fields of this variant. Empty for simple enum variants.
+    /// Named fields for struct-style variants. Empty for simple or tuple variants.
     pub fields: Vec<RustFieldDef>,
+    /// Positional types for tuple-style variants (e.g., `String(String)`).
+    /// Empty for simple or struct-style variants.
+    pub tuple_types: Vec<RustType>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -459,6 +463,16 @@ pub enum RustType {
     /// Tuple type: `(T1, T2, ...)`.
     /// Produced by lowering `[T1, T2]` tuple type annotations.
     Tuple(Vec<RustType>),
+    /// Auto-generated union enum type: `StringOrI32`.
+    /// Produced by lowering `string | i32` (non-null general union types).
+    /// The `name` is the deterministic enum name (e.g., `"StringOrI32"`),
+    /// and `variants` contains `(VariantName, InnerType)` pairs.
+    GeneratedUnion {
+        /// The generated enum name (e.g., `StringOrI32`).
+        name: String,
+        /// The variants: `(VariantName, InnerType)` pairs.
+        variants: Vec<(String, RustType)>,
+    },
 }
 
 impl std::fmt::Display for RustType {
@@ -477,7 +491,9 @@ impl std::fmt::Display for RustType {
             Self::Bool => "bool",
             Self::String => "String",
             Self::Unit => "()",
-            Self::Named(name) | Self::TypeParam(name) => return f.write_str(name),
+            Self::Named(name) | Self::TypeParam(name) | Self::GeneratedUnion { name, .. } => {
+                return f.write_str(name);
+            }
             Self::Generic(base, args) => {
                 write!(f, "{base}<")?;
                 for (i, arg) in args.iter().enumerate() {

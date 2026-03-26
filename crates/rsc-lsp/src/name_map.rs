@@ -356,6 +356,15 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
             let types_str: Vec<String> = types.iter().map(rust_type_to_rts_display).collect();
             format!("[{}]", types_str.join(", "))
         }
+
+        // Generated union enum -> `T1 | T2 | ...`
+        RustType::GeneratedUnion { variants, .. } => {
+            let types_str: Vec<String> = variants
+                .iter()
+                .map(|(_, ty)| rust_type_to_rts_display(ty))
+                .collect();
+            types_str.join(" | ")
+        }
     }
 }
 
@@ -707,5 +716,32 @@ mod tests {
     fn test_rts_display_tuple_type_three_elements() {
         let ty = RustType::Tuple(vec![RustType::String, RustType::I32, RustType::Bool]);
         assert_eq!(rust_type_to_rts_display(&ty), "[string, i32, boolean]");
+    }
+
+    // ---- Task 065: General union type display ----
+
+    #[test]
+    fn test_rts_display_generated_union_two_types() {
+        let ty = RustType::GeneratedUnion {
+            name: "I32OrString".to_owned(),
+            variants: vec![
+                ("String".to_owned(), RustType::String),
+                ("I32".to_owned(), RustType::I32),
+            ],
+        };
+        assert_eq!(rust_type_to_rts_display(&ty), "string | i32");
+    }
+
+    #[test]
+    fn test_rts_display_generated_union_three_types() {
+        let ty = RustType::GeneratedUnion {
+            name: "BoolOrI32OrString".to_owned(),
+            variants: vec![
+                ("String".to_owned(), RustType::String),
+                ("I32".to_owned(), RustType::I32),
+                ("Bool".to_owned(), RustType::Bool),
+            ],
+        };
+        assert_eq!(rust_type_to_rts_display(&ty), "string | i32 | boolean");
     }
 }

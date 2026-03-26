@@ -50,6 +50,9 @@ struct TranslationPatterns {
     arc_mutex_type: Regex,
     /// Matches `Box<dyn ...>` patterns (abstract class / interface in `RustScript`).
     box_dyn_type: Regex,
+    /// Matches generated union enum names like `I32OrString`, `BoolOrI32OrString`.
+    /// These are `PascalCase` type names joined by `Or`.
+    union_enum_name: Regex,
 }
 
 // SAFETY: All regex literals below are compile-time constants; these never fail.
@@ -69,6 +72,9 @@ static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPat
     file_reference: Regex::new(r"(src/\w+)\.rs:(\d+):(\d+)").expect("valid regex"),
     arc_mutex_type: Regex::new(r"\bArc<Mutex<").expect("valid regex"),
     box_dyn_type: Regex::new(r"\bBox<dyn\s+").expect("valid regex"),
+    // Matches generated union enum names: two or more PascalCase type names joined by "Or".
+    // Examples: I32OrString, BoolOrI32OrString, F64OrString
+    union_enum_name: Regex::new(r"\b([A-Z]\w*(?:Or[A-Z]\w*)+)\b").expect("valid regex"),
 });
 
 /// Translate `rustc` error output into `RustScript`-friendly terms.
@@ -232,6 +238,9 @@ fn translate_type_names(input: &str) -> String {
     // 4c. Tuple types: `(String, i32)` → `[string, i32]`
     output = translate_tuple_type(&output);
 
+    // 4d. Generated union enum names: `I32OrString` → `i32 | string`
+    output = translate_union_enum_names(&output);
+
     // 5. impl Trait (after Fn translations to avoid double-matching)
     output = translate_impl_trait(&output);
 
@@ -315,6 +324,49 @@ fn translate_impl_fn_types(input: &str) -> String {
 /// Translate bare `fn(T) -> U` into `(T) => U`.
 fn translate_fn_types(input: &str) -> String {
     replace_bare_fn_type(input)
+}
+
+/// Translate generated union enum names back to `RustScript` union syntax.
+///
+/// `I32OrString` → `i32 | string`, `BoolOrI32OrString` → `bool | i32 | string`.
+/// Only matches names that follow the `XOrY` pattern where X and Y are
+/// recognized type names.
+fn translate_union_enum_names(input: &str) -> String {
+    let re = &PATTERNS.union_enum_name;
+    re.replace_all(input, |caps: &regex::Captures| {
+        let name = &caps[1];
+        // Split on "Or" boundaries (between PascalCase segments)
+        let parts: Vec<&str> = name.split("Or").collect();
+        if parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
+            return name.to_owned();
+        }
+        // Convert each PascalCase segment to its RustScript equivalent
+        let rts_parts: Vec<String> = parts.iter().map(|p| pascal_type_to_rts(p)).collect();
+        rts_parts.join(" | ")
+    })
+    .into_owned()
+}
+
+/// Convert a `PascalCase` type variant name to its `RustScript` equivalent.
+///
+/// Maps union enum variant names like `"String"` → `"string"`,
+/// `"I32"` → `"i32"`, `"Bool"` → `"bool"`.
+fn pascal_type_to_rts(name: &str) -> String {
+    match name {
+        "String" => "string".to_owned(),
+        "Bool" => "bool".to_owned(),
+        "I8" => "i8".to_owned(),
+        "I16" => "i16".to_owned(),
+        "I32" => "i32".to_owned(),
+        "I64" => "i64".to_owned(),
+        "U8" => "u8".to_owned(),
+        "U16" => "u16".to_owned(),
+        "U32" => "u32".to_owned(),
+        "U64" => "u64".to_owned(),
+        "F32" => "f32".to_owned(),
+        "F64" => "f64".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 /// Translate `impl Trait` → `extends Trait` (but not `impl Fn*`).
