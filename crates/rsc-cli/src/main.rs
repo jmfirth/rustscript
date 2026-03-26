@@ -4,6 +4,8 @@
 //! compilation, build, and project management logic.
 #![warn(clippy::pedantic)]
 
+mod repl;
+
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -124,6 +126,8 @@ enum Command {
     },
     /// Start the LSP server (for editor integration)
     Lsp,
+    /// Start interactive scratch pad
+    Repl,
     /// Start watch mode: recompile on `.rts` file changes
     Dev {
         /// Build in release mode
@@ -188,6 +192,7 @@ fn run(cli: Cli) -> Result<i32> {
         } => cmd_add(&crate_name, version.as_deref(), &features, dev),
         Command::Remove { crate_name } => cmd_remove(&crate_name),
         Command::Lsp => cmd_lsp(),
+        Command::Repl => repl::run_repl(),
         Command::Dev { release } => cmd_dev(release),
     }
 }
