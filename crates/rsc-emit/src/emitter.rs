@@ -1077,7 +1077,13 @@ impl Emitter {
             self.write("&");
         }
         self.write(&for_in.variable);
-        self.write(" in &");
+        // When the iterable is already a reference (e.g., a borrowed parameter),
+        // skip the `&` to avoid double-borrowing (`&&Vec<T>`).
+        if for_in.iterable_is_borrowed {
+            self.write(" in ");
+        } else {
+            self.write(" in &");
+        }
         self.emit_expr(&for_in.iterable);
         self.write(" ");
         self.emit_block(&for_in.body);
@@ -4038,6 +4044,7 @@ fn main() {
                     expr: None,
                 },
                 deref_pattern: false,
+                iterable_is_borrowed: false,
                 span: None,
             })],
             None,
@@ -4046,6 +4053,37 @@ fn main() {
         assert!(
             output.contains("for x in &items"),
             "expected `for x in &items` in output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_emit_for_in_borrowed_iterable_no_double_borrow() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::ForIn(RustForInStmt {
+                variable: "job".to_owned(),
+                iterable: ident("jobs"),
+                body: RustBlock {
+                    stmts: vec![RustStmt::Semi(syn(RustExprKind::Macro {
+                        name: "println".to_owned(),
+                        args: vec![ident("job")],
+                    }))],
+                    expr: None,
+                },
+                deref_pattern: false,
+                iterable_is_borrowed: true,
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("for job in jobs"),
+            "expected `for job in jobs` (no &) in output:\n{output}"
+        );
+        assert!(
+            !output.contains("for job in &jobs"),
+            "must NOT double-borrow with & in output:\n{output}"
         );
     }
 
