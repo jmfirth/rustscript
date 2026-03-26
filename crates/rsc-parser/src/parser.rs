@@ -245,6 +245,7 @@ impl<'src> Parser<'src> {
             TokenKind::Implements => "`implements`",
             TokenKind::Async => "`async`",
             TokenKind::Await => "`await`",
+            TokenKind::Finally => "`finally`",
             TokenKind::Rust => "`rust`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
@@ -1893,33 +1894,71 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a try/catch statement: `try { ... } catch (name: Type) { ... }`.
+    /// Parse a try/catch/finally statement.
+    ///
+    /// Supports three forms:
+    /// - `try { ... } catch (name: Type) { ... }`
+    /// - `try { ... } catch (name: Type) { ... } finally { ... }`
+    /// - `try { ... } finally { ... }`
     fn parse_try_catch_stmt(&mut self) -> Option<TryCatchStmt> {
         let try_token = self.advance(); // consume `try`
         let start = try_token.span;
 
         let try_block = self.parse_block()?;
 
-        self.expect(&TokenKind::Catch)?;
-        self.expect(&TokenKind::LParen)?;
-        let catch_binding = self.parse_ident()?;
+        // Parse optional catch block
+        let (catch_binding, catch_type, catch_block) = if self.check(&TokenKind::Catch) {
+            self.advance(); // consume `catch`
+            self.expect(&TokenKind::LParen)?;
+            let binding = self.parse_ident()?;
 
-        // Optional type annotation on catch binding
-        let catch_type = if self.eat(&TokenKind::Colon) {
-            Some(self.parse_type_annotation()?)
+            // Optional type annotation on catch binding
+            let ty = if self.eat(&TokenKind::Colon) {
+                Some(self.parse_type_annotation()?)
+            } else {
+                None
+            };
+
+            self.expect(&TokenKind::RParen)?;
+            let block = self.parse_block()?;
+            (Some(binding), ty, Some(block))
+        } else {
+            (None, None, None)
+        };
+
+        // Parse optional finally block
+        let finally_block = if self.eat(&TokenKind::Finally) {
+            Some(self.parse_block()?)
         } else {
             None
         };
 
-        self.expect(&TokenKind::RParen)?;
-        let catch_block = self.parse_block()?;
-        let end = catch_block.span;
+        // Must have at least catch or finally
+        if catch_block.is_none() && finally_block.is_none() {
+            let current = self.current_token();
+            let span = current.span;
+            self.diagnostics.push(
+                Diagnostic::error("expected `catch` or `finally` after try block").with_label(
+                    span,
+                    self.file_id,
+                    "unexpected token",
+                ),
+            );
+            return None;
+        }
+
+        let end = finally_block
+            .as_ref()
+            .map(|b| b.span)
+            .or(catch_block.as_ref().map(|b| b.span))
+            .unwrap_or(try_block.span);
 
         Some(TryCatchStmt {
             try_block,
             catch_binding,
             catch_type,
             catch_block,
+            finally_block,
             span: start.merge(end),
         })
     }
@@ -4951,10 +4990,118 @@ function main() {
         match &f.body.stmts[0] {
             Stmt::TryCatch(tc) => {
                 assert_eq!(tc.try_block.stmts.len(), 1);
-                assert_eq!(tc.catch_binding.name, "err");
+                let binding = tc.catch_binding.as_ref().expect("expected catch binding");
+                assert_eq!(binding.name, "err");
                 let catch_type = tc.catch_type.as_ref().expect("expected catch type");
                 assert!(matches!(&catch_type.kind, TypeKind::Named(id) if id.name == "string"));
-                assert_eq!(tc.catch_block.stmts.len(), 1);
+                let catch_block = tc.catch_block.as_ref().expect("expected catch block");
+                assert_eq!(catch_block.stmts.len(), 1);
+                assert!(tc.finally_block.is_none());
+            }
+            _ => panic!("expected TryCatch"),
+        }
+    }
+
+    // Parse try/catch/finally
+    #[test]
+    fn test_parser_try_catch_finally_produces_all_blocks() {
+        let source = "\
+function main() {
+  try {
+    riskyOp();
+  } catch (err: string) {
+    console.log(err);
+  } finally {
+    cleanup();
+  }
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::TryCatch(tc) => {
+                assert_eq!(tc.try_block.stmts.len(), 1);
+                let binding = tc.catch_binding.as_ref().expect("expected catch binding");
+                assert_eq!(binding.name, "err");
+                assert!(tc.catch_type.is_some());
+                let catch_block = tc.catch_block.as_ref().expect("expected catch block");
+                assert_eq!(catch_block.stmts.len(), 1);
+                let finally_block = tc.finally_block.as_ref().expect("expected finally block");
+                assert_eq!(finally_block.stmts.len(), 1);
+            }
+            _ => panic!("expected TryCatch"),
+        }
+    }
+
+    // Parse try/finally (no catch)
+    #[test]
+    fn test_parser_try_finally_without_catch_produces_finally_block() {
+        let source = "\
+function main() {
+  try {
+    riskyOp();
+  } finally {
+    cleanup();
+  }
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::TryCatch(tc) => {
+                assert_eq!(tc.try_block.stmts.len(), 1);
+                assert!(tc.catch_binding.is_none());
+                assert!(tc.catch_type.is_none());
+                assert!(tc.catch_block.is_none());
+                let finally_block = tc.finally_block.as_ref().expect("expected finally block");
+                assert_eq!(finally_block.stmts.len(), 1);
+            }
+            _ => panic!("expected TryCatch"),
+        }
+    }
+
+    // Parse finally with multiple statements
+    #[test]
+    fn test_parser_finally_block_with_multiple_statements() {
+        let source = "\
+function main() {
+  try {
+    riskyOp();
+  } catch (err: string) {
+    console.log(err);
+  } finally {
+    cleanup();
+    console.log(\"done\");
+    reset();
+  }
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::TryCatch(tc) => {
+                let finally_block = tc.finally_block.as_ref().expect("expected finally block");
+                assert_eq!(finally_block.stmts.len(), 3);
+            }
+            _ => panic!("expected TryCatch"),
+        }
+    }
+
+    // Verify finally is optional (existing try/catch still works)
+    #[test]
+    fn test_parser_try_catch_without_finally_still_works() {
+        let source = "\
+function main() {
+  try {
+    riskyOp();
+  } catch (err: string) {
+    console.log(err);
+  }
+}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        match &f.body.stmts[0] {
+            Stmt::TryCatch(tc) => {
+                assert!(tc.catch_binding.is_some());
+                assert!(tc.catch_block.is_some());
+                assert!(tc.finally_block.is_none());
             }
             _ => panic!("expected TryCatch"),
         }

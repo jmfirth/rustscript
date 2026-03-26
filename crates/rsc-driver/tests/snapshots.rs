@@ -2806,3 +2806,227 @@ function main(): void {
         result_without.rust_source,
     );
 }
+
+// ===========================================================================
+// Task 058: Control Flow Completeness — finally block, === / !== verification
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// try/catch/finally → match with appended cleanup
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_try_catch_finally_generates_match_with_cleanup() {
+    let source = "\
+function riskyOp(): i32 throws string {
+  throw \"oops\";
+}
+function main() {
+  try {
+    const val = riskyOp();
+    console.log(val);
+  } catch (err: string) {
+    console.log(err);
+  } finally {
+    console.log(\"cleanup\");
+  }
+}";
+
+    let expected = "\
+fn riskyOp() -> Result<i32, String> {
+    return Err(\"oops\".to_string());
+}
+
+fn main() {
+    {
+        match riskyOp() {
+            Ok(val) => {
+                println!(\"{}\", val);
+            }
+            Err(err) => {
+                println!(\"{}\", err);
+            }
+        }
+        println!(\"{}\", \"cleanup\");
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("try_catch_finally", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// try/finally → block with appended cleanup (no catch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_try_finally_generates_block_with_cleanup() {
+    let source = "\
+function main() {
+  try {
+    console.log(\"doing work\");
+  } finally {
+    console.log(\"cleanup\");
+  }
+}";
+
+    let expected = "\
+fn main() {
+    {
+        println!(\"{}\", \"doing work\");
+        println!(\"{}\", \"cleanup\");
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("try_finally", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// === / !== on integers, strings, booleans
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_strict_eq_integers_generates_double_eq() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  const y: i32 = 5;
+  const result: bool = x === y;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x == y"),
+        "expected `x == y` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_ne_integers_generates_bang_eq() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  const y: i32 = 10;
+  const result: bool = x !== y;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x != y"),
+        "expected `x != y` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_eq_strings_generates_double_eq() {
+    let source = "\
+function main() {
+  const a: string = \"hello\";
+  const b: string = \"hello\";
+  const result: bool = a === b;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("a == b"),
+        "expected `a == b` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_eq_booleans_generates_double_eq() {
+    let source = "\
+function main() {
+  const a: bool = true;
+  const b: bool = false;
+  const result: bool = a === b;
+  console.log(result);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("a == b"),
+        "expected `a == b` in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// === / !== in different expression positions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_strict_eq_in_if_condition() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  if (x === 5) {
+    console.log(\"equal\");
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x == 5"),
+        "expected `x == 5` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_ne_in_if_condition() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  if (x !== 10) {
+    console.log(\"not equal\");
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x != 10"),
+        "expected `x != 10` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_eq_in_variable_assignment() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  const y: i32 = 5;
+  const same: bool = x === y;
+  console.log(same);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x == y"),
+        "expected `x == y` in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_strict_eq_as_function_argument() {
+    let source = "\
+function main() {
+  const x: i32 = 5;
+  console.log(x === 5);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("x == 5"),
+        "expected `x == 5` in output:\n{actual}"
+    );
+}
+
+// Note: ternary operator `? :` is not yet supported in the parser,
+// so === in ternary conditions is not tested here. It can be tested
+// once ternary support is added — the lowering already handles it
+// correctly since === → BinaryOp::Eq → RustBinaryOp::Eq → `==`.

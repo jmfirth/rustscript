@@ -607,21 +607,24 @@ pub struct SwitchCase {
     pub span: Span,
 }
 
-/// A `try/catch` statement for catching `Result` errors.
+/// A `try/catch/finally` statement for catching `Result` errors.
 ///
-/// Corresponds to `try { ... } catch (name: ErrorType) { ... }`.
-/// Lowers to a Rust `match` on `Ok`/`Err`.
+/// Corresponds to `try { ... } catch (name: ErrorType) { ... } finally { ... }`.
+/// Lowers to a Rust `match` on `Ok`/`Err` with optional cleanup statements after.
+/// Supports `try {} catch {} finally {}`, `try {} catch {}`, and `try {} finally {}`.
 #[derive(Debug, Clone)]
 pub struct TryCatchStmt {
     /// The try block containing fallible operations.
     pub try_block: Block,
-    /// The catch binding name.
-    pub catch_binding: Ident,
+    /// The catch binding name (None for `try {} finally {}` without catch).
+    pub catch_binding: Option<Ident>,
     /// The optional error type annotation.
     pub catch_type: Option<TypeAnnotation>,
-    /// The catch block executed when an error occurs.
-    pub catch_block: Block,
-    /// The span covering the entire try/catch statement.
+    /// The catch block executed when an error occurs (None for `try {} finally {}`).
+    pub catch_block: Option<Block>,
+    /// Optional finally block — runs after both try and catch.
+    pub finally_block: Option<Block>,
+    /// The span covering the entire try/catch/finally statement.
     pub span: Span,
 }
 

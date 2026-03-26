@@ -177,14 +177,27 @@ impl UseMap {
                         uses,
                     );
                 }
-                for inner_stmt in &tc.catch_block.stmts {
-                    Self::collect_stmt_uses(
-                        inner_stmt,
-                        stmt_index,
-                        is_ref_call,
-                        callee_param_modes,
-                        uses,
-                    );
+                if let Some(catch_block) = &tc.catch_block {
+                    for inner_stmt in &catch_block.stmts {
+                        Self::collect_stmt_uses(
+                            inner_stmt,
+                            stmt_index,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
+                    }
+                }
+                if let Some(finally_block) = &tc.finally_block {
+                    for inner_stmt in &finally_block.stmts {
+                        Self::collect_stmt_uses(
+                            inner_stmt,
+                            stmt_index,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
+                    }
                 }
             }
             ast::Stmt::For(for_of) => {
@@ -697,8 +710,15 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
             for inner in &tc.try_block.stmts {
                 collect_assignments(inner, reassigned);
             }
-            for inner in &tc.catch_block.stmts {
-                collect_assignments(inner, reassigned);
+            if let Some(catch_block) = &tc.catch_block {
+                for inner in &catch_block.stmts {
+                    collect_assignments(inner, reassigned);
+                }
+            }
+            if let Some(finally_block) = &tc.finally_block {
+                for inner in &finally_block.stmts {
+                    collect_assignments(inner, reassigned);
+                }
             }
         }
     }
@@ -953,8 +973,15 @@ fn collect_param_usage_stmt(
             for inner in &tc.try_block.stmts {
                 collect_param_usage_stmt(inner, param_set, is_ref_call, result);
             }
-            for inner in &tc.catch_block.stmts {
-                collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+            if let Some(catch_block) = &tc.catch_block {
+                for inner in &catch_block.stmts {
+                    collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+                }
+            }
+            if let Some(finally_block) = &tc.finally_block {
+                for inner in &finally_block.stmts {
+                    collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+                }
             }
         }
         ast::Stmt::For(for_of) => {
@@ -1324,8 +1351,15 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
             for s in &tc.try_block.stmts {
                 collect_idents_in_stmt(s, names);
             }
-            for s in &tc.catch_block.stmts {
-                collect_idents_in_stmt(s, names);
+            if let Some(catch_block) = &tc.catch_block {
+                for s in &catch_block.stmts {
+                    collect_idents_in_stmt(s, names);
+                }
+            }
+            if let Some(finally_block) = &tc.finally_block {
+                for s in &finally_block.stmts {
+                    collect_idents_in_stmt(s, names);
+                }
             }
         }
         ast::Stmt::Destructure(d) => collect_idents_in_expr(&d.init, names),

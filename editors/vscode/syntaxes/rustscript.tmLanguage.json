@@ -142,7 +142,7 @@
         },
         {
           "name": "keyword.control.trycatch.rustscript",
-          "match": "\\b(try|catch|throw|throws)\\b"
+          "match": "\\b(try|catch|finally|throw|throws)\\b"
         },
         {
           "name": "keyword.declaration.rustscript",

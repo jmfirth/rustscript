@@ -10,7 +10,7 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBlock, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt, RustIfLetStmt,
     RustIfStmt, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt, RustStmt,
-    RustTupleDestructureStmt, RustType, RustWhileStmt,
+    RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileStmt,
 };
 
 use crate::context::LoweringContext;
@@ -559,10 +559,10 @@ impl Transform {
         })
     }
 
-    /// Lower a `try/catch` statement to a `match` on `Result`.
+    /// Lower a `try/catch` or `try/catch/finally` or `try/finally` statement.
     ///
-    /// For a single-call try block, lowers to a direct `match` on the call result.
-    /// For multi-statement try blocks, uses an immediately-invoked closure pattern.
+    /// For `try/finally` (no catch), emits the try body followed by finally in a block.
+    /// For `try/catch[/finally]`, lowers to a `match` on `Result` with optional finally cleanup.
     fn lower_try_catch(
         &self,
         tc: &ast::TryCatchStmt,
@@ -571,11 +571,32 @@ impl Transform {
         stmt_index: usize,
         reassigned: &std::collections::HashSet<String>,
     ) -> RustStmt {
+        // Lower finally statements if present
+        let finally_stmts = tc.finally_block.as_ref().map_or_else(Vec::new, |block| {
+            self.lower_block(block, ctx, use_map, stmt_index, reassigned)
+                .stmts
+        });
+
+        // Handle try {} finally {} (no catch)
+        if tc.catch_block.is_none() {
+            let try_body = self.lower_block(&tc.try_block, ctx, use_map, stmt_index, reassigned);
+            return RustStmt::TryFinally(RustTryFinallyStmt {
+                try_block: try_body,
+                finally_stmts,
+                span: Some(tc.span),
+            });
+        }
+
         // Detect single-statement try block with a var decl calling a throws function.
         // This enables the simpler direct match pattern.
-        if let Some(simple_match) =
-            self.try_lower_simple_try_catch(tc, ctx, use_map, stmt_index, reassigned)
-        {
+        if let Some(simple_match) = self.try_lower_simple_try_catch(
+            tc,
+            ctx,
+            use_map,
+            stmt_index,
+            reassigned,
+            &finally_stmts,
+        ) {
             return simple_match;
         }
 
@@ -585,7 +606,8 @@ impl Transform {
         // match (async || -> Result<(), E> { body; Ok(()) })().await { ... }
         let needs_async = block_contains_await(&tc.try_block);
         let try_body = self.lower_block(&tc.try_block, ctx, use_map, stmt_index, reassigned);
-        let catch_body = self.lower_block(&tc.catch_block, ctx, use_map, stmt_index, reassigned);
+        let catch_block = tc.catch_block.as_ref().expect("catch block checked above");
+        let catch_body = self.lower_block(catch_block, ctx, use_map, stmt_index, reassigned);
 
         // Determine the error type from the catch annotation or default to String
         let err_ty = tc.catch_type.as_ref().map_or(RustType::String, |ann| {
@@ -614,6 +636,11 @@ impl Transform {
             expr: None,
         };
 
+        let catch_binding_name = tc
+            .catch_binding
+            .as_ref()
+            .map_or_else(|| "_".to_owned(), |b| b.name.clone());
+
         RustStmt::MatchResult(RustMatchResultStmt {
             expr: RustExpr::synthetic(RustExprKind::ClosureCall {
                 is_async: needs_async,
@@ -625,8 +652,9 @@ impl Transform {
                 stmts: vec![],
                 expr: None,
             },
-            err_binding: tc.catch_binding.name.clone(),
+            err_binding: catch_binding_name,
             err_block: catch_body,
+            finally_stmts,
             span: Some(tc.span),
         })
     }
@@ -640,6 +668,7 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
         reassigned: &std::collections::HashSet<String>,
+        finally_stmts: &[RustStmt],
     ) -> Option<RustStmt> {
         // Check if the first statement is a var decl with a call to a throws function
         if tc.try_block.stmts.is_empty() {
@@ -696,14 +725,21 @@ impl Transform {
             expr: None,
         };
 
-        let catch_body = self.lower_block(&tc.catch_block, ctx, use_map, stmt_index, reassigned);
+        let catch_block = tc.catch_block.as_ref()?;
+        let catch_body = self.lower_block(catch_block, ctx, use_map, stmt_index, reassigned);
+
+        let catch_binding_name = tc
+            .catch_binding
+            .as_ref()
+            .map_or_else(|| "_".to_owned(), |b| b.name.clone());
 
         Some(RustStmt::MatchResult(RustMatchResultStmt {
             expr: lowered_call,
             ok_binding: binding_name,
             ok_block,
-            err_binding: tc.catch_binding.name.clone(),
+            err_binding: catch_binding_name,
             err_block: catch_body,
+            finally_stmts: finally_stmts.to_vec(),
             span: Some(tc.span),
         }))
     }

@@ -68,6 +68,8 @@ pub(crate) enum TokenKind {
     Try,
     /// `catch`
     Catch,
+    /// `finally`
+    Finally,
     /// `move`
     Move,
     /// `interface`

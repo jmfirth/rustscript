@@ -492,6 +492,23 @@ pub enum RustStmt {
     Continue(Option<Span>),
     /// A raw Rust code block in a function body. The contents are emitted verbatim.
     RawRust(String),
+    /// A `try {} finally {}` block (no catch). The try body is followed by
+    /// finally cleanup statements, all emitted within a single block.
+    TryFinally(RustTryFinallyStmt),
+}
+
+/// A `try {} finally {}` block without catch.
+///
+/// Produced by lowering `try { body } finally { cleanup }`.
+/// Emits the try body followed by the finally statements in a single block.
+#[derive(Debug, Clone)]
+pub struct RustTryFinallyStmt {
+    /// The try block body.
+    pub try_block: RustBlock,
+    /// The finally statements — emitted after the try block.
+    pub finally_stmts: Vec<RustStmt>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A Rust `let` binding.
@@ -659,9 +676,9 @@ pub struct RustLetElseStmt {
     pub span: Option<Span>,
 }
 
-/// A `match` on `Result<T, E>` with `Ok`/`Err` arms.
+/// A `match` on `Result<T, E>` with `Ok`/`Err` arms and optional finally cleanup.
 ///
-/// Produced by lowering `try/catch` blocks.
+/// Produced by lowering `try/catch` and `try/catch/finally` blocks.
 #[derive(Debug, Clone)]
 pub struct RustMatchResultStmt {
     /// The expression being matched (must be `Result<T, E>`).
@@ -674,6 +691,8 @@ pub struct RustMatchResultStmt {
     pub err_binding: String,
     /// The block for the `Err` arm.
     pub err_block: RustBlock,
+    /// Optional finally statements — emitted after the match block.
+    pub finally_stmts: Vec<RustStmt>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
