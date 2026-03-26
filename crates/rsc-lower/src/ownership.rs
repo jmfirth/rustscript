@@ -26,6 +26,16 @@ pub(crate) struct UseMap {
 }
 
 impl UseMap {
+    /// Create an empty `UseMap` with no tracked uses.
+    ///
+    /// Used for lowering contexts that don't have a function body to analyze
+    /// (e.g., top-level `const` initializers).
+    pub fn empty() -> Self {
+        Self {
+            uses: HashMap::new(),
+        }
+    }
+
     /// Build a `UseMap` by scanning a function body.
     ///
     /// `is_ref_call` is a predicate that returns true if a method call's

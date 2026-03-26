@@ -97,6 +97,10 @@ fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_ha
         RustItem::RawRust(_) => {
             // Raw Rust is opaque — we don't scan it for collection usage.
         }
+        RustItem::Const(c) => {
+            scan_type_for_collections(&c.ty, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(&c.init, needs_hashmap, needs_hashset);
+        }
     }
 }
 
@@ -160,6 +164,10 @@ fn scan_item_for_arc_mutex(item: &RustItem, needs_arc_mutex: &mut bool) {
             }
         }
         RustItem::RawRust(_) => {}
+        RustItem::Const(c) => {
+            scan_type_for_arc_mutex(&c.ty, needs_arc_mutex);
+            scan_expr_for_arc_mutex(&c.init, needs_arc_mutex);
+        }
     }
 }
 
@@ -259,7 +267,8 @@ fn scan_expr_for_arc_mutex(expr: &RustExpr, needs_arc_mutex: &mut bool) {
         | RustExprKind::QuestionMark(inner)
         | RustExprKind::Ok(inner)
         | RustExprKind::Err(inner)
-        | RustExprKind::Await(inner) => {
+        | RustExprKind::Await(inner)
+        | RustExprKind::Cast(inner, _) => {
             scan_expr_for_arc_mutex(inner, needs_arc_mutex);
         }
         RustExprKind::Assign { value, .. }
@@ -445,7 +454,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::Ok(inner)
         | RustExprKind::Err(inner)
         | RustExprKind::Await(inner)
-        | RustExprKind::ArcMutexNew(inner) => {
+        | RustExprKind::ArcMutexNew(inner)
+        | RustExprKind::Cast(inner, _) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
         RustExprKind::Assign { value, .. }
@@ -519,7 +529,14 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 rsc_syntax::rust_ir::IteratorTerminal::CollectVec => {}
                 rsc_syntax::rust_ir::IteratorTerminal::Fold { init, body, .. } => {
                     scan_expr_for_collections(init, needs_hashmap, needs_hashset);
-                    scan_expr_for_collections(body, needs_hashmap, needs_hashset);
+                    match body {
+                        RustClosureBody::Expr(expr) => {
+                            scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+                        }
+                        RustClosureBody::Block(block) => {
+                            scan_block_for_collections(block, needs_hashmap, needs_hashset);
+                        }
+                    }
                 }
                 rsc_syntax::rust_ir::IteratorTerminal::Find(_, body)
                 | rsc_syntax::rust_ir::IteratorTerminal::Any(_, body)

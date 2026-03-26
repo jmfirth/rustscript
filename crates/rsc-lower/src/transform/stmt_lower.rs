@@ -219,12 +219,7 @@ impl Transform {
         // Set struct type context from return type for struct literal inference.
         // This allows `return { name: "Alice" }` to resolve the struct name from
         // the function's return type (possibly wrapped in Option or Result).
-        let return_struct_name = ctx.current_return_type().and_then(|ty| match ty {
-            RustType::Named(name) => Some(name.clone()),
-            RustType::Option(inner) => extract_named_type(inner),
-            RustType::Result(ok, _) => extract_named_type(ok),
-            _ => None,
-        });
+        let return_struct_name = ctx.current_return_type().and_then(extract_named_type);
         let prev_struct_name = ctx.current_struct_type_name().map(String::from);
         if let Some(ref name) = return_struct_name {
             ctx.set_struct_type_name(Some(name.clone()));

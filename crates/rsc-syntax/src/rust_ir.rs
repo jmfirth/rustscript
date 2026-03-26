@@ -72,6 +72,27 @@ pub enum RustItem {
     TraitImpl(RustTraitImplBlock),
     /// A raw Rust code block at the top level. The contents are emitted verbatim.
     RawRust(String),
+    /// A module-level `const` declaration: `const NAME: Type = value;`.
+    /// Produced by lowering top-level `const` declarations in `RustScript`.
+    Const(RustConstItem),
+}
+
+/// A Rust `const` item at module level.
+///
+/// Produced by lowering top-level `const` declarations in `RustScript`.
+/// Emits as `const NAME: Type = value;` in the generated `.rs` file.
+#[derive(Debug, Clone)]
+pub struct RustConstItem {
+    /// Whether this const is `pub`.
+    pub public: bool,
+    /// The constant name (`SCREAMING_SNAKE_CASE` by convention).
+    pub name: String,
+    /// The type of the constant.
+    pub ty: RustType,
+    /// The initializer expression.
+    pub init: RustExpr,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
@@ -915,6 +936,9 @@ pub enum RustExprKind {
     Borrow(Box<RustExpr>),
     /// `Arc::new(Mutex::new(expr))` — from `shared(expr)`.
     ArcMutexNew(Box<RustExpr>),
+    /// A type cast: `expr as Type`.
+    /// Produced by lowering `.length` to `.len() as i64`.
+    Cast(Box<RustExpr>, RustType),
     /// An iterator chain: `source.iter().ops...terminal`.
     ///
     /// Produced by lowering TypeScript-style array method chains
@@ -963,8 +987,8 @@ pub enum IteratorTerminal {
         acc_param: String,
         /// The item parameter name.
         item_param: String,
-        /// The fold body expression.
-        body: Box<RustExpr>,
+        /// The fold body — expression or block.
+        body: RustClosureBody,
     },
     /// `.find(|param| body).cloned()` — find first matching, return `Option<T>`.
     Find(RustClosureParam, Box<RustExpr>),

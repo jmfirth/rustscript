@@ -599,22 +599,14 @@ fn lower_array_reduce(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> Ru
         let item = params
             .get(1)
             .map_or_else(|| "item".into(), |p| p.name.clone());
-        let body_expr = match body {
-            RustClosureBody::Expr(e) => *e,
-            RustClosureBody::Block(block) => {
-                if let Some(expr) = block.expr {
-                    *expr
-                } else {
-                    RustExpr::synthetic(RustExprKind::Ident("_".into()))
-                }
-            }
-        };
-        (acc, item, body_expr)
+        (acc, item, body)
     } else {
         (
             "acc".into(),
             "item".into(),
-            RustExpr::synthetic(RustExprKind::Ident("_".into())),
+            RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                "_".into(),
+            )))),
         )
     };
 
@@ -626,7 +618,7 @@ fn lower_array_reduce(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> Ru
                 init: Box::new(init_arg),
                 acc_param,
                 item_param,
-                body: Box::new(body),
+                body,
             },
         },
         span,
@@ -881,16 +873,6 @@ fn merge_reduce_into_chain(
         let item = params
             .get(1)
             .map_or_else(|| "item".into(), |p| p.name.clone());
-        let body_expr = match body {
-            RustClosureBody::Expr(e) => (**e).clone(),
-            RustClosureBody::Block(block) => {
-                if let Some(expr) = &block.expr {
-                    (**expr).clone()
-                } else {
-                    return None;
-                }
-            }
-        };
         Some(RustExpr::new(
             RustExprKind::IteratorChain {
                 source,
@@ -899,7 +881,7 @@ fn merge_reduce_into_chain(
                     init: Box::new(init_arg),
                     acc_param: acc,
                     item_param: item,
-                    body: Box::new(body_expr),
+                    body: body.clone(),
                 },
             },
             span,

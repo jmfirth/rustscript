@@ -68,6 +68,9 @@ pub enum ItemKind {
     /// A raw Rust code block at module level (`rust { ... }`).
     /// The contents are passed through to the generated `.rs` file unchanged.
     RustBlock(InlineRustBlock),
+    /// A top-level variable declaration (`const name: Type = expr;` or `let name: Type = expr;`).
+    /// Lowers to a Rust `const` or `static` item depending on the initializer.
+    Const(VarDecl),
 }
 
 /// An import declaration: `import { User, Post } from "./models"`.

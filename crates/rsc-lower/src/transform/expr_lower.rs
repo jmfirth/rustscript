@@ -7,7 +7,9 @@
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
-use rsc_syntax::rust_ir::{ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind};
+use rsc_syntax::rust_ir::{
+    ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustType,
+};
 
 use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
@@ -202,16 +204,22 @@ impl Transform {
                     );
                 }
 
-                // `.length` on strings/arrays → `.len()` method call
+                // `.length` on strings/arrays → `.len() as i64`
+                // The cast to i64 matches RustScript's default numeric type and avoids
+                // type mismatches when assigning to numeric fields (usize vs i64/u32).
                 if fa.field.name == "length" {
                     let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
-                    return RustExpr::new(
+                    let len_call = RustExpr::new(
                         RustExprKind::MethodCall {
                             receiver: Box::new(object),
                             method: "len".into(),
                             type_args: vec![],
                             args: vec![],
                         },
+                        expr.span,
+                    );
+                    return RustExpr::new(
+                        RustExprKind::Cast(Box::new(len_call), RustType::I64),
                         expr.span,
                     );
                 }
