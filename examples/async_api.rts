@@ -1,0 +1,36 @@
+// Async API example — shows async/await with error handling
+
+type ApiResponse = {
+  status: u32,
+  body: string,
+}
+
+async function fetchData(url: string): ApiResponse throws string {
+  // In a real app, this would use reqwest
+  if (url.length == 0) {
+    throw "empty URL";
+  }
+  return { status: 200, body: `response from ${url}` };
+}
+
+async function fetchMultiple(): void {
+  const [resp1, resp2] = await Promise.all([
+    fetchData("/users"),
+    fetchData("/posts"),
+  ]);
+  console.log(`Users: ${resp1.body}`);
+  console.log(`Posts: ${resp2.body}`);
+}
+
+async function main() {
+  try {
+    await fetchMultiple();
+  } catch (err: string) {
+    console.log(`Error: ${err}`);
+  }
+
+  // Spawn a background task
+  spawn(async () => {
+    console.log("Background task running");
+  });
+}
