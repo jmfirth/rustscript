@@ -851,7 +851,7 @@ impl<'src> Parser<'src> {
         self.expect(&TokenKind::Eq)?;
 
         // Disambiguate: string literal → simple enum, `|` → data enum, `{` → struct
-        match self.peek() {
+        let item = match self.peek() {
             TokenKind::StringLit(_) => {
                 // Simple enum: type Name = "a" | "b" | "c"
                 let mut enum_def = self.parse_simple_enum(name, start)?;
@@ -893,7 +893,14 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+        };
+
+        // Optional trailing semicolon
+        if self.check(&TokenKind::Semicolon) {
+            self.advance();
         }
+
+        item
     }
 
     /// Parse a simple enum: `"a" | "b" | "c"`.
@@ -8510,6 +8517,52 @@ export abstract class Shape {
             assert!(cls.is_abstract);
         } else {
             panic!("Expected class");
+        }
+    }
+
+    // ---- Trailing semicolon on type/enum definitions ----
+
+    #[test]
+    fn test_parser_simple_enum_with_semicolon() {
+        let source = r#"type Role = "admin" | "user" | "guest";"#;
+        let module = parse_ok(source);
+        let ed = first_enum(&module);
+        assert_eq!(ed.name.name, "Role");
+        assert_eq!(ed.variants.len(), 3);
+    }
+
+    #[test]
+    fn test_parser_simple_enum_without_semicolon() {
+        let source = r#"type Role = "admin" | "user" | "guest""#;
+        let module = parse_ok(source);
+        let ed = first_enum(&module);
+        assert_eq!(ed.name.name, "Role");
+        assert_eq!(ed.variants.len(), 3);
+    }
+
+    #[test]
+    fn test_parser_data_enum_with_semicolon() {
+        let source = r#"
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64 };
+"#;
+        let module = parse_ok(source);
+        let ed = first_enum(&module);
+        assert_eq!(ed.name.name, "Shape");
+        assert_eq!(ed.variants.len(), 2);
+    }
+
+    #[test]
+    fn test_parser_struct_type_with_semicolon() {
+        let source = "type User = { name: string, age: u32 };";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "User");
+                assert_eq!(td.fields.len(), 2);
+            }
+            _ => panic!("expected TypeDef"),
         }
     }
 }
