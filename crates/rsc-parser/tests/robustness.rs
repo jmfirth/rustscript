@@ -206,7 +206,6 @@ fn deeply_nested_if_statements() {
 }
 
 #[test]
-#[ignore = "BUG: parser hangs on 50 nested function declarations — no depth limit for statement-level recursion"]
 fn deeply_nested_functions() {
     let depth = 50;
     let mut input = String::new();
@@ -443,7 +442,6 @@ fn null_bytes_everywhere() {
 }
 
 #[test]
-#[ignore = "BUG: lexer panics on multi-byte UTF-8 chars — byte index not on char boundary for U+00E9"]
 fn unicode_identifiers() {
     assert_parse_survives("const caf\u{00e9} = 42;");
 }
@@ -454,7 +452,6 @@ fn emoji_in_source() {
 }
 
 #[test]
-#[ignore = "BUG: lexer panics on BOM — byte index 1 is not a char boundary inside U+FEFF (3 bytes)"]
 fn bom_at_start() {
     assert_parse_survives("\u{FEFF}const x = 1;");
 }
@@ -483,7 +480,6 @@ fn very_long_number_literal() {
 // ===========================================================================
 
 #[test]
-#[ignore = "BUG: parser hangs on multiple unterminated constructs combined — error recovery enters infinite loop"]
 fn multiple_unterminated_constructs() {
     assert_parse_survives(
         r#"

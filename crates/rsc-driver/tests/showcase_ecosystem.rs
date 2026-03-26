@@ -552,6 +552,17 @@ enum LogLevel {
     Error,
 }
 
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogLevel::Debug => write!(f, "Debug"),
+            LogLevel::Info => write!(f, "Info"),
+            LogLevel::Warn => write!(f, "Warn"),
+            LogLevel::Error => write!(f, "Error"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DatabaseConfig {
     pub host: String,

@@ -742,6 +742,17 @@ enum Direction {
     East,
     West,
 }
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::North => write!(f, \"North\"),
+            Direction::South => write!(f, \"South\"),
+            Direction::East => write!(f, \"East\"),
+            Direction::West => write!(f, \"West\"),
+        }
+    }
+}
 ";
 
     let actual = compile_to_rust(source);
@@ -774,6 +785,17 @@ enum Direction {
     South,
     East,
     West,
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::North => write!(f, \"North\"),
+            Direction::South => write!(f, \"South\"),
+            Direction::East => write!(f, \"East\"),
+            Direction::West => write!(f, \"West\"),
+        }
+    }
 }
 
 fn opposite(dir: Direction) -> Direction {
@@ -814,12 +836,18 @@ type Shape =
 #[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Circle {
-        pub radius: f64,
+        radius: f64,
     },
     Rect {
-        pub width: f64,
-        pub height: f64,
+        width: f64,
+        height: f64,
     },
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, \"{:?}\", self)
+    }
 }
 ";
 
@@ -848,12 +876,18 @@ function area(shape: Shape): f64 {
 #[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Circle {
-        pub radius: f64,
+        radius: f64,
     },
     Rect {
-        pub width: f64,
-        pub height: f64,
+        width: f64,
+        height: f64,
     },
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, \"{:?}\", self)
+    }
 }
 
 fn area(shape: Shape) -> f64 {
@@ -893,6 +927,17 @@ enum Direction {
     South,
     East,
     West,
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::North => write!(f, \"North\"),
+            Direction::South => write!(f, \"South\"),
+            Direction::East => write!(f, \"East\"),
+            Direction::West => write!(f, \"West\"),
+        }
+    }
 }
 
 fn main() {
@@ -1668,6 +1713,15 @@ function main() {
 enum Direction {
     North,
     South,
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::North => write!(f, \"North\"),
+            Direction::South => write!(f, \"South\"),
+        }
+    }
 }
 
 fn label(d: Direction) -> String {

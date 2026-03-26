@@ -241,9 +241,8 @@ impl Emitter {
                 self.push_indent();
                 for field in &variant.fields {
                     self.write_indent();
-                    if field.public {
-                        self.write("pub ");
-                    }
+                    // Note: enum variant fields in Rust inherit the enum's
+                    // visibility — they cannot have their own `pub` modifier.
                     self.write(&field.name);
                     self.write(": ");
                     self.write(&field.ty.to_string());
@@ -255,6 +254,51 @@ impl Emitter {
             }
         }
 
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+
+        // Emit a Display impl so enum values work with println!("{}", value).
+        self.emit_enum_display(e);
+    }
+
+    /// Emit an `impl fmt::Display` block for an enum.
+    ///
+    /// Simple enums (all variants fieldless) map each variant to its name.
+    /// Data enums delegate to `Debug` formatting.
+    fn emit_enum_display(&mut self, e: &RustEnumDef) {
+        let is_simple = e.variants.iter().all(|v| v.fields.is_empty());
+
+        self.writeln("");
+        self.write_indent();
+        self.writeln(&format!("impl std::fmt::Display for {} {{", e.name));
+        self.push_indent();
+        self.write_indent();
+        self.writeln("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        self.push_indent();
+
+        if is_simple {
+            self.write_indent();
+            self.writeln("match self {");
+            self.push_indent();
+            for variant in &e.variants {
+                self.write_indent();
+                self.writeln(&format!(
+                    "{}::{} => write!(f, \"{}\"),",
+                    e.name, variant.name, variant.name
+                ));
+            }
+            self.pop_indent();
+            self.write_indent();
+            self.writeln("}");
+        } else {
+            self.write_indent();
+            self.writeln("write!(f, \"{:?}\", self)");
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
         self.pop_indent();
         self.write_indent();
         self.writeln("}");
@@ -2553,10 +2597,10 @@ fn main() {
         let output = emit_source(&file);
         assert!(output.contains("enum Shape {"));
         assert!(output.contains("    Circle {"));
-        assert!(output.contains("        pub radius: f64,"));
+        assert!(output.contains("        radius: f64,"));
         assert!(output.contains("    Rect {"));
-        assert!(output.contains("        pub width: f64,"));
-        assert!(output.contains("        pub height: f64,"));
+        assert!(output.contains("        width: f64,"));
+        assert!(output.contains("        height: f64,"));
     }
 
     // Test T015-10: Emit match on simple enum
