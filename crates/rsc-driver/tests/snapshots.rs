@@ -4011,3 +4011,395 @@ test("should handle (edge) cases!", () => {
         "expected sanitized fn name in output:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — Math methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_math_floor_generates_floor_method() {
+    let source = "\
+function main() {
+  const x: f64 = 3.7;
+  console.log(Math.floor(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".floor()"),
+        "expected .floor() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_ceil_generates_ceil_method() {
+    let source = "\
+function main() {
+  const x: f64 = 3.2;
+  console.log(Math.ceil(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".ceil()"),
+        "expected .ceil() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_abs_generates_abs_method() {
+    let source = "\
+function main() {
+  const x: f64 = -5.0;
+  console.log(Math.abs(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".abs()"),
+        "expected .abs() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_sqrt_generates_sqrt_method() {
+    let source = "\
+function main() {
+  const x: f64 = 16.0;
+  console.log(Math.sqrt(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".sqrt()"),
+        "expected .sqrt() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_min_max_generates_method_calls() {
+    let source = "\
+function main() {
+  const a: f64 = 3.0;
+  const b: f64 = 5.0;
+  console.log(Math.min(a, b));
+  console.log(Math.max(a, b));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".min("),
+        "expected .min() method call in output:\n{actual}"
+    );
+    assert!(
+        actual.contains(".max("),
+        "expected .max() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_pow_generates_powf() {
+    let source = "\
+function main() {
+  const x: f64 = 2.0;
+  console.log(Math.pow(x, 3.0));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".powf("),
+        "expected .powf() method call in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_trig_generates_trig_methods() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.sin(x));
+  console.log(Math.cos(x));
+  console.log(Math.tan(x));
+  console.log(Math.log(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".sin()"),
+        "expected .sin() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains(".cos()"),
+        "expected .cos() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains(".tan()"),
+        "expected .tan() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains(".ln()"),
+        "expected .ln() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_pi_generates_const() {
+    let source = "\
+function main() {
+  console.log(Math.PI);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("std::f64::consts::PI"),
+        "expected std::f64::consts::PI in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_e_generates_const() {
+    let source = "\
+function main() {
+  console.log(Math.E);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("std::f64::consts::E"),
+        "expected std::f64::consts::E in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_random_generates_rand_call() {
+    let source = "\
+function main() {
+  console.log(Math.random());
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("rand::random::<f64>()"),
+        "expected rand::random::<f64>() in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — console extensions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_console_error_generates_eprintln() {
+    let source = r#"
+function main() {
+  console.error("error message");
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("eprintln!"),
+        "expected eprintln! in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_console_warn_generates_eprintln_with_warning_prefix() {
+    let source = r#"
+function main() {
+  console.warn("caution");
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("eprintln!"),
+        "expected eprintln! in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("warning:"),
+        "expected warning: prefix in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_console_debug_generates_eprintln_with_debug_prefix() {
+    let source = r#"
+function main() {
+  console.debug("debug info");
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("eprintln!"),
+        "expected eprintln! in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("debug:"),
+        "expected debug: prefix in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — Number functions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_number_parse_int_generates_parse_chain() {
+    let source = r#"
+function main() {
+  const x: i64 = Number.parseInt("42");
+  console.log(x);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("parse::<i64>()"),
+        "expected parse::<i64>() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("unwrap_or(0)"),
+        "expected unwrap_or(0) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_parse_float_generates_parse_chain() {
+    let source = r#"
+function main() {
+  const x: f64 = Number.parseFloat("3.14");
+  console.log(x);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("parse::<f64>()"),
+        "expected parse::<f64>() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_is_nan_generates_is_nan() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Number.isNaN(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".is_nan()"),
+        "expected .is_nan() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_is_finite_generates_is_finite() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Number.isFinite(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".is_finite()"),
+        "expected .is_finite() in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — JSON methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_json_stringify_generates_serde_json() {
+    let source = r#"
+function main() {
+  const data: string = "hello";
+  console.log(JSON.stringify(data));
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("serde_json::to_string("),
+        "expected serde_json::to_string in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_json_parse_generates_serde_json() {
+    let source = r#"
+function main() {
+  const data: string = "{}";
+  const parsed = JSON.parse(data);
+  console.log(parsed);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("serde_json::from_str("),
+        "expected serde_json::from_str in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Standard library builtins — needs_serde_json / needs_rand flags
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_json_usage_sets_needs_serde_json_flag() {
+    let source = r#"
+function main() {
+  const data: string = "hello";
+  console.log(JSON.stringify(data));
+}
+"#;
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        result.needs_serde_json,
+        "JSON.stringify should set needs_serde_json"
+    );
+}
+
+#[test]
+fn test_snapshot_math_random_sets_needs_rand_flag() {
+    let source = "\
+function main() {
+  console.log(Math.random());
+}";
+
+    let result = test_utils::compile_result(source);
+    assert!(result.needs_rand, "Math.random should set needs_rand");
+}
+
+#[test]
+fn test_snapshot_no_json_does_not_set_serde_json_flag() {
+    let source = "\
+function main() {
+  console.log(Math.floor(3.5));
+}";
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        !result.needs_serde_json,
+        "Math.floor should not set needs_serde_json"
+    );
+}
+
+#[test]
+fn test_snapshot_no_random_does_not_set_rand_flag() {
+    let source = "\
+function main() {
+  console.log(Math.floor(3.5));
+}";
+
+    let result = test_utils::compile_result(source);
+    assert!(!result.needs_rand, "Math.floor should not set needs_rand");
+}

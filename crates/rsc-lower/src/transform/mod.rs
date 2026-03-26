@@ -9,6 +9,7 @@ mod class_lower;
 mod expr_lower;
 mod import_lower;
 mod match_lower;
+mod stdlib_deps;
 mod stmt_lower;
 mod test_lower;
 mod use_collector;
@@ -281,6 +282,8 @@ impl Transform {
     /// dependencies discovered from import statements.
     #[allow(clippy::too_many_lines)]
     // Module lowering orchestrates type registration, item lowering, and use collection
+    #[allow(clippy::type_complexity)]
+    // Module lowering returns multiple output channels; a named struct would be heavier
     pub fn lower_module(
         &mut self,
         module: &ast::Module,
@@ -288,6 +291,8 @@ impl Transform {
         RustFile,
         Vec<Diagnostic>,
         HashSet<CrateDependency>,
+        bool,
+        bool,
         bool,
         bool,
     ) {
@@ -422,6 +427,11 @@ impl Transform {
         // Collect test blocks (test(), describe(), it()) from top-level items
         let test_module = self.collect_test_module(module, &mut ctx);
 
+        // Detect whether serde_json or rand crates are needed by scanning the AST
+        // for JSON.stringify/parse and Math.random calls.
+        let needs_serde_json = stdlib_deps::module_needs_serde_json(module);
+        let needs_rand = stdlib_deps::module_needs_rand(module);
+
         let diagnostics = ctx.into_diagnostics();
         (
             RustFile {
@@ -434,6 +444,8 @@ impl Transform {
             crate_deps,
             needs_async_runtime,
             needs_futures_crate,
+            needs_serde_json,
+            needs_rand,
         )
     }
 
@@ -1467,7 +1479,7 @@ mod tests {
         let f = make_fn("main", vec![], None, vec![]);
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         assert_eq!(file.items.len(), 1);
@@ -1495,7 +1507,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -1529,7 +1541,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1571,7 +1583,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1613,7 +1625,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1647,7 +1659,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1686,7 +1698,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1733,7 +1745,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1771,7 +1783,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1799,7 +1811,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -1833,7 +1845,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (_, diags, _, _, _) = transform.lower_module(&module);
+        let (_, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("unknown type"));
@@ -1923,7 +1935,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -1998,7 +2010,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2071,7 +2083,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2170,7 +2182,7 @@ mod tests {
 
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2229,7 +2241,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2270,7 +2282,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2302,7 +2314,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2343,7 +2355,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2383,7 +2395,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2420,7 +2432,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
 
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function item");
@@ -2477,7 +2489,7 @@ mod tests {
             span: span(0, 50),
         };
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         assert_eq!(file.items.len(), 1);
         let RustItem::Struct(s) = &file.items[0] else {
@@ -2566,7 +2578,7 @@ mod tests {
             span: span(0, 100),
         };
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         // The function is the second item
         let RustItem::Function(func) = &file.items[1] else {
@@ -2610,7 +2622,7 @@ mod tests {
         ];
         let module = make_module(vec![fn_item(make_fn("main", vec![], None, body))]);
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected Function item");
         };
@@ -2669,7 +2681,7 @@ mod tests {
         };
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Function(func) = &file.items[0] else {
@@ -2739,7 +2751,7 @@ mod tests {
         };
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Function(func) = &file.items[0] else {
@@ -2780,7 +2792,7 @@ mod tests {
             span: span(0, 30),
         }]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let RustItem::Struct(s) = &file.items[0] else {
@@ -2822,7 +2834,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -2868,7 +2880,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -2917,7 +2929,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -2969,7 +2981,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
@@ -3012,7 +3024,7 @@ mod tests {
         };
 
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
         assert_eq!(file.items.len(), 1);
         match &file.items[0] {
             RustItem::Enum(e) => {
@@ -3081,7 +3093,7 @@ mod tests {
         };
 
         let mut transform = Transform::new(false);
-        let (file, _, _, _, _) = transform.lower_module(&module);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
         match &file.items[0] {
             RustItem::Enum(e) => {
                 assert_eq!(e.name, "Shape");
@@ -3124,7 +3136,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3177,7 +3189,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3213,7 +3225,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3253,7 +3265,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty());
         let RustItem::Function(func) = &file.items[0] else {
             panic!("expected function");
@@ -3308,7 +3320,7 @@ mod tests {
         );
         let module = make_module(vec![fn_item(f)]);
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
 
         assert!(!file.uses.is_empty(), "expected use declarations");
         assert!(
@@ -3357,7 +3369,7 @@ mod tests {
         })]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3388,7 +3400,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3434,7 +3446,7 @@ mod tests {
         })]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3481,7 +3493,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3522,7 +3534,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3562,7 +3574,7 @@ mod tests {
         ))]);
 
         let mut transform = Transform::new(false);
-        let (file, _diags, _, _, _) = transform.lower_module(&module);
+        let (file, _diags, _, _, _, _, _) = transform.lower_module(&module);
         let func = match &file.items[0] {
             RustItem::Function(f) => f,
             _ => panic!("expected Function"),
@@ -3934,7 +3946,7 @@ mod tests {
         };
 
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         assert_eq!(file.items.len(), 1);
         match &file.items[0] {
@@ -3979,7 +3991,7 @@ mod tests {
         };
 
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         match &file.items[0] {
             RustItem::Trait(t) => {
@@ -4093,7 +4105,7 @@ mod tests {
         };
 
         let mut transform = Transform::new(false);
-        let (file, diags, _, _, _) = transform.lower_module(&module);
+        let (file, diags, _, _, _, _, _) = transform.lower_module(&module);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
         // The function should have a generated type parameter T with bounds
@@ -4706,7 +4718,7 @@ function main() {}"#;
         }"#;
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, needs_async_runtime, _) = transform.lower_module(&module);
+        let (_, _, _, needs_async_runtime, _, _, _) = transform.lower_module(&module);
         assert!(
             needs_async_runtime,
             "expected needs_async_runtime to be true when async function exists"
@@ -4719,7 +4731,7 @@ function main() {}"#;
         let source = "function add(a: i32, b: i32): i32 { return a + b; }";
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, needs_async_runtime, _) = transform.lower_module(&module);
+        let (_, _, _, needs_async_runtime, _, _, _) = transform.lower_module(&module);
         assert!(
             !needs_async_runtime,
             "expected needs_async_runtime to be false when no async function exists"
@@ -5154,7 +5166,7 @@ async function main() {
         }"#;
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, needs_async_runtime, _) = transform.lower_module(&module);
+        let (_, _, _, needs_async_runtime, _, _, _) = transform.lower_module(&module);
         assert!(
             needs_async_runtime,
             "expected needs_async_runtime to be true when spawn is used"
@@ -5169,7 +5181,7 @@ async function main() {
         }"#;
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, needs_async_runtime, _) = transform.lower_module(&module);
+        let (_, _, _, needs_async_runtime, _, _, _) = transform.lower_module(&module);
         assert!(
             needs_async_runtime,
             "expected needs_async_runtime to be true when Promise.all is used"
@@ -5408,7 +5420,7 @@ async function main() {
             "async function main() { for await (const msg of channel) { console.log(msg); } }";
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, _, needs_futures) = transform.lower_module(&module);
+        let (_, _, _, _, needs_futures, _, _) = transform.lower_module(&module);
         assert!(
             needs_futures,
             "for await should set needs_futures_crate flag"
@@ -5421,7 +5433,7 @@ async function main() {
         let source = "async function main() { const first = await Promise.any([tryA(), tryB()]); }";
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, _, needs_futures) = transform.lower_module(&module);
+        let (_, _, _, _, needs_futures, _, _) = transform.lower_module(&module);
         assert!(
             needs_futures,
             "Promise.any should set needs_futures_crate flag"
@@ -5434,7 +5446,7 @@ async function main() {
         let source = "async function main() { const x = await Promise.race([a(), b()]); }";
         let module = parse_module(source);
         let mut transform = Transform::new(false);
-        let (_, _, _, needs_async, _) = transform.lower_module(&module);
+        let (_, _, _, needs_async, _, _, _) = transform.lower_module(&module);
         assert!(
             needs_async,
             "Promise.race should set needs_async_runtime flag"

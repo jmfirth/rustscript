@@ -245,6 +245,42 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_map_set_method("values", lower_values);
     registry.register_map_set_method("entries", lower_entries);
     registry.register_map_set_method("add", lower_set_add);
+
+    // Phase 5: Math object methods
+    registry.register_method("Math", "floor", lower_math_floor, false);
+    registry.register_method("Math", "ceil", lower_math_ceil, false);
+    registry.register_method("Math", "round", lower_math_round, false);
+    registry.register_method("Math", "abs", lower_math_abs, false);
+    registry.register_method("Math", "sqrt", lower_math_sqrt, false);
+    registry.register_method("Math", "min", lower_math_min, false);
+    registry.register_method("Math", "max", lower_math_max, false);
+    registry.register_method("Math", "random", lower_math_random, false);
+    registry.register_method("Math", "pow", lower_math_pow, false);
+    registry.register_method("Math", "log", lower_math_log, false);
+    registry.register_method("Math", "sin", lower_math_sin, false);
+    registry.register_method("Math", "cos", lower_math_cos, false);
+    registry.register_method("Math", "tan", lower_math_tan, false);
+
+    // Phase 5: console extensions
+    registry.register_method("console", "error", lower_console_error, true);
+    registry.register_method("console", "warn", lower_console_warn, true);
+    registry.register_method("console", "debug", lower_console_debug, true);
+
+    // Phase 5: Number functions
+    registry.register_method("Number", "parseInt", lower_number_parse_int, false);
+    registry.register_method("Number", "parseFloat", lower_number_parse_float, false);
+    registry.register_method("Number", "isNaN", lower_number_is_nan, false);
+    registry.register_method("Number", "isFinite", lower_number_is_finite, false);
+    registry.register_method("Number", "isInteger", lower_number_is_integer, false);
+
+    // Phase 5: Object utilities
+    registry.register_method("Object", "keys", lower_object_keys, false);
+    registry.register_method("Object", "values", lower_object_values, false);
+    registry.register_method("Object", "entries", lower_object_entries, false);
+
+    // Phase 5: JSON methods
+    registry.register_method("JSON", "stringify", lower_json_stringify, false);
+    registry.register_method("JSON", "parse", lower_json_parse, false);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -1419,6 +1455,581 @@ fn lower_set_add(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExp
         },
         span,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: Math object lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `Math.floor(x)` to `x.floor()`.
+fn lower_math_floor(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "floor".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.ceil(x)` to `x.ceil()`.
+fn lower_math_ceil(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "ceil".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.round(x)` to `x.round()`.
+fn lower_math_round(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "round".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.abs(x)` to `x.abs()`.
+fn lower_math_abs(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "abs".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.sqrt(x)` to `x.sqrt()`.
+fn lower_math_sqrt(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "sqrt".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.min(a, b)` to `a.min(b)`.
+fn lower_math_min(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let a = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    let b = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(a),
+            method: "min".into(),
+            type_args: vec![],
+            args: vec![b],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.max(a, b)` to `a.max(b)`.
+fn lower_math_max(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let a = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    let b = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(a),
+            method: "max".into(),
+            type_args: vec![],
+            args: vec![b],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.random()` to `rand::random::<f64>()`.
+fn lower_math_random(_args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "rand::random::<f64>".into(),
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.pow(base, exp)` to `base.powf(exp)`.
+fn lower_math_pow(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let base = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    let exp = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(base),
+            method: "powf".into(),
+            type_args: vec![],
+            args: vec![exp],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.log(x)` to `x.ln()`.
+fn lower_math_log(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "ln".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.sin(x)` to `x.sin()`.
+fn lower_math_sin(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "sin".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.cos(x)` to `x.cos()`.
+fn lower_math_cos(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "cos".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.tan(x)` to `x.tan()`.
+fn lower_math_tan(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "tan".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Helper: extract the first argument, defaulting to `0.0` (f64 literal).
+fn first_arg_or_zero(args: Vec<RustExpr>) -> RustExpr {
+    args.into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: console extension lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `console.error(args...)` to `eprintln!("{} {} ...", arg1, arg2, ...)`.
+fn lower_console_error(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let format_str = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+    let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
+    macro_args.extend(args.into_iter().map(strip_to_string));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.warn(args...)` to `eprintln!("warning: {} {} ...", arg1, arg2, ...)`.
+fn lower_console_warn(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let format_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+    let format_str = format!("warning: {format_placeholders}");
+    let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
+    macro_args.extend(args.into_iter().map(strip_to_string));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.debug(args...)` to `eprintln!("debug: {} {} ...", arg1, arg2, ...)`.
+fn lower_console_debug(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let format_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+    let format_str = format!("debug: {format_placeholders}");
+    let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
+    macro_args.extend(args.into_iter().map(strip_to_string));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: Number function lowering
+// ---------------------------------------------------------------------------
+
+/// Lower `Number.parseInt(str)` to `str.parse::<i64>().unwrap_or(0)`.
+fn lower_number_parse_int(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let parse_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "parse".into(),
+            type_args: vec![RustType::I64],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(parse_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::IntLit(0))],
+        },
+        span,
+    )
+}
+
+/// Lower `Number.parseFloat(str)` to `str.parse::<f64>().unwrap_or(0.0)`.
+fn lower_number_parse_float(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let parse_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "parse".into(),
+            type_args: vec![RustType::F64],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(parse_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::FloatLit(0.0))],
+        },
+        span,
+    )
+}
+
+/// Lower `Number.isNaN(x)` to `x.is_nan()`.
+fn lower_number_is_nan(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "is_nan".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Number.isFinite(x)` to `x.is_finite()`.
+fn lower_number_is_finite(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "is_finite".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Number.isInteger(x)` to `((x as i64 as f64) == x)`.
+fn lower_number_is_integer(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    // Build: (x as i64 as f64) == x
+    // We need the argument used in two places, so we emit the comparison
+    // using Ident references. Since args are already lowered expressions,
+    // we just use the expression directly (may evaluate twice — acceptable
+    // for simple expressions; JS semantics do the same).
+    let int_cast = RustExpr::synthetic(RustExprKind::Cast(Box::new(arg.clone()), RustType::I64));
+    let float_cast = RustExpr::synthetic(RustExprKind::Cast(Box::new(int_cast), RustType::F64));
+    RustExpr::new(
+        RustExprKind::Binary {
+            op: rsc_syntax::rust_ir::RustBinaryOp::Eq,
+            left: Box::new(float_cast),
+            right: Box::new(arg),
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: Object utility lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `Object.keys(map)` to `map.keys().cloned().collect::<Vec<_>>()`.
+fn lower_object_keys(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let keys_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "keys".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let cloned_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(keys_call),
+            method: "cloned".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(cloned_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Object.values(map)` to `map.values().cloned().collect::<Vec<_>>()`.
+fn lower_object_values(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let values_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "values".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let cloned_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(values_call),
+            method: "cloned".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(cloned_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Object.entries(map)` to `map.iter().map(|(k,v)| (k.clone(), v.clone())).collect::<Vec<_>>()`.
+fn lower_object_entries(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "(k, v)".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                    "(k.clone(), v.clone())".into(),
+                )))),
+            })],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: JSON method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `JSON.stringify(obj)` to `serde_json::to_string(&obj).unwrap_or_default()`.
+fn lower_json_stringify(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let borrow_arg = RustExpr::synthetic(RustExprKind::Borrow(Box::new(arg)));
+    let call = RustExpr::new(
+        RustExprKind::Call {
+            func: "serde_json::to_string".into(),
+            args: vec![borrow_arg],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(call),
+            method: "unwrap_or_default".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `JSON.parse(str)` to `serde_json::from_str(&str).unwrap_or_default()`.
+fn lower_json_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let borrow_arg = RustExpr::synthetic(RustExprKind::Borrow(Box::new(arg)));
+    let call = RustExpr::new(
+        RustExprKind::Call {
+            func: "serde_json::from_str".into(),
+            args: vec![borrow_arg],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(call),
+            method: "unwrap_or_default".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Check whether an expression uses `Math.PI` or `Math.E` properties.
+///
+/// This is called from the `FieldAccess` lowering in `expr_lower.rs` to
+/// intercept `Math.PI` and `Math.E` before they are lowered as normal
+/// field access expressions.
+pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option<RustExpr> {
+    if object_name != "Math" {
+        return None;
+    }
+    match field_name {
+        "PI" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "std::f64::consts::PI".into(),
+        ))),
+        "E" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "std::f64::consts::E".into(),
+        ))),
+        _ => None,
+    }
+}
+
+/// Check whether the given object and method pair uses JSON methods
+/// that require the `serde_json` crate.
+pub(crate) fn needs_serde_json(object: &str, method: &str) -> bool {
+    object == "JSON" && (method == "stringify" || method == "parse")
+}
+
+/// Check whether the given object and method pair uses `Math.random()`
+/// which requires the `rand` crate.
+pub(crate) fn needs_rand_crate(object: &str, method: &str) -> bool {
+    object == "Math" && method == "random"
 }
 
 /// Inline emit a `RustExpr` to a Rust code string (mini-emitter for range expressions).
@@ -3483,5 +4094,394 @@ mod tests {
             }
             other => panic!("expected MethodCall(insert), got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — Math methods
+    // ---------------------------------------------------------------
+
+    fn float_arg(val: f64) -> RustExpr {
+        RustExpr::new(RustExprKind::FloatLit(val), span())
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_math_floor_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Math", "floor").is_some());
+    }
+
+    #[test]
+    fn test_lower_math_floor_produces_method_call() {
+        let result = lower_math_floor(vec![float_arg(3.7)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "floor");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected MethodCall(floor), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_ceil_produces_method_call() {
+        let result = lower_math_ceil(vec![float_arg(3.2)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "ceil"),
+            other => panic!("expected MethodCall(ceil), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_round_produces_method_call() {
+        let result = lower_math_round(vec![float_arg(3.5)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "round"),
+            other => panic!("expected MethodCall(round), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_abs_produces_method_call() {
+        let result = lower_math_abs(vec![float_arg(-5.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "abs"),
+            other => panic!("expected MethodCall(abs), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_sqrt_produces_method_call() {
+        let result = lower_math_sqrt(vec![float_arg(16.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "sqrt"),
+            other => panic!("expected MethodCall(sqrt), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_min_produces_method_call() {
+        let result = lower_math_min(vec![float_arg(1.0), float_arg(2.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "min");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected MethodCall(min), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_max_produces_method_call() {
+        let result = lower_math_max(vec![float_arg(1.0), float_arg(2.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "max");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected MethodCall(max), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_random_produces_rand_call() {
+        let result = lower_math_random(vec![], span());
+        match &result.kind {
+            RustExprKind::Call { func, args } => {
+                assert_eq!(func, "rand::random::<f64>");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Call(rand::random), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_pow_produces_powf() {
+        let result = lower_math_pow(vec![float_arg(2.0), float_arg(3.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "powf");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected MethodCall(powf), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_log_produces_ln() {
+        let result = lower_math_log(vec![float_arg(10.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "ln"),
+            other => panic!("expected MethodCall(ln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_sin_produces_sin() {
+        let result = lower_math_sin(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "sin"),
+            other => panic!("expected MethodCall(sin), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_cos_produces_cos() {
+        let result = lower_math_cos(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "cos"),
+            other => panic!("expected MethodCall(cos), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_tan_produces_tan() {
+        let result = lower_math_tan(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "tan"),
+            other => panic!("expected MethodCall(tan), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — console extensions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_console_error_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "error").is_some());
+    }
+
+    #[test]
+    fn test_lower_console_error_produces_eprintln() {
+        let result = lower_console_error(vec![string_arg("oops")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, .. } => assert_eq!(name, "eprintln"),
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_warn_produces_eprintln_with_prefix() {
+        let result = lower_console_warn(vec![string_arg("caution")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.starts_with("warning:"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_debug_produces_eprintln_with_prefix() {
+        let result = lower_console_debug(vec![string_arg("info")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.starts_with("debug:"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — Number functions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_number_parse_int_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Number", "parseInt").is_some());
+    }
+
+    #[test]
+    fn test_lower_number_parse_int_produces_parse_chain() {
+        let result = lower_number_parse_int(vec![string_arg("42")], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "unwrap_or"),
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_parse_float_produces_parse_chain() {
+        let result = lower_number_parse_float(vec![string_arg("3.14")], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "unwrap_or"),
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_is_nan_produces_method_call() {
+        let result = lower_number_is_nan(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "is_nan"),
+            other => panic!("expected MethodCall(is_nan), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_is_finite_produces_method_call() {
+        let result = lower_number_is_finite(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "is_finite"),
+            other => panic!("expected MethodCall(is_finite), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_is_integer_produces_eq_comparison() {
+        let result = lower_number_is_integer(vec![float_arg(5.0)], span());
+        match &result.kind {
+            RustExprKind::Binary {
+                op: RustBinaryOp::Eq,
+                ..
+            } => {} // correct
+            other => panic!("expected Binary(Eq), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — Object utilities
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_object_keys_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "keys").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_keys_produces_collect_chain() {
+        let result = lower_object_keys(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "collect"),
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_object_values_produces_collect_chain() {
+        let result = lower_object_values(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "collect"),
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_object_entries_produces_collect_chain() {
+        let result = lower_object_entries(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "collect"),
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — JSON methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_json_stringify_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("JSON", "stringify").is_some());
+    }
+
+    #[test]
+    fn test_lower_json_stringify_produces_serde_json_call() {
+        let result = lower_json_stringify(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "unwrap_or_default");
+                assert!(
+                    matches!(&receiver.kind, RustExprKind::Call { func, .. } if func == "serde_json::to_string")
+                );
+            }
+            other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_json_parse_produces_serde_json_call() {
+        let result = lower_json_parse(vec![string_arg("{}")], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "unwrap_or_default");
+                assert!(
+                    matches!(&receiver.kind, RustExprKind::Call { func, .. } if func == "serde_json::from_str")
+                );
+            }
+            other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — Math constants
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_math_constant_pi() {
+        let result = lower_math_constant("Math", "PI");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::PI"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_e() {
+        let result = lower_math_constant("Math", "E");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::E"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_unknown_returns_none() {
+        assert!(lower_math_constant("Math", "LN2").is_none());
+    }
+
+    #[test]
+    fn test_lower_math_constant_non_math_returns_none() {
+        assert!(lower_math_constant("console", "PI").is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // Task: Standard library builtins — needs_serde_json / needs_rand
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_needs_serde_json_true_for_json_stringify() {
+        assert!(needs_serde_json("JSON", "stringify"));
+    }
+
+    #[test]
+    fn test_needs_serde_json_true_for_json_parse() {
+        assert!(needs_serde_json("JSON", "parse"));
+    }
+
+    #[test]
+    fn test_needs_serde_json_false_for_console_log() {
+        assert!(!needs_serde_json("console", "log"));
+    }
+
+    #[test]
+    fn test_needs_rand_crate_true_for_math_random() {
+        assert!(needs_rand_crate("Math", "random"));
+    }
+
+    #[test]
+    fn test_needs_rand_crate_false_for_math_floor() {
+        assert!(!needs_rand_crate("Math", "floor"));
     }
 }

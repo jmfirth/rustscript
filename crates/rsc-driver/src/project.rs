@@ -313,6 +313,8 @@ impl Project {
     ///
     /// Returns an error if the main source file cannot be found or read, or if
     /// the build directory cannot be created.
+    #[allow(clippy::too_many_lines)]
+    // Multi-file project compilation orchestrates many steps; splitting would obscure the flow
     pub fn compile(&self) -> Result<(CompileResult, PathBuf, String, String)> {
         let source_path = self.main_source()?;
         let source = fs::read_to_string(&source_path)?;
@@ -328,6 +330,10 @@ impl Project {
         let mut any_needs_async_runtime = false;
         // Track whether any module needs the futures crate
         let mut any_needs_futures_crate = false;
+        // Track whether any module uses JSON.stringify/parse (needs serde_json)
+        let mut any_needs_serde_json = false;
+        // Track whether any module uses Math.random() (needs rand)
+        let mut any_needs_rand = false;
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -349,6 +355,8 @@ impl Project {
             all_crate_deps.extend(module_result.crate_dependencies.iter().cloned());
             any_needs_async_runtime |= module_result.needs_async_runtime;
             any_needs_futures_crate |= module_result.needs_futures_crate;
+            any_needs_serde_json |= module_result.needs_serde_json;
+            any_needs_rand |= module_result.needs_rand;
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -396,6 +404,8 @@ impl Project {
         all_crate_deps.extend(result.crate_dependencies.iter().cloned());
         any_needs_async_runtime |= result.needs_async_runtime;
         any_needs_futures_crate |= result.needs_futures_crate;
+        any_needs_serde_json |= result.needs_serde_json;
+        any_needs_rand |= result.needs_rand;
 
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
@@ -408,6 +418,16 @@ impl Project {
         // Add futures crate if for-await or Promise.any is used
         if any_needs_futures_crate {
             cargo_builder.add_dependency("futures", DependencySpec::Simple("0.3".to_owned()));
+        }
+
+        // Add serde_json if JSON.stringify/parse is used
+        if any_needs_serde_json {
+            cargo_builder.add_dependency("serde_json", DependencySpec::Simple("1".to_owned()));
+        }
+
+        // Add rand crate if Math.random() is used
+        if any_needs_rand {
+            cargo_builder.add_dependency("rand", DependencySpec::Simple("0.8".to_owned()));
         }
 
         // Add all external crate dependencies (deduplicated by BTreeMap)
