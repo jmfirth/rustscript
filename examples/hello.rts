@@ -1,0 +1,4 @@
+// Hello World — the simplest RustScript program
+function main() {
+  console.log("Hello, World!");
+}
