@@ -45,6 +45,10 @@ struct TranslationPatterns {
     static_lifetime: Regex,
     /// Matches file reference patterns like `src/main.rs:LINE:COL` in rustc output.
     file_reference: Regex,
+    /// Matches `Arc<Mutex<...>>` patterns (`shared<T>` in `RustScript`).
+    arc_mutex_type: Regex,
+    /// Matches `Box<dyn ...>` patterns (abstract class / interface in `RustScript`).
+    box_dyn_type: Regex,
 }
 
 // SAFETY: All regex literals below are compile-time constants; these never fail.
@@ -62,6 +66,8 @@ static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPat
     impl_trait: Regex::new(r"\bimpl\s+([A-Z]\w+)\b").expect("valid regex"),
     static_lifetime: Regex::new(r"'static\s*").expect("valid regex"),
     file_reference: Regex::new(r"(src/\w+)\.rs:(\d+):(\d+)").expect("valid regex"),
+    arc_mutex_type: Regex::new(r"\bArc<Mutex<").expect("valid regex"),
+    box_dyn_type: Regex::new(r"\bBox<dyn\s+").expect("valid regex"),
 });
 
 /// Translate `rustc` error output into `RustScript`-friendly terms.
@@ -187,6 +193,10 @@ fn translate_type_names(input: &str) -> String {
     output = translate_hashmap_type(&output);
     output = translate_vec_type(&output);
 
+    // 4b. Shared and trait-object types
+    output = translate_arc_mutex_type(&output);
+    output = translate_box_dyn_type(&output);
+
     // 5. impl Trait (after Fn translations to avoid double-matching)
     output = translate_impl_trait(&output);
 
@@ -280,6 +290,71 @@ fn translate_impl_trait(input: &str) -> String {
         }
     })
     .into_owned()
+}
+
+/// Translate `Arc<Mutex<T>>` → `shared<T>`.
+///
+/// Peels off both layers of generics and wraps the inner type as `shared<T>`.
+fn translate_arc_mutex_type(input: &str) -> String {
+    let pattern = &PATTERNS.arc_mutex_type;
+    let mut result = String::with_capacity(input.len());
+    let mut remaining = input;
+
+    while let Some(m) = pattern.find(remaining) {
+        result.push_str(&remaining[..m.start()]);
+
+        // After `Arc<Mutex<`, find the balanced closing `>>`.
+        let after_open = &remaining[m.end()..];
+        if let Some(inner_close) = find_balanced_close(after_open) {
+            let inner = &after_open[..inner_close];
+            let translated_inner = translate_type_names(inner);
+            // After the inner `>`, we expect another `>` for the outer Arc.
+            let after_inner = &after_open[inner_close + 1..];
+            if let Some(rest) = after_inner.strip_prefix('>') {
+                result.push_str("shared<");
+                result.push_str(&translated_inner);
+                result.push('>');
+                remaining = rest;
+            } else {
+                // Malformed — leave original text.
+                result.push_str("Arc<Mutex<");
+                remaining = after_open;
+            }
+        } else {
+            result.push_str("Arc<Mutex<");
+            remaining = &remaining[m.end()..];
+        }
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+/// Translate `Box<dyn Trait>` → `Trait` (just the trait name).
+///
+/// Strips the `Box<dyn ...>` wrapper, keeping only the trait name.
+fn translate_box_dyn_type(input: &str) -> String {
+    let pattern = &PATTERNS.box_dyn_type;
+    let mut result = String::with_capacity(input.len());
+    let mut remaining = input;
+
+    while let Some(m) = pattern.find(remaining) {
+        result.push_str(&remaining[..m.start()]);
+
+        // After `Box<dyn `, find the balanced closing `>`.
+        let after_open = &remaining[m.end()..];
+        if let Some(close_pos) = find_balanced_close(after_open) {
+            let inner = after_open[..close_pos].trim();
+            result.push_str(inner);
+            remaining = &after_open[close_pos + 1..];
+        } else {
+            result.push_str("Box<dyn ");
+            remaining = &remaining[m.end()..];
+        }
+    }
+
+    result.push_str(remaining);
+    result
 }
 
 /// Replace a generic type like `Vec<T>` → `Array<T>` with balanced bracket matching.
@@ -974,5 +1049,39 @@ mod tests {
         // Beyond end is clamped to source length. "a\nb\n" has 2 newlines,
         // so the clamped range covers all of them → line 3 (1-based).
         assert_eq!(byte_offset_to_line(source, 100), 3);
+    }
+
+    // =========================================================================
+    // Task 062: Phase 5 tooling catch-up — new type translations
+    // =========================================================================
+
+    // --- Arc<Mutex<T>> → shared<T> ---
+    #[test]
+    fn test_translate_arc_mutex_to_shared() {
+        let input = "expected Arc<Mutex<i32>>";
+        let result = translate_type_names(input);
+        assert_eq!(result, "expected shared<i32>");
+    }
+
+    #[test]
+    fn test_translate_arc_mutex_nested_to_shared() {
+        let input = "expected Arc<Mutex<Vec<String>>>";
+        let result = translate_type_names(input);
+        assert_eq!(result, "expected shared<Array<string>>");
+    }
+
+    // --- Box<dyn Trait> → Trait ---
+    #[test]
+    fn test_translate_box_dyn_to_trait_name() {
+        let input = "expected Box<dyn Serializable>";
+        let result = translate_type_names(input);
+        assert_eq!(result, "expected Serializable");
+    }
+
+    #[test]
+    fn test_translate_box_dyn_in_context() {
+        let input = "found Box<dyn Display>, expected String";
+        let result = translate_type_names(input);
+        assert_eq!(result, "found Display, expected string");
     }
 }

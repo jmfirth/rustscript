@@ -136,6 +136,96 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
             markdown: "```rustscript\nstring.chars(): Array<string>\n```\n\nReturns the characters of the string.\n\n**Rust:** `.chars()`",
         },
     );
+    m.insert(
+        "string.replace",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.replace(search: string, replacement: string): string\n```\n\nReplaces the first occurrence of a substring.\n\n**Rust:** `.replacen(search, replacement, 1)`",
+        },
+    );
+    m.insert(
+        "string.replaceAll",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.replaceAll(search: string, replacement: string): string\n```\n\nReplaces all occurrences of a substring.\n\n**Rust:** `.replace(search, replacement)`",
+        },
+    );
+    m.insert(
+        "string.charAt",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.charAt(index: i32): string\n```\n\nReturns the character at the given index.\n\n**Rust:** `.chars().nth(index)`",
+        },
+    );
+    m.insert(
+        "string.charCodeAt",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.charCodeAt(index: i32): i32\n```\n\nReturns the Unicode code point at the given index.\n\n**Rust:** `.chars().nth(index).map(|c| c as u32)`",
+        },
+    );
+    m.insert(
+        "string.indexOf",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.indexOf(search: string): i32\n```\n\nReturns the index of the first occurrence of a substring, or -1.\n\n**Rust:** `.find(search).map_or(-1, |i| i as i64)`",
+        },
+    );
+    m.insert(
+        "string.lastIndexOf",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.lastIndexOf(search: string): i32\n```\n\nReturns the index of the last occurrence of a substring, or -1.\n\n**Rust:** `.rfind(search).map_or(-1, |i| i as i64)`",
+        },
+    );
+    m.insert(
+        "string.slice",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.slice(start: i32, end?: i32): string\n```\n\nExtracts a section of the string.\n\n**Rust:** `s[start..end].to_owned()`",
+        },
+    );
+    m.insert(
+        "string.substring",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.substring(start: i32, end?: i32): string\n```\n\nExtracts characters between two indices.\n\n**Rust:** `s[start..end].to_owned()`",
+        },
+    );
+    m.insert(
+        "string.padStart",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.padStart(length: i32, fill?: string): string\n```\n\nPads the string from the start to the target length.\n\n**Rust:** `format!(\"{:>width$}\", s, width = length)`",
+        },
+    );
+    m.insert(
+        "string.padEnd",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.padEnd(length: i32, fill?: string): string\n```\n\nPads the string from the end to the target length.\n\n**Rust:** `format!(\"{:<width$}\", s, width = length)`",
+        },
+    );
+    m.insert(
+        "string.repeat",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.repeat(count: i32): string\n```\n\nRepeats the string the given number of times.\n\n**Rust:** `.repeat(count)`",
+        },
+    );
+    m.insert(
+        "string.concat",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.concat(other: string): string\n```\n\nConcatenates two strings.\n\n**Rust:** `format!(\"{}{}\", s, other)`",
+        },
+    );
+    m.insert(
+        "string.at",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.at(index: i32): string | null\n```\n\nReturns the character at the given index (supports negative indices).\n\n**Rust:** `.chars().nth(index)`",
+        },
+    );
+    m.insert(
+        "string.trimStart",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.trimStart(): string\n```\n\nRemoves leading whitespace.\n\n**Rust:** `.trim_start().to_owned()`",
+        },
+    );
+    m.insert(
+        "string.trimEnd",
+        BuiltinHover {
+            markdown: "```rustscript\nstring.trimEnd(): string\n```\n\nRemoves trailing whitespace.\n\n**Rust:** `.trim_end().to_owned()`",
+        },
+    );
 
     // Array methods
     m.insert(
@@ -184,6 +274,164 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         "array.join",
         BuiltinHover {
             markdown: "```rustscript\nArray<T>.join(separator: string): string\n```\n\nJoins array elements into a single string.\n\n**Rust:** `.join(separator)`",
+        },
+    );
+    m.insert(
+        "array.reduce",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.reduce(fn: (acc: U, item: T) => U, initial: U): U\n```\n\nReduces the array to a single value.\n\n**Rust:** `.iter().fold(initial, fn)`",
+        },
+    );
+    m.insert(
+        "array.find",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.find(fn: (T) => boolean): T | null\n```\n\nReturns the first element matching the predicate.\n\n**Rust:** `.iter().find(fn).cloned()`",
+        },
+    );
+    m.insert(
+        "array.findIndex",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.findIndex(fn: (T) => boolean): i32\n```\n\nReturns the index of the first element matching the predicate, or -1.\n\n**Rust:** `.iter().position(fn).map_or(-1, |i| i as i64)`",
+        },
+    );
+    m.insert(
+        "array.findLast",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.findLast(fn: (T) => boolean): T | null\n```\n\nReturns the last element matching the predicate.\n\n**Rust:** `.iter().rev().find(fn).cloned()`",
+        },
+    );
+    m.insert(
+        "array.findLastIndex",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.findLastIndex(fn: (T) => boolean): i32\n```\n\nReturns the index of the last element matching the predicate, or -1.\n\n**Rust:** `.iter().rposition(fn).map_or(-1, |i| i as i64)`",
+        },
+    );
+    m.insert(
+        "array.some",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.some(fn: (T) => boolean): boolean\n```\n\nReturns true if any element matches the predicate.\n\n**Rust:** `.iter().any(fn)`",
+        },
+    );
+    m.insert(
+        "array.every",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.every(fn: (T) => boolean): boolean\n```\n\nReturns true if all elements match the predicate.\n\n**Rust:** `.iter().all(fn)`",
+        },
+    );
+    m.insert(
+        "array.flat",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<Array<T>>.flat(): Array<T>\n```\n\nFlattens one level of nesting.\n\n**Rust:** `.into_iter().flatten().collect()`",
+        },
+    );
+    m.insert(
+        "array.flatMap",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.flatMap(fn: (T) => Array<U>): Array<U>\n```\n\nMaps then flattens one level.\n\n**Rust:** `.iter().flat_map(fn).collect()`",
+        },
+    );
+    m.insert(
+        "array.shift",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.shift(): T | null\n```\n\nRemoves and returns the first element.\n\n**Rust:** `if arr.is_empty() { None } else { Some(arr.remove(0)) }`",
+        },
+    );
+    m.insert(
+        "array.unshift",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.unshift(value: T): void\n```\n\nInserts an element at the beginning.\n\n**Rust:** `.insert(0, value)`",
+        },
+    );
+    m.insert(
+        "array.reverse",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.reverse(): void\n```\n\nReverses the array in place.\n\n**Rust:** `.reverse()`",
+        },
+    );
+    m.insert(
+        "array.sort",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.sort(): void\n```\n\nSorts the array in place.\n\n**Rust:** `.sort()` for `Ord` types",
+        },
+    );
+    m.insert(
+        "array.fill",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.fill(value: T): void\n```\n\nFills the array with the given value.\n\n**Rust:** `.fill(value)`",
+        },
+    );
+
+    // Map/Set methods
+    m.insert(
+        "map.get",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.get(key: K): V | null\n```\n\nReturns the value for the given key, or null.\n\n**Rust:** `.get(&key).cloned()`",
+        },
+    );
+    m.insert(
+        "map.set",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.set(key: K, value: V): void\n```\n\nSets a key-value pair.\n\n**Rust:** `.insert(key, value)`",
+        },
+    );
+    m.insert(
+        "map.has",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.has(key: K): boolean\n```\n\nChecks if the map contains the key.\n\n**Rust:** `.contains_key(&key)`",
+        },
+    );
+    m.insert(
+        "map.delete",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.delete(key: K): boolean\n```\n\nRemoves the entry for the given key.\n\n**Rust:** `.remove(&key).is_some()`",
+        },
+    );
+    m.insert(
+        "map.clear",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.clear(): void\n```\n\nRemoves all entries.\n\n**Rust:** `.clear()`",
+        },
+    );
+    m.insert(
+        "map.keys",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.keys(): Array<K>\n```\n\nReturns the keys as an array.\n\n**Rust:** `.keys().cloned().collect()`",
+        },
+    );
+    m.insert(
+        "map.values",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.values(): Array<V>\n```\n\nReturns the values as an array.\n\n**Rust:** `.values().cloned().collect()`",
+        },
+    );
+    m.insert(
+        "map.entries",
+        BuiltinHover {
+            markdown: "```rustscript\nMap<K, V>.entries(): Array<[K, V]>\n```\n\nReturns the entries as an array of key-value pairs.\n\n**Rust:** `.iter().map(|(k, v)| (k.clone(), v.clone())).collect()`",
+        },
+    );
+    m.insert(
+        "set.add",
+        BuiltinHover {
+            markdown: "```rustscript\nSet<T>.add(value: T): void\n```\n\nAdds a value to the set.\n\n**Rust:** `.insert(value)`",
+        },
+    );
+    m.insert(
+        "set.has",
+        BuiltinHover {
+            markdown: "```rustscript\nSet<T>.has(value: T): boolean\n```\n\nChecks if the set contains the value.\n\n**Rust:** `.contains(&value)`",
+        },
+    );
+    m.insert(
+        "set.delete",
+        BuiltinHover {
+            markdown: "```rustscript\nSet<T>.delete(value: T): boolean\n```\n\nRemoves the value from the set.\n\n**Rust:** `.remove(&value)`",
+        },
+    );
+    m.insert(
+        "set.clear",
+        BuiltinHover {
+            markdown: "```rustscript\nSet<T>.clear(): void\n```\n\nRemoves all values.\n\n**Rust:** `.clear()`",
         },
     );
 
@@ -242,6 +490,48 @@ static KEYWORD_HOVERS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock:
         "let",
         BuiltinHover {
             markdown: "```\nlet\n```\n\nDeclares a mutable variable binding.\n\n**Rust:** `let mut`",
+        },
+    );
+    m.insert(
+        "readonly",
+        BuiltinHover {
+            markdown: "```\nreadonly\n```\n\nMarks a field as immutable after construction.\n\n**Rust:** The field is only set in the constructor; no setter is generated.",
+        },
+    );
+    m.insert(
+        "static",
+        BuiltinHover {
+            markdown: "```\nstatic\n```\n\nDeclares a class member that belongs to the class itself, not instances.\n\n**Rust:** Associated function or `const`/`static` on the `impl` block.",
+        },
+    );
+    m.insert(
+        "get",
+        BuiltinHover {
+            markdown: "```\nget\n```\n\nProperty getter accessor. Accessed as `obj.prop`.\n\n**Rust:** Getter method `fn prop(&self) -> T`.",
+        },
+    );
+    m.insert(
+        "set",
+        BuiltinHover {
+            markdown: "```\nset\n```\n\nProperty setter accessor. Assigned as `obj.prop = value`.\n\n**Rust:** Setter method `fn set_prop(&mut self, value: T)`.",
+        },
+    );
+    m.insert(
+        "as",
+        BuiltinHover {
+            markdown: "```\nas\n```\n\nType cast operator.\n\n**Rust:** `as` operator for numeric casts.",
+        },
+    );
+    m.insert(
+        "typeof",
+        BuiltinHover {
+            markdown: "```\ntypeof\n```\n\nReturns the type name of a value as a string. Resolved statically at compile time.",
+        },
+    );
+    m.insert(
+        "finally",
+        BuiltinHover {
+            markdown: "```\nfinally\n```\n\nExecutes after try/catch regardless of outcome. Cleanup block.",
         },
     );
 
@@ -432,5 +722,58 @@ mod tests {
         let hover = lookup_identifier("this");
         assert!(hover.is_some(), "this should have hover info");
         assert!(hover.unwrap().contains("self"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 062: Phase 5 keyword hover tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_keyword_readonly() {
+        let hover = lookup_keyword("readonly");
+        assert!(hover.is_some(), "readonly should have hover info");
+        assert!(hover.unwrap().contains("immutable"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_static() {
+        let hover = lookup_keyword("static");
+        assert!(hover.is_some(), "static should have hover info");
+        assert!(hover.unwrap().contains("class itself"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_get() {
+        let hover = lookup_keyword("get");
+        assert!(hover.is_some(), "get should have hover info");
+        assert!(hover.unwrap().contains("getter"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_set() {
+        let hover = lookup_keyword("set");
+        assert!(hover.is_some(), "set should have hover info");
+        assert!(hover.unwrap().contains("setter"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_as() {
+        let hover = lookup_keyword("as");
+        assert!(hover.is_some(), "as should have hover info");
+        assert!(hover.unwrap().contains("cast"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_typeof() {
+        let hover = lookup_keyword("typeof");
+        assert!(hover.is_some(), "typeof should have hover info");
+        assert!(hover.unwrap().contains("type name"));
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_finally() {
+        let hover = lookup_keyword("finally");
+        assert!(hover.is_some(), "finally should have hover info");
+        assert!(hover.unwrap().contains("regardless"));
     }
 }
