@@ -411,6 +411,22 @@ impl Project {
             cargo_builder.add_dependency(&dep.name, DependencySpec::Simple("*".to_owned()));
         }
 
+        // Add explicit dependencies from rsc.toml (these take priority via insert)
+        if let Ok((explicit_deps, _dev_deps)) = crate::deps::read_config(&self.root) {
+            for (name, entry) in &explicit_deps {
+                let spec = if entry.features.is_empty() {
+                    DependencySpec::Simple(entry.version.clone())
+                } else {
+                    DependencySpec::Detailed {
+                        version: entry.version.clone(),
+                        features: entry.features.clone(),
+                    }
+                };
+                // Use insert to override auto-detected `"*"` versions with explicit ones
+                cargo_builder.dependencies.insert(name.clone(), spec);
+            }
+        }
+
         // If tokio was also imported explicitly, the runtime spec takes priority
         // (add_tokio_runtime uses insert which overwrites)
         if any_needs_async_runtime {
@@ -469,6 +485,24 @@ impl Project {
         for dep in &result.crate_dependencies {
             if dep.name != "tokio" {
                 cargo_builder.add_dependency(&dep.name, DependencySpec::Simple("*".to_owned()));
+            }
+        }
+
+        // Add explicit dependencies from rsc.toml — but NOT tokio for WASM
+        if let Ok((explicit_deps, _dev_deps)) = crate::deps::read_config(&self.root) {
+            for (name, entry) in &explicit_deps {
+                if name == "tokio" {
+                    continue;
+                }
+                let spec = if entry.features.is_empty() {
+                    DependencySpec::Simple(entry.version.clone())
+                } else {
+                    DependencySpec::Detailed {
+                        version: entry.version.clone(),
+                        features: entry.features.clone(),
+                    }
+                };
+                cargo_builder.dependencies.insert(name.clone(), spec);
             }
         }
 
@@ -1912,6 +1946,97 @@ async function fetchData(): string {
         assert!(
             matches!(err, DriverError::WasmRunUnsupported),
             "expected WasmRunUnsupported, got: {err:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 070: Dependency management — rsc.toml integration
+    // ---------------------------------------------------------------
+
+    // Test: compile includes explicit deps from rsc.toml in generated Cargo.toml
+    #[test]
+    fn test_compile_includes_rsc_toml_dependencies() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("deps-test", tmp.path(), None).unwrap();
+
+        // Add a dependency via rsc.toml
+        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &[], false).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, build_dir, _, _) = project.compile().unwrap();
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("serde"),
+            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("\"1\""),
+            "expected version \"1\" in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+    }
+
+    // Test: compile includes deps with features from rsc.toml
+    #[test]
+    fn test_compile_includes_rsc_toml_deps_with_features() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("deps-features", tmp.path(), None).unwrap();
+
+        let features = vec!["derive".to_owned()];
+        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &features, false).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("serde"),
+            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("derive"),
+            "expected features in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+    }
+
+    // Test: explicit rsc.toml deps override auto-detected wildcard versions
+    #[test]
+    fn test_compile_rsc_toml_overrides_autodetected_deps() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("override-test");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("cargo.toml"),
+            "[package]\nname = \"override-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        // Write source that imports rand (will be auto-detected as "*")
+        fs::write(
+            src_dir.join("index.rts"),
+            "import { thread_rng } from \"rand\";\n\nfunction main() {\n  console.log(\"hi\");\n}\n",
+        )
+        .unwrap();
+
+        // Add explicit version via rsc.toml
+        crate::deps::add_dependency(&project_dir, "rand", Some("0.8"), &[], false).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, build_dir, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        // The explicit version "0.8" should override the auto-detected "*"
+        assert!(
+            cargo_toml.contains("\"0.8\""),
+            "expected version \"0.8\" to override wildcard, got:\n{cargo_toml}"
         );
     }
 }
