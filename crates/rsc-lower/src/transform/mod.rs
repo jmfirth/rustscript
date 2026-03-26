@@ -4977,4 +4977,104 @@ async function main() {
             "excess args should produce vec![]: {output}"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Task 063: Logical assignment operators lowering
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_nullish_assign_generates_is_none_some() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let x: i32 | null = null;\n\
+               x ??= 5;\n\
+             }",
+        );
+        assert!(
+            output.contains("is_none()"),
+            "??= should lower to is_none() check: {output}"
+        );
+        assert!(
+            output.contains("Some(5)"),
+            "??= should wrap value in Some(): {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_or_assign_generates_negation() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let enabled: bool = false;\n\
+               enabled ||= true;\n\
+             }",
+        );
+        assert!(
+            output.contains("!enabled"),
+            "||= should lower to !target check: {output}"
+        );
+        assert!(
+            output.contains("enabled = true"),
+            "||= should assign the value: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_and_assign_generates_truthy_check() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let active: bool = true;\n\
+               active &&= false;\n\
+             }",
+        );
+        assert!(
+            output.contains("if active"),
+            "&&= should lower to truthy check: {output}"
+        );
+        assert!(
+            output.contains("active = false"),
+            "&&= should assign the value: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_nullish_assign_makes_variable_mutable() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let x: i32 | null = null;\n\
+               x ??= 5;\n\
+             }",
+        );
+        assert!(
+            output.contains("let mut x"),
+            "??= target should be declared mut: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_or_assign_makes_variable_mutable() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let enabled: bool = false;\n\
+               enabled ||= true;\n\
+             }",
+        );
+        assert!(
+            output.contains("let mut enabled"),
+            "||= target should be declared mut: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_and_assign_makes_variable_mutable() {
+        let output = compile_and_emit(
+            "function main() {\n\
+               let active: bool = true;\n\
+               active &&= false;\n\
+             }",
+        );
+        assert!(
+            output.contains("let mut active"),
+            "&&= target should be declared mut: {output}"
+        );
+    }
 }

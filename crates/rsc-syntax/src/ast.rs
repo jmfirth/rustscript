@@ -869,6 +869,46 @@ pub enum ExprKind {
     /// typeof operator: `typeof expr`.
     /// Lowers to a string literal for known types at compile time.
     TypeOf(Box<Expr>),
+    /// Logical assignment: `x ??= val`, `x ||= val`, `x &&= val`.
+    /// Lowers to an if-statement with a conditional assignment.
+    LogicalAssign(LogicalAssignExpr),
+}
+
+/// Logical assignment operators.
+///
+/// These are conditional assignments that only assign if a condition is met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalAssignOp {
+    /// `??=` — assign if target is `None`.
+    NullishAssign,
+    /// `||=` — assign if target is falsy (bool only).
+    OrAssign,
+    /// `&&=` — assign if target is truthy (bool only).
+    AndAssign,
+}
+
+/// A logical assignment expression.
+///
+/// Corresponds to `target ??= value`, `target ||= value`, or `target &&= value`.
+/// The target must be an assignable expression (variable name).
+#[derive(Debug, Clone)]
+pub struct LogicalAssignExpr {
+    /// The assignment target variable name.
+    pub target: Ident,
+    /// The logical assignment operator.
+    pub op: LogicalAssignOp,
+    /// The value to conditionally assign.
+    pub value: Box<Expr>,
+}
+
+impl std::fmt::Display for LogicalAssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NullishAssign => write!(f, "??="),
+            Self::OrAssign => write!(f, "||="),
+            Self::AndAssign => write!(f, "&&="),
+        }
+    }
 }
 
 /// A binary expression with an operator and two operands.

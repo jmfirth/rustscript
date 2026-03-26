@@ -855,12 +855,15 @@ impl<'a> Lexer<'a> {
         let first = self.peek()?;
         let second = self.peek_next()?;
 
-        // 3-char operators: `===`, `!==`, `...`
+        // 3-char operators: `===`, `!==`, `...`, `??=`, `||=`, `&&=`
         if let Some(third) = self.peek_two_ahead() {
             let kind_3 = match (first, second, third) {
                 (b'=', b'=', b'=') => Some(TokenKind::EqEqEq),
                 (b'!', b'=', b'=') => Some(TokenKind::BangEqEq),
                 (b'.', b'.', b'.') => Some(TokenKind::DotDotDot),
+                (b'?', b'?', b'=') => Some(TokenKind::QuestionQuestionEq),
+                (b'|', b'|', b'=') => Some(TokenKind::PipePipeEq),
+                (b'&', b'&', b'=') => Some(TokenKind::AmpAmpEq),
                 _ => None,
             };
             if let Some(kind) = kind_3 {
@@ -1695,6 +1698,55 @@ mod tests {
     fn test_lexer_question_question_not_split() {
         let tokens = tokenize("a ?? b");
         assert_eq!(tokens[1].kind, TokenKind::QuestionQuestion);
+    }
+
+    // ---------------------------------------------------------------
+    // Task 063: Logical assignment operator tokens
+    // ---------------------------------------------------------------
+
+    // 65a. `??=` tokenizes as QuestionQuestionEq
+    #[test]
+    fn test_lexer_question_question_eq_token() {
+        let tokens = tokenize("x ??= 5");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionQuestionEq);
+    }
+
+    // 65b. `||=` tokenizes as PipePipeEq
+    #[test]
+    fn test_lexer_pipe_pipe_eq_token() {
+        let tokens = tokenize("x ||= true");
+        assert_eq!(tokens[1].kind, TokenKind::PipePipeEq);
+    }
+
+    // 65c. `&&=` tokenizes as AmpAmpEq
+    #[test]
+    fn test_lexer_amp_amp_eq_token() {
+        let tokens = tokenize("x &&= check()");
+        assert_eq!(tokens[1].kind, TokenKind::AmpAmpEq);
+    }
+
+    // 65d. `??=` doesn't split into `??` + `=`
+    #[test]
+    fn test_lexer_question_question_eq_not_split() {
+        let tokens = tokenize("a ??= b");
+        assert_eq!(tokens.len(), 4); // Ident ??= Ident Eof
+        assert_eq!(tokens[1].kind, TokenKind::QuestionQuestionEq);
+    }
+
+    // 65e. `||=` doesn't split into `||` + `=`
+    #[test]
+    fn test_lexer_pipe_pipe_eq_not_split() {
+        let tokens = tokenize("a ||= b");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[1].kind, TokenKind::PipePipeEq);
+    }
+
+    // 65f. `&&=` doesn't split into `&&` + `=`
+    #[test]
+    fn test_lexer_amp_amp_eq_not_split() {
+        let tokens = tokenize("a &&= b");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[1].kind, TokenKind::AmpAmpEq);
     }
 
     // ---------------------------------------------------------------

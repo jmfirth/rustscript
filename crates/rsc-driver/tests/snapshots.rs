@@ -3701,3 +3701,62 @@ fn add(a: i32, b: i32) -> i32 {
     let actual = compile_to_rust(source);
     assert_snapshot("059_jsdoc_no_comment", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 063: Logical assignment operators
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_nullish_assign_generates_is_none_check() {
+    let source = "\
+function main() {
+  let x: i32 | null = null;
+  x ??= 5;
+  console.log(x);
+}";
+
+    let actual = compile_to_rust(source);
+    // x ??= 5 should lower to: if x.is_none() { x = Some(5); }
+    assert!(
+        actual.contains("is_none()"),
+        "??= should generate is_none() check. Got:\n{actual}"
+    );
+    assert!(
+        actual.contains("Some(5)"),
+        "??= should wrap value in Some(). Got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_or_assign_generates_negation_check() {
+    let source = "\
+function main() {
+  let enabled: bool = false;
+  enabled ||= true;
+  console.log(enabled);
+}";
+
+    let actual = compile_to_rust(source);
+    // enabled ||= true should lower to: if !enabled { enabled = true; }
+    assert!(
+        actual.contains("!enabled"),
+        "||= should generate !target check. Got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_and_assign_generates_truthy_check() {
+    let source = "\
+function main() {
+  let active: bool = true;
+  active &&= false;
+  console.log(active);
+}";
+
+    let actual = compile_to_rust(source);
+    // active &&= false should lower to: if active { active = false; }
+    assert!(
+        actual.contains("if active"),
+        "&&= should generate truthy check. Got:\n{actual}"
+    );
+}

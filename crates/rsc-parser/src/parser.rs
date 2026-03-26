@@ -12,11 +12,12 @@ use rsc_syntax::ast::{
     ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, DestructureStmt,
     ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef,
     FieldInit, FnDecl, ForOfStmt, Ident, IfStmt, ImportDecl, IndexExpr, InlineRustBlock,
-    InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module, NewExpr,
-    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef,
+    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility,
+    WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -28,11 +29,11 @@ use crate::token::{Token, TokenKind};
 /// adversarial input (e.g., deeply nested parentheses).
 ///
 /// Set conservatively to account for the full precedence chain per depth
-/// level in debug builds. Each expression depth level uses ~18 stack
-/// frames through the precedence hierarchy (ternary, bitwise, shift,
-/// exponentiation, postfix, etc.), including arrow function
-/// disambiguation lookahead.
-const MAX_EXPR_DEPTH: usize = 35;
+/// level in debug builds. Each expression depth level uses ~18+ stack
+/// frames through the precedence hierarchy (assignment, ternary, bitwise,
+/// shift, exponentiation, postfix, etc.), including arrow function
+/// disambiguation lookahead and logical assignment checks.
+const MAX_EXPR_DEPTH: usize = 30;
 
 /// Maximum nesting depth for blocks / statements to prevent stack overflow
 /// on adversarial input (e.g., 50 nested `function` declarations).
@@ -271,6 +272,9 @@ impl<'src> Parser<'src> {
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
+            TokenKind::QuestionQuestionEq => "`??=`",
+            TokenKind::PipePipeEq => "`||=`",
+            TokenKind::AmpAmpEq => "`&&=`",
             TokenKind::EqEqEq => "`===`",
             TokenKind::BangEqEq => "`!==`",
             TokenKind::LBracket => "`[`",
@@ -2349,6 +2353,10 @@ impl<'src> Parser<'src> {
     ///
     /// Assignment is right-associative: `a = b = c` parses as `a = (b = c)`.
     /// Compound assignments (`+=`, `-=`, etc.) are desugared to `x = x op rhs`.
+    /// Logical assignments (`??=`, `||=`, `&&=`) produce `LogicalAssign` nodes.
+    #[allow(clippy::too_many_lines)]
+    // Assignment parsing covers simple, compound, logical, and field assignment
+    // forms as well as ternary — splitting would fragment the coherent precedence logic.
     fn parse_assignment(&mut self) -> Option<Expr> {
         let expr = self.parse_ternary()?;
 
@@ -2390,6 +2398,44 @@ impl<'src> Parser<'src> {
                 });
             }
             // Compound assignment to non-identifier — emit diagnostic
+            let op_token = self.advance();
+            self.diagnostics
+                .push(Diagnostic::error("invalid assignment target").with_label(
+                    expr.span,
+                    self.file_id,
+                    "cannot assign to this expression",
+                ));
+            let _ = self.parse_assignment();
+            return Some(Expr {
+                kind: ExprKind::IntLit(0),
+                span: expr.span.merge(op_token.span),
+            });
+        }
+
+        // Check for logical assignment operators: ??=, ||=, &&=
+        let logical_op = match self.peek() {
+            TokenKind::QuestionQuestionEq => Some(LogicalAssignOp::NullishAssign),
+            TokenKind::PipePipeEq => Some(LogicalAssignOp::OrAssign),
+            TokenKind::AmpAmpEq => Some(LogicalAssignOp::AndAssign),
+            _ => None,
+        };
+
+        if let Some(op) = logical_op {
+            if let ExprKind::Ident(ref ident) = expr.kind {
+                let ident = ident.clone();
+                self.advance(); // consume logical assignment operator
+                let rhs = self.parse_assignment()?;
+                let span = ident.span.merge(rhs.span);
+                return Some(Expr {
+                    kind: ExprKind::LogicalAssign(LogicalAssignExpr {
+                        target: ident,
+                        op,
+                        value: Box::new(rhs),
+                    }),
+                    span,
+                });
+            }
+            // Logical assignment to non-identifier — emit diagnostic
             let op_token = self.advance();
             self.diagnostics
                 .push(Diagnostic::error("invalid assignment target").with_label(
@@ -4635,6 +4681,76 @@ mod tests {
                 },
                 other => panic!("expected Expr for `{source}`, got {other:?}"),
             }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 063: Logical assignment operators
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_nullish_assign_produces_logical_assign() {
+        let module = parse_ok("function f() { x ??= 5; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::LogicalAssign(la) => {
+                    assert_eq!(la.target.name, "x");
+                    assert_eq!(la.op, LogicalAssignOp::NullishAssign);
+                    assert!(
+                        matches!(la.value.kind, ExprKind::IntLit(5)),
+                        "expected IntLit(5), got {:?}",
+                        la.value.kind
+                    );
+                }
+                other => panic!("expected LogicalAssign, got {other:?}"),
+            },
+            other => panic!("expected Expr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_or_assign_produces_logical_assign() {
+        let module = parse_ok("function f() { x ||= true; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::LogicalAssign(la) => {
+                    assert_eq!(la.target.name, "x");
+                    assert_eq!(la.op, LogicalAssignOp::OrAssign);
+                    assert!(
+                        matches!(la.value.kind, ExprKind::BoolLit(true)),
+                        "expected BoolLit(true), got {:?}",
+                        la.value.kind
+                    );
+                }
+                other => panic!("expected LogicalAssign, got {other:?}"),
+            },
+            other => panic!("expected Expr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_and_assign_produces_logical_assign() {
+        let module = parse_ok("function f() { x &&= false; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Expr(e) => match &e.kind {
+                ExprKind::LogicalAssign(la) => {
+                    assert_eq!(la.target.name, "x");
+                    assert_eq!(la.op, LogicalAssignOp::AndAssign);
+                    assert!(
+                        matches!(la.value.kind, ExprKind::BoolLit(false)),
+                        "expected BoolLit(false), got {:?}",
+                        la.value.kind
+                    );
+                }
+                other => panic!("expected LogicalAssign, got {other:?}"),
+            },
+            other => panic!("expected Expr, got {other:?}"),
         }
     }
 

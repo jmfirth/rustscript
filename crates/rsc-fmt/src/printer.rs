@@ -9,11 +9,11 @@ use rsc_syntax::ast::{
     ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
     DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr,
     FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexExpr,
-    InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, MethodCallExpr, Module,
-    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
-    TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams,
-    UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -817,6 +817,7 @@ impl Printer {
             }
             ExprKind::Assign(a) => self.print_assign_expr(a),
             ExprKind::FieldAssign(fa) => self.print_field_assign_expr(fa),
+            ExprKind::LogicalAssign(la) => self.print_logical_assign_expr(la),
             ExprKind::StructLit(s) => self.print_struct_lit_expr(s),
             ExprKind::FieldAccess(fa) => self.print_field_access_expr(fa),
             ExprKind::TemplateLit(t) => self.print_template_lit_expr(t),
@@ -918,6 +919,13 @@ impl Printer {
         self.write(&a.target.name);
         self.write(" = ");
         self.print_expr(&a.value);
+    }
+
+    /// Print a logical assignment expression: `x ??= val`, `x ||= val`, `x &&= val`.
+    fn print_logical_assign_expr(&mut self, la: &LogicalAssignExpr) {
+        self.write(&la.target.name);
+        self.write(&format!(" {} ", la.op));
+        self.print_expr(&la.value);
     }
 
     /// Print a field assignment expression.

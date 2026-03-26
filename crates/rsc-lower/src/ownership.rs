@@ -577,6 +577,16 @@ impl UseMap {
                     uses,
                 );
             }
+            ast::ExprKind::LogicalAssign(la) => {
+                Self::collect_expr_uses(
+                    &la.value,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+            }
             ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
                 Self::collect_expr_uses(
                     cond,
@@ -778,11 +788,17 @@ fn collect_if_assignments(if_stmt: &ast::IfStmt, reassigned: &mut HashSet<String
 
 /// Extract assignment targets from an expression.
 fn collect_assignments_from_expr(expr: &ast::Expr, reassigned: &mut HashSet<String>) {
-    if let ast::ExprKind::Assign(assign) = &expr.kind {
-        reassigned.insert(assign.target.name.clone());
+    match &expr.kind {
+        ast::ExprKind::Assign(assign) => {
+            reassigned.insert(assign.target.name.clone());
+        }
+        ast::ExprKind::LogicalAssign(la) => {
+            reassigned.insert(la.target.name.clone());
+        }
+        // FieldAssign (e.g., `this.field = value`) does not create new variable
+        // bindings — it modifies an existing object. Handled by the wildcard.
+        _ => {}
     }
-    // FieldAssign (e.g., `this.field = value`) does not create new variable
-    // bindings — it modifies an existing object. Handled by the wildcard.
 }
 
 /// Find variables that are receivers of method calls in a block.
@@ -1215,6 +1231,9 @@ fn collect_param_usage_expr(
         | ast::ExprKind::Cast(inner, _) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
         }
+        ast::ExprKind::LogicalAssign(la) => {
+            collect_param_usage_expr(&la.value, param_set, is_ref_call, result);
+        }
         ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
             collect_param_usage_expr(cond, param_set, is_ref_call, result);
             collect_param_usage_expr(then_expr, param_set, is_ref_call, result);
@@ -1255,6 +1274,8 @@ fn mark_closure_captures(
 }
 
 /// Collect all identifier names referenced in an expression (shallow scan for closure capture).
+#[allow(clippy::too_many_lines)]
+// Covers all expression kinds for identifier collection — splitting would fragment the match.
 fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
     match &expr.kind {
         ast::ExprKind::Ident(ident) => {
@@ -1340,6 +1361,9 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::TypeOf(inner)
         | ast::ExprKind::Cast(inner, _) => {
             collect_idents_in_expr(inner, names);
+        }
+        ast::ExprKind::LogicalAssign(la) => {
+            collect_idents_in_expr(&la.value, names);
         }
         ast::ExprKind::Ternary(cond, then_expr, else_expr) => {
             collect_idents_in_expr(cond, names);

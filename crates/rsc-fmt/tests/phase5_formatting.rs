@@ -388,3 +388,52 @@ fn test_format_jsdoc_source_returned_unchanged() {
         "source with JSDoc should be returned unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 063: Logical assignment operators
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_format_nullish_assign_idempotent() {
+    assert_idempotent("nullish_assign", "function f() {\n  x ??= 5;\n}");
+}
+
+#[test]
+fn test_format_or_assign_idempotent() {
+    assert_idempotent("or_assign", "function f() {\n  enabled ||= true;\n}");
+}
+
+#[test]
+fn test_format_and_assign_idempotent() {
+    assert_idempotent("and_assign", "function f() {\n  active &&= check();\n}");
+}
+
+#[test]
+fn test_format_nullish_assign_spacing() {
+    let input = "function f() { x  ??=  5; }";
+    let result = format_source(input).expect("should format");
+    assert!(
+        result.contains("x ??= 5"),
+        "??= should have proper spacing: {result}"
+    );
+}
+
+#[test]
+fn test_format_or_assign_spacing() {
+    let input = "function f() { enabled  ||=  true; }";
+    let result = format_source(input).expect("should format");
+    assert!(
+        result.contains("enabled ||= true"),
+        "||= should have proper spacing: {result}"
+    );
+}
+
+#[test]
+fn test_format_and_assign_spacing() {
+    let input = "function f() { active  &&=  false; }";
+    let result = format_source(input).expect("should format");
+    assert!(
+        result.contains("active &&= false"),
+        "&&= should have proper spacing: {result}"
+    );
+}

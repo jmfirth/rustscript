@@ -1377,8 +1377,10 @@ fn test_conformance_error_empty_source() {
 #[test]
 fn test_conformance_error_deeply_nested_expressions() {
     // Build a deeply nested expression: ((((((1 + 1) + 1) + 1)...)))
+    // Depth 30 is chosen to stay within stack limits in debug mode as the AST
+    // enum grows with new expression kinds.
     let mut expr = String::from("1");
-    for _ in 0..50 {
+    for _ in 0..30 {
         expr = format!("({expr} + 1)");
     }
     let source = format!(

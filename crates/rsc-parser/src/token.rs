@@ -172,6 +172,12 @@ pub(crate) enum TokenKind {
     As,
     /// `typeof` (type query operator)
     TypeOf,
+    /// `??=` (nullish assignment operator)
+    QuestionQuestionEq,
+    /// `||=` (logical OR assignment operator)
+    PipePipeEq,
+    /// `&&=` (logical AND assignment operator)
+    AmpAmpEq,
     /// `?` (question mark, used in optional parameters and ternary operator)
     Question,
 

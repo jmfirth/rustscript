@@ -1090,6 +1090,17 @@ fn find_hover_in_expr(
             }
             Some("```rustscript\n(spread) ...expr\n```\nSpread operator. Expands array/object elements inline.".to_owned())
         }
+        ExprKind::LogicalAssign(la) => {
+            if let Some(info) = find_hover_in_expr(&la.value, pos, cache) {
+                return Some(info);
+            }
+            let op_str = match la.op {
+                rsc_syntax::ast::LogicalAssignOp::NullishAssign => "??=",
+                rsc_syntax::ast::LogicalAssignOp::OrAssign => "||=",
+                rsc_syntax::ast::LogicalAssignOp::AndAssign => "&&=",
+            };
+            builtin_hover::lookup_keyword(op_str).map(std::string::ToString::to_string)
+        }
         ExprKind::Paren(inner)
         | ExprKind::Await(inner)
         | ExprKind::Throw(inner)

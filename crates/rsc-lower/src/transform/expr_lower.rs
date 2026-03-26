@@ -343,6 +343,15 @@ impl Transform {
                 let lit = RustExpr::new(RustExprKind::StringLit(type_str.to_owned()), expr.span);
                 RustExpr::synthetic(RustExprKind::ToString(Box::new(lit)))
             }
+            ast::ExprKind::LogicalAssign(la) => {
+                // Logical assignments are primarily handled at statement level.
+                // In expression context, lower the value as a fallback — the
+                // statement lowering path intercepts these before reaching here.
+                ctx.emit_diagnostic(Diagnostic::error(
+                    "logical assignment operators (??=, ||=, &&=) can only be used as statements",
+                ));
+                self.lower_expr(&la.value, ctx, use_map, stmt_index)
+            }
         }
     }
 

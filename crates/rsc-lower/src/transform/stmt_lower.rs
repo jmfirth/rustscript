@@ -64,6 +64,10 @@ impl Transform {
                         span: Some(expr.span),
                     });
                 }
+                // Logical assignment: `x ??= val`, `x ||= val`, `x &&= val`
+                if let ast::ExprKind::LogicalAssign(la) = &expr.kind {
+                    return self.lower_logical_assign(la, ctx, use_map, stmt_index);
+                }
                 let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
                 RustStmt::Semi(lowered)
             }
@@ -742,5 +746,89 @@ impl Transform {
             finally_stmts: finally_stmts.to_vec(),
             span: Some(tc.span),
         }))
+    }
+
+    /// Lower a logical assignment expression to an if-statement.
+    ///
+    /// - `x ??= val` → `if x.is_none() { x = Some(val); }`
+    /// - `x ||= val` → `if !x { x = val; }`
+    /// - `x &&= val` → `if x { x = val; }`
+    fn lower_logical_assign(
+        &self,
+        la: &ast::LogicalAssignExpr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustStmt {
+        let target_name = la.target.name.clone();
+        let lowered_value = self.lower_expr(&la.value, ctx, use_map, stmt_index);
+
+        match la.op {
+            ast::LogicalAssignOp::NullishAssign => {
+                // `x ??= val` → `if x.is_none() { x = Some(val); }`
+                let condition = RustExpr::synthetic(RustExprKind::MethodCall {
+                    receiver: Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                        target_name.clone(),
+                    ))),
+                    method: "is_none".to_owned(),
+                    type_args: vec![],
+                    args: vec![],
+                });
+                let assign = RustStmt::Semi(RustExpr::synthetic(RustExprKind::Assign {
+                    target: target_name,
+                    value: Box::new(RustExpr::synthetic(RustExprKind::Some(Box::new(
+                        lowered_value,
+                    )))),
+                }));
+                RustStmt::If(RustIfStmt {
+                    condition,
+                    then_block: RustBlock {
+                        stmts: vec![assign],
+                        expr: None,
+                    },
+                    else_clause: None,
+                    span: Some(la.target.span),
+                })
+            }
+            ast::LogicalAssignOp::OrAssign => {
+                // `x ||= val` → `if !x { x = val; }`
+                let condition = RustExpr::synthetic(RustExprKind::Unary {
+                    op: rsc_syntax::rust_ir::RustUnaryOp::Not,
+                    operand: Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                        target_name.clone(),
+                    ))),
+                });
+                let assign = RustStmt::Semi(RustExpr::synthetic(RustExprKind::Assign {
+                    target: target_name,
+                    value: Box::new(lowered_value),
+                }));
+                RustStmt::If(RustIfStmt {
+                    condition,
+                    then_block: RustBlock {
+                        stmts: vec![assign],
+                        expr: None,
+                    },
+                    else_clause: None,
+                    span: Some(la.target.span),
+                })
+            }
+            ast::LogicalAssignOp::AndAssign => {
+                // `x &&= val` → `if x { x = val; }`
+                let condition = RustExpr::synthetic(RustExprKind::Ident(target_name.clone()));
+                let assign = RustStmt::Semi(RustExpr::synthetic(RustExprKind::Assign {
+                    target: target_name,
+                    value: Box::new(lowered_value),
+                }));
+                RustStmt::If(RustIfStmt {
+                    condition,
+                    then_block: RustBlock {
+                        stmts: vec![assign],
+                        expr: None,
+                    },
+                    else_clause: None,
+                    span: Some(la.target.span),
+                })
+            }
+        }
     }
 }

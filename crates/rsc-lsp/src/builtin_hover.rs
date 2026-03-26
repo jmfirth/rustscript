@@ -517,6 +517,24 @@ static KEYWORD_HOVERS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock:
         },
     );
     m.insert(
+        "??=",
+        BuiltinHover {
+            markdown: "```\n??=\n```\n\nNullish assignment --- assigns if target is `null`.\n\n**Rust:** `if x.is_none() { x = Some(val); }`",
+        },
+    );
+    m.insert(
+        "||=",
+        BuiltinHover {
+            markdown: "```\n||=\n```\n\nLogical OR assignment --- assigns if target is falsy.\n\n**Rust:** `if !x { x = val; }`",
+        },
+    );
+    m.insert(
+        "&&=",
+        BuiltinHover {
+            markdown: "```\n&&=\n```\n\nLogical AND assignment --- assigns if target is truthy.\n\n**Rust:** `if x { x = val; }`",
+        },
+    );
+    m.insert(
         "as",
         BuiltinHover {
             markdown: "```\nas\n```\n\nType cast operator.\n\n**Rust:** `as` operator for numeric casts.",
@@ -775,5 +793,42 @@ mod tests {
         let hover = lookup_keyword("finally");
         assert!(hover.is_some(), "finally should have hover info");
         assert!(hover.unwrap().contains("regardless"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 063: Logical assignment operator hover tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_keyword_nullish_assign() {
+        let hover = lookup_keyword("??=");
+        assert!(hover.is_some(), "??= should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("is_none"),
+            "??= hover should mention is_none: {text}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_or_assign() {
+        let hover = lookup_keyword("||=");
+        assert!(hover.is_some(), "||= should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("falsy"),
+            "||= hover should mention falsy: {text}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_and_assign() {
+        let hover = lookup_keyword("&&=");
+        assert!(hover.is_some(), "&&= should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("truthy"),
+            "&&= hover should mention truthy: {text}"
+        );
     }
 }
