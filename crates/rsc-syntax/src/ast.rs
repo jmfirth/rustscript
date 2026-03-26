@@ -806,9 +806,10 @@ pub enum ExprKind {
     /// Template literal: `` `Hello, ${name}!` ``.
     /// Lowers to `format!("Hello, {}!", name)` or a simple string for no-interpolation cases.
     TemplateLit(TemplateLitExpr),
-    /// Array literal: `[1, 2, 3]`.
-    /// Lowers to `vec![1, 2, 3]` in Rust.
-    ArrayLit(Vec<Expr>),
+    /// Array literal: `[1, 2, 3]` or `[...arr, x]`.
+    /// Without spread elements, lowers to `vec![1, 2, 3]`.
+    /// With spread elements, lowers to a block with extend/push operations.
+    ArrayLit(Vec<ArrayElement>),
     /// Constructor call: `new Map()`, `new Set()`, `new Array()`.
     /// Lowers to `HashMap::new()`, `HashSet::new()`, or `Vec::new()`.
     New(NewExpr),
@@ -1007,16 +1008,32 @@ pub struct FieldAssignExpr {
     pub value: Box<Expr>,
 }
 
+/// An element in an array literal.
+///
+/// Distinguishes between normal expression elements (`[1, 2]`) and spread
+/// elements (`[...arr]`). Spread elements are lowered to `extend`/`push`
+/// operations on a `Vec`.
+#[derive(Debug, Clone)]
+pub enum ArrayElement {
+    /// A normal expression element.
+    Expr(Expr),
+    /// A spread element: `...expr`.
+    Spread(Expr),
+}
+
 /// A struct literal expression.
 ///
-/// Corresponds to `{ name: "Alice", age: 30 }` in expression position.
-/// The `type_name` is resolved during lowering from context (e.g., the
-/// variable's type annotation).
+/// Corresponds to `{ name: "Alice", age: 30 }` or `{ ...base, field: value }`
+/// in expression position. The `type_name` is resolved during lowering from
+/// context (e.g., the variable's type annotation).
 #[derive(Debug, Clone)]
 pub struct StructLitExpr {
     /// The type name (for typed literals like `User { ... }`). None for
     /// untyped object literals.
     pub type_name: Option<Ident>,
+    /// Optional spread base: `{ ...base, field: value }`.
+    /// The base expression whose fields are spread into the literal.
+    pub spread: Option<Box<Expr>>,
     /// The field initializers.
     pub fields: Vec<FieldInit>,
 }

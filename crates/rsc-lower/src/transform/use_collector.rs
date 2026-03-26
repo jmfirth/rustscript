@@ -524,6 +524,25 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(then_expr, needs_hashmap, needs_hashset);
             scan_expr_for_collections(else_expr, needs_hashmap, needs_hashset);
         }
+        RustExprKind::SpreadArray { initial, ops } => {
+            for elem in initial {
+                scan_expr_for_collections(elem, needs_hashmap, needs_hashset);
+            }
+            for op in ops {
+                match op {
+                    rsc_syntax::rust_ir::SpreadOp::Push(expr)
+                    | rsc_syntax::rust_ir::SpreadOp::Extend(expr) => {
+                        scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+                    }
+                }
+            }
+        }
+        RustExprKind::StructUpdate { fields, base, .. } => {
+            for (_, val) in fields {
+                scan_expr_for_collections(val, needs_hashmap, needs_hashset);
+            }
+            scan_expr_for_collections(base, needs_hashmap, needs_hashset);
+        }
         RustExprKind::IteratorChain {
             source,
             ops,

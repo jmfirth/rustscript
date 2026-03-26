@@ -9,7 +9,7 @@ use rsc_syntax::rust_ir::{
     RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
     RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt,
     RustMethod, RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
-    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam,
+    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam, SpreadOp,
 };
 use rsc_syntax::span::Span;
 
@@ -1301,6 +1301,102 @@ impl Emitter {
                 self.emit_expr(else_expr);
                 self.write(" }");
             }
+            RustExprKind::SpreadArray { initial, ops } => {
+                self.emit_spread_array(initial, ops);
+            }
+            RustExprKind::StructUpdate {
+                type_name,
+                fields,
+                base,
+            } => {
+                self.write(type_name);
+                self.write(" { ");
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(name);
+                    self.write(": ");
+                    self.emit_expr(value);
+                }
+                if !fields.is_empty() {
+                    self.write(", ");
+                }
+                self.write("..");
+                self.emit_expr(base);
+                self.write(" }");
+            }
+        }
+    }
+
+    /// Emit a spread array block expression.
+    ///
+    /// Generates a Rust block that builds a `Vec` through a sequence of
+    /// `push` and `extend` operations:
+    /// ```text
+    /// {
+    ///     let mut __spread = vec![initial...];  // or first extend.clone()
+    ///     __spread.push(x);
+    ///     __spread.extend(other.iter().cloned());
+    ///     __spread
+    /// }
+    /// ```
+    fn emit_spread_array(&mut self, initial: &[RustExpr], ops: &[SpreadOp]) {
+        self.writeln("{");
+        self.push_indent();
+
+        // Initial binding
+        self.write_indent();
+        if initial.is_empty() {
+            // First op must be an Extend (clone) — emit it as the initializer
+            if let Some(SpreadOp::Extend(first)) = ops.first() {
+                self.write("let mut __spread = ");
+                self.emit_expr(first);
+                self.writeln(";");
+
+                // Emit remaining ops
+                for op in &ops[1..] {
+                    self.write_indent();
+                    self.emit_spread_op(op);
+                }
+            }
+        } else {
+            self.write("let mut __spread = vec![");
+            for (i, elem) in initial.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.emit_expr(elem);
+            }
+            self.writeln("];");
+
+            // Emit all ops
+            for op in ops {
+                self.write_indent();
+                self.emit_spread_op(op);
+            }
+        }
+
+        self.write_indent();
+        self.writeln("__spread");
+        self.pop_indent();
+        self.write_indent();
+        self.write("}");
+    }
+
+    /// Emit a single spread operation (push or extend).
+    fn emit_spread_op(&mut self, op: &SpreadOp) {
+        match op {
+            SpreadOp::Push(expr) => {
+                self.write("__spread.push(");
+                self.emit_expr(expr);
+                self.writeln(");");
+            }
+            SpreadOp::Extend(expr) => {
+                self.write("__spread.extend(");
+                self.emit_expr(expr);
+                self.writeln(".iter().cloned());");
+            }
         }
     }
 
@@ -1417,7 +1513,7 @@ mod tests {
         RustImplBlock, RustItem, RustLetStmt, RustMatchArm, RustMatchResultStmt, RustMatchStmt,
         RustMethod, RustModDecl, RustParam, RustPattern, RustReturnStmt, RustSelfParam, RustStmt,
         RustStructDef, RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeParam,
-        RustUnaryOp, RustUseDecl, RustWhileStmt,
+        RustUnaryOp, RustUseDecl, RustWhileStmt, SpreadOp,
     };
 
     use super::emit;
@@ -4534,6 +4630,101 @@ fn main() {
         assert!(
             output.contains("fn process(items: &Vec<i32>)"),
             "Borrowed mode should emit &Vec<i32>: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 056: Spread operator emission
+    // ---------------------------------------------------------------
+
+    // T056-E1: Emit SpreadArray with initial elements and push ops
+    #[test]
+    fn test_emit_spread_array_initial_with_push() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "result".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::SpreadArray {
+                    initial: vec![int_lit(1), int_lit(2)],
+                    ops: vec![SpreadOp::Extend(ident("arr"))],
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let mut __spread = vec![1, 2];"),
+            "should init with vec!: {output}"
+        );
+        assert!(
+            output.contains("__spread.extend(arr.iter().cloned());"),
+            "should extend: {output}"
+        );
+        assert!(
+            output.contains("__spread\n"),
+            "should return __spread: {output}"
+        );
+    }
+
+    // T056-E2: Emit SpreadArray starting with extend (no initial elements)
+    #[test]
+    fn test_emit_spread_array_extend_first() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "result".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::SpreadArray {
+                    initial: vec![],
+                    ops: vec![
+                        SpreadOp::Extend(syn(RustExprKind::Clone(Box::new(ident("arr"))))),
+                        SpreadOp::Push(int_lit(99)),
+                    ],
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let mut __spread = arr.clone();"),
+            "should clone first spread: {output}"
+        );
+        assert!(
+            output.contains("__spread.push(99);"),
+            "should push element: {output}"
+        );
+    }
+
+    // T056-E3: Emit StructUpdate
+    #[test]
+    fn test_emit_struct_update() {
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "updated".to_owned(),
+                ty: None,
+                init: syn(RustExprKind::StructUpdate {
+                    type_name: "User".to_owned(),
+                    fields: vec![(
+                        "name".to_owned(),
+                        syn(RustExprKind::StringLit("Bob".to_owned())),
+                    )],
+                    base: Box::new(syn(RustExprKind::Clone(Box::new(ident("user"))))),
+                }),
+                span: None,
+            })],
+            None,
+        );
+        let output = emit_source(&file);
+        assert!(
+            output.contains("User { name: \"Bob\", ..user.clone() }"),
+            "should emit struct update: {output}"
         );
     }
 }

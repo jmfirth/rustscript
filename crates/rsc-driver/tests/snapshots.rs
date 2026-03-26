@@ -3465,3 +3465,165 @@ impl Counter {
     let actual = compile_to_rust(source);
     assert_snapshot("057_complete_class", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 056: Spread Operator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_array_spread_copy() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [1, 2, 3];
+  const copy: Array<i32> = [...arr];
+  console.log(copy);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![1, 2, 3];
+    let copy: Vec<i32> = arr.clone();
+    println!(\"{}\", copy);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_array_spread_copy", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_array_spread_append() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [1, 2];
+  const result: Array<i32> = [...arr, 3, 4];
+  console.log(result);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![1, 2];
+    let result: Vec<i32> = {
+        let mut __spread = arr.clone();
+        __spread.push(3);
+        __spread.push(4);
+        __spread
+    };
+    println!(\"{}\", result);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_array_spread_append", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_array_spread_prepend() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [3, 4];
+  const result: Array<i32> = [1, 2, ...arr];
+  console.log(result);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![3, 4];
+    let result: Vec<i32> = {
+        let mut __spread = vec![1, 2];
+        __spread.extend(arr.iter().cloned());
+        __spread
+    };
+    println!(\"{}\", result);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_array_spread_prepend", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_array_spread_multiple() {
+    let source = "\
+function main() {
+  const a: Array<i32> = [1, 2];
+  const b: Array<i32> = [3, 4];
+  const combined: Array<i32> = [...a, 0, ...b];
+  console.log(combined);
+}";
+
+    let expected = "\
+fn main() {
+    let a: Vec<i32> = vec![1, 2];
+    let b: Vec<i32> = vec![3, 4];
+    let combined: Vec<i32> = {
+        let mut __spread = a.clone();
+        __spread.push(0);
+        __spread.extend(b.iter().cloned());
+        __spread
+    };
+    println!(\"{}\", combined);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_array_spread_multiple", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_struct_spread_update() {
+    let source = "\
+type User = { name: string, age: u32 }
+
+function main() {
+  const user: User = { name: \"Alice\", age: 30 };
+  const updated: User = { ...user, name: \"Bob\" };
+  console.log(updated.name);
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    pub name: String,
+    pub age: u32,
+}
+
+fn main() {
+    let user = User { name: \"Alice\".to_string(), age: 30 };
+    let updated = User { name: \"Bob\".to_string(), ..user.clone() };
+    println!(\"{}\", updated.name);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_struct_spread_update", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_struct_spread_pure_copy() {
+    let source = "\
+type Point = { x: f64, y: f64 }
+
+function main() {
+  const p: Point = { x: 1.0, y: 2.0 };
+  const copy: Point = { ...p };
+  console.log(copy.x);
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    let copy = p.clone();
+    println!(\"{}\", copy.x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("056_struct_spread_pure_copy", &actual, expected);
+}

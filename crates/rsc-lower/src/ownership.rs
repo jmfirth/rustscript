@@ -445,8 +445,11 @@ impl UseMap {
             }
             ast::ExprKind::ArrayLit(elements) => {
                 for elem in elements {
+                    let inner = match elem {
+                        ast::ArrayElement::Expr(e) | ast::ArrayElement::Spread(e) => e,
+                    };
                     Self::collect_expr_uses(
-                        elem,
+                        inner,
                         stmt_index,
                         false,
                         is_ref_call,
@@ -1152,10 +1155,13 @@ fn collect_param_usage_expr(
         ast::ExprKind::ArrayLit(elements) => {
             // Array/vec literal elements are moves (stored in collection)
             for elem in elements {
-                if let ast::ExprKind::Ident(ident) = &elem.kind {
+                let inner = match elem {
+                    ast::ArrayElement::Expr(e) | ast::ArrayElement::Spread(e) => e,
+                };
+                if let ast::ExprKind::Ident(ident) = &inner.kind {
                     record_usage(&ident.name, ParamUsage::Moved, param_set, result);
                 } else {
-                    collect_param_usage_expr(elem, param_set, is_ref_call, result);
+                    collect_param_usage_expr(inner, param_set, is_ref_call, result);
                 }
             }
         }
@@ -1290,13 +1296,19 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
             collect_idents_in_expr(&assign.value, names);
         }
         ast::ExprKind::StructLit(slit) => {
+            if let Some(spread) = &slit.spread {
+                collect_idents_in_expr(spread, names);
+            }
             for field in &slit.fields {
                 collect_idents_in_expr(&field.value, names);
             }
         }
         ast::ExprKind::ArrayLit(elems) => {
             for elem in elems {
-                collect_idents_in_expr(elem, names);
+                let inner = match elem {
+                    ast::ArrayElement::Expr(e) | ast::ArrayElement::Spread(e) => e,
+                };
+                collect_idents_in_expr(inner, names);
             }
         }
         ast::ExprKind::New(new_expr) => {
@@ -1878,6 +1890,7 @@ mod tests {
                 init: Expr {
                     kind: ExprKind::StructLit(StructLitExpr {
                         type_name: Some(ident("Point", 8, 13)),
+                        spread: None,
                         fields: vec![FieldInit {
                             name: ident("name", 16, 20),
                             value: ident_expr("name", 22, 26),
