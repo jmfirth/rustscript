@@ -11,11 +11,15 @@
 //! `RustScript` and Rust.
 
 pub mod builtin_hover;
+pub mod completions;
 pub mod diagnostics;
 pub mod error;
 pub mod name_map;
 pub mod position_map;
 pub mod ra_proxy;
+pub mod rustdoc_cache;
+pub mod rustdoc_parser;
+pub mod rustdoc_translator;
 pub mod server;
 
 pub use server::RscLanguageServer;
