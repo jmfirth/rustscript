@@ -35,6 +35,18 @@ pub enum DriverError {
     )]
     WasmRunUnsupported,
 
+    /// `cargo add` failed when adding a dependency.
+    #[error("cargo add failed for crate '{0}'")]
+    CargoAddFailed(String),
+
+    /// The specified dependency was not found in `rsc.toml`.
+    #[error("dependency '{0}' not found in rsc.toml")]
+    DependencyNotFound(String),
+
+    /// Failed to parse `rsc.toml`.
+    #[error("failed to parse rsc.toml: {0}")]
+    ConfigParseFailed(String),
+
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),

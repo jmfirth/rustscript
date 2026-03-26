@@ -77,6 +77,28 @@ enum Command {
         /// Specific files to format (default: all .rts in src/)
         files: Vec<PathBuf>,
     },
+    /// Add a crate dependency to the project
+    Add {
+        /// Crate name (e.g., "serde", "tokio")
+        crate_name: String,
+
+        /// Features to enable (e.g., --features derive,full)
+        #[arg(long, value_delimiter = ',')]
+        features: Vec<String>,
+
+        /// Specific version (e.g., --version "1.0")
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Add as dev dependency
+        #[arg(long)]
+        dev: bool,
+    },
+    /// Remove a crate dependency from the project
+    Remove {
+        /// Crate name to remove (e.g., "serde")
+        crate_name: String,
+    },
     /// Start the LSP server (for editor integration)
     Lsp,
 }
@@ -112,6 +134,13 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Test { release, args } => cmd_test(release, &args),
         Command::Check => cmd_check(),
         Command::Fmt { check, files } => cmd_fmt(check, &files),
+        Command::Add {
+            crate_name,
+            features,
+            version,
+            dev,
+        } => cmd_add(&crate_name, version.as_deref(), &features, dev),
+        Command::Remove { crate_name } => cmd_remove(&crate_name),
         Command::Lsp => cmd_lsp(),
     }
 }
@@ -252,6 +281,67 @@ fn cmd_fmt(check: bool, files: &[PathBuf]) -> Result<i32> {
         Ok(EXIT_USER_ERROR)
     } else {
         Ok(0)
+    }
+}
+
+/// Add a crate dependency to the project's `rsc.toml`.
+fn cmd_add(crate_name: &str, version: Option<&str>, features: &[String], dev: bool) -> Result<i32> {
+    let project = open_project()?;
+    match rsc_driver::deps::add_dependency(&project.root, crate_name, version, features, dev) {
+        Ok(result) => {
+            let section = if result.dev {
+                "dev-dependencies"
+            } else {
+                "dependencies"
+            };
+            if result.features.is_empty() {
+                println!(
+                    "Added {} v{} to {section}",
+                    result.crate_name, result.version
+                );
+            } else {
+                println!(
+                    "Added {} v{} to {section}\n  Features: {}",
+                    result.crate_name,
+                    result.version,
+                    result.features.join(", ")
+                );
+            }
+
+            if let Some(suggestion) = &result.import_suggestion {
+                println!("\n  Suggested import:\n    {suggestion}");
+            } else {
+                println!(
+                    "\n  Suggested import:\n    import {{ ... }} from \"{}\";",
+                    result.crate_name
+                );
+            }
+
+            Ok(0)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Ok(EXIT_USER_ERROR)
+        }
+    }
+}
+
+/// Remove a crate dependency from the project's `rsc.toml`.
+fn cmd_remove(crate_name: &str) -> Result<i32> {
+    let project = open_project()?;
+    match rsc_driver::deps::remove_dependency(&project.root, crate_name) {
+        Ok(()) => {
+            println!("Removed {crate_name} from rsc.toml");
+            Ok(0)
+        }
+        Err(rsc_driver::error::DriverError::DependencyNotFound(_)) => {
+            eprintln!("error: dependency '{crate_name}' not found in rsc.toml");
+            Ok(EXIT_USER_ERROR)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            Ok(EXIT_USER_ERROR)
+        }
     }
 }
 

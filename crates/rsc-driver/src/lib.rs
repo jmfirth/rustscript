@@ -5,6 +5,7 @@
 //! write files, and invoke Cargo. It also handles project scaffolding
 //! (`init_project`) and diagnostic aggregation.
 
+pub mod deps;
 pub mod error;
 pub mod error_translation;
 mod pipeline;
