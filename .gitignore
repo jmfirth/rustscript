@@ -12,3 +12,11 @@ target/
 .idea/
 .vscode/
 *.iml
+
+# Node.js
+node_modules/
+package-lock.json
+
+# VS Code extension build
+editors/vscode/out/
+editors/vscode/*.vsix
