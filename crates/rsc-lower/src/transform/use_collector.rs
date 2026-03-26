@@ -585,6 +585,7 @@ mod tests {
             params: vec![],
             return_type: None,
             body: RustBlock { stmts, expr: None },
+            doc_comment: None,
             span: None,
         })
     }

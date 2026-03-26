@@ -594,7 +594,8 @@ fn find_hover_info(
                 // Check if cursor is on the function name
                 if func.name.span.contains(pos) {
                     let sig = format_function_signature(func);
-                    return Some(format!("```rustscript\n{sig}\n```"));
+                    let code = format!("```rustscript\n{sig}\n```");
+                    return Some(hover_with_doc(&code, func.doc_comment.as_deref()));
                 }
 
                 // Check if cursor is on a parameter
@@ -613,25 +614,29 @@ fn find_hover_info(
             ItemKind::TypeDef(td) => {
                 if td.name.span.contains(pos) {
                     let hover = format_typedef_hover(td);
-                    return Some(format!("```rustscript\n{hover}\n```"));
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, td.doc_comment.as_deref()));
                 }
             }
             ItemKind::EnumDef(ed) => {
                 if ed.name.span.contains(pos) {
                     let hover = format_enum_hover(ed);
-                    return Some(format!("```rustscript\n{hover}\n```"));
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, ed.doc_comment.as_deref()));
                 }
             }
             ItemKind::Interface(iface) => {
                 if iface.name.span.contains(pos) {
                     let hover = format_interface_hover(iface);
-                    return Some(format!("```rustscript\n{hover}\n```"));
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, iface.doc_comment.as_deref()));
                 }
             }
             ItemKind::Class(class) => {
                 if class.name.span.contains(pos) {
                     let hover = format_class_hover(class);
-                    return Some(format!("```rustscript\n{hover}\n```"));
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, class.doc_comment.as_deref()));
                 }
             }
             _ => {}
@@ -639,6 +644,14 @@ fn find_hover_info(
     }
 
     None
+}
+
+/// Format a hover response, optionally prepending a `JSDoc` comment as markdown.
+fn hover_with_doc(code_block: &str, doc: Option<&str>) -> String {
+    match doc {
+        Some(doc) if !doc.is_empty() => format!("{doc}\n\n---\n\n{code_block}"),
+        _ => code_block.to_owned(),
+    }
 }
 
 /// Get the span of a statement.

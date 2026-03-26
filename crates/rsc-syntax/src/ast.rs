@@ -164,6 +164,8 @@ pub struct FnDecl {
     pub return_type: Option<ReturnTypeAnnotation>,
     /// The function body.
     pub body: Block,
+    /// `JSDoc` comment attached to this function, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the entire function declaration.
     pub span: Span,
 }
@@ -180,6 +182,8 @@ pub struct TypeDef {
     pub type_params: Option<TypeParams>,
     /// The fields of the type definition.
     pub fields: Vec<FieldDef>,
+    /// `JSDoc` comment attached to this type definition, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the entire type definition.
     pub span: Span,
 }
@@ -195,6 +199,8 @@ pub struct EnumDef {
     pub name: Ident,
     /// The variants of the enum.
     pub variants: Vec<EnumVariant>,
+    /// `JSDoc` comment attached to this enum definition, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the entire enum definition.
     pub span: Span,
 }
@@ -234,6 +240,8 @@ pub struct InterfaceDef {
     pub type_params: Option<TypeParams>,
     /// The method signatures declared in this interface.
     pub methods: Vec<InterfaceMethod>,
+    /// `JSDoc` comment attached to this interface definition, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the entire interface definition.
     pub span: Span,
 }
@@ -268,6 +276,8 @@ pub struct ClassDef {
     pub implements: Vec<Ident>,
     /// The class members (fields, constructor, methods).
     pub members: Vec<ClassMember>,
+    /// `JSDoc` comment attached to this class definition, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the entire class definition.
     pub span: Span,
 }
@@ -308,6 +318,8 @@ pub struct ClassField {
     pub readonly: bool,
     /// Whether this field is static.
     pub is_static: bool,
+    /// `JSDoc` comment attached to this field, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the field declaration.
     pub span: Span,
 }
@@ -332,6 +344,8 @@ pub struct ClassConstructor {
     pub params: Vec<ConstructorParam>,
     /// The constructor body.
     pub body: Block,
+    /// `JSDoc` comment attached to this constructor, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the constructor declaration.
     pub span: Span,
 }
@@ -375,6 +389,8 @@ pub struct ClassMethod {
     pub return_type: Option<ReturnTypeAnnotation>,
     /// The method body.
     pub body: Block,
+    /// `JSDoc` comment attached to this method, if any.
+    pub doc_comment: Option<String>,
     /// The span covering the method declaration.
     pub span: Span,
 }
@@ -1220,6 +1236,7 @@ mod tests {
                 stmts: vec![],
                 span: span(25, 27),
             },
+            doc_comment: None,
             span: span(0, 27),
         };
 

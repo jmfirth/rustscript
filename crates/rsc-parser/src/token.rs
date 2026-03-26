@@ -208,6 +208,8 @@ pub(crate) enum TokenKind {
     TemplateNoSub(String),
 
     // Special
+    /// A `JSDoc` comment (`/** ... */`) with delimiters and leading `*` stripped.
+    JsDoc(String),
     /// End of file marker — always the last token in the stream.
     Eof,
 }

@@ -121,6 +121,8 @@ pub struct RustStructDef {
     pub fields: Vec<RustFieldDef>,
     /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
     pub derives: Vec<String>,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -136,6 +138,8 @@ pub struct RustFieldDef {
     pub name: String,
     /// The field type.
     pub ty: RustType,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -154,6 +158,8 @@ pub struct RustEnumDef {
     pub variants: Vec<RustEnumVariant>,
     /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
     pub derives: Vec<String>,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -184,6 +190,8 @@ pub struct RustTraitDef {
     pub type_params: Vec<RustTypeParam>,
     /// The method signatures in this trait.
     pub methods: Vec<RustTraitMethod>,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -256,6 +264,8 @@ pub struct RustMethod {
     pub return_type: Option<RustType>,
     /// The method body.
     pub body: RustBlock,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -302,6 +312,8 @@ pub struct RustFnDecl {
     pub return_type: Option<RustType>,
     /// The function body.
     pub body: RustBlock,
+    /// Doc comment from `JSDoc`, if any.
+    pub doc_comment: Option<String>,
     /// The source span of the original `RustScript` function, if applicable.
     pub span: Option<Span>,
 }
@@ -1220,6 +1232,7 @@ mod tests {
                     span(25, 30),
                 ))),
             },
+            doc_comment: None,
             span: Some(span(0, 32)),
         };
 

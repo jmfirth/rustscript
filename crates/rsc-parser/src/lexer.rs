@@ -52,12 +52,19 @@ impl<'a> Lexer<'a> {
         let mut tokens = Vec::new();
 
         loop {
-            // Drain any buffered tokens first (from template literal lexing).
+            // Drain any buffered tokens first (from template literal lexing
+            // or JSDoc comment capture).
             if !self.token_buffer.is_empty() {
                 tokens.append(&mut self.token_buffer);
             }
 
             self.skip_whitespace_and_comments();
+
+            // Drain any tokens produced during whitespace/comment skipping
+            // (specifically JSDoc tokens captured by skip_whitespace_and_comments).
+            if !self.token_buffer.is_empty() {
+                tokens.append(&mut self.token_buffer);
+            }
 
             if self.is_at_end() {
                 tokens.push(self.make_eof());
@@ -125,6 +132,10 @@ impl<'a> Lexer<'a> {
 
     /// Skip whitespace, line comments, and block comments.
     ///
+    /// `JSDoc` comments (`/** ... */`) are NOT skipped — they are captured
+    /// as `JsDoc` tokens and buffered for the parser to consume.
+    /// Regular block comments (`/* ... */`) and line comments are skipped.
+    ///
     /// Also skips the Unicode BOM (U+FEFF) which some editors prepend to files.
     fn skip_whitespace_and_comments(&mut self) {
         loop {
@@ -152,6 +163,48 @@ impl<'a> Lexer<'a> {
                         break;
                     }
                     self.advance();
+                }
+                continue;
+            }
+
+            // Check for JSDoc comment: `/**` (but not `/**/` which is an empty block comment)
+            if self.peek() == Some(b'/')
+                && self.peek_next() == Some(b'*')
+                && self.bytes.get(self.pos + 2).copied() == Some(b'*')
+                && self.bytes.get(self.pos + 3).copied() != Some(b'/')
+            {
+                let start = self.pos;
+                self.advance(); // consume /
+                self.advance(); // consume *
+                self.advance(); // consume *
+
+                let content_start = self.pos;
+                let mut found_end = false;
+                while !self.is_at_end() {
+                    if self.peek() == Some(b'*') && self.peek_next() == Some(b'/') {
+                        let content_end = self.pos;
+                        self.advance(); // consume *
+                        self.advance(); // consume /
+                        found_end = true;
+
+                        let raw = &self.source[content_start..content_end];
+                        let stripped = strip_jsdoc_content(raw);
+                        self.token_buffer.push(Token {
+                            kind: TokenKind::JsDoc(stripped),
+                            span: self.span_from(start),
+                        });
+                        break;
+                    }
+                    self.advance();
+                }
+                if !found_end {
+                    self.diagnostics.push(
+                        Diagnostic::error("unterminated JSDoc comment").with_label(
+                            self.span_from(start),
+                            self.file_id,
+                            "JSDoc comment starts here",
+                        ),
+                    );
                 }
                 continue;
             }
@@ -813,6 +866,41 @@ impl<'a> Lexer<'a> {
             _ => None,
         }
     }
+}
+
+/// Strip `JSDoc` comment content: remove leading `*` from each line and trim.
+///
+/// Given the raw text between `/**` and `*/`, produces clean text with:
+/// - Leading/trailing whitespace per line trimmed
+/// - Leading `* ` or `*` prefix removed from each line
+/// - Leading and trailing blank lines removed
+fn strip_jsdoc_content(raw: &str) -> String {
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut result_lines: Vec<String> = Vec::new();
+
+    for line in &lines {
+        let trimmed = line.trim();
+        // Strip leading `* ` or `*` prefix
+        let stripped = if let Some(rest) = trimmed.strip_prefix("* ") {
+            rest.to_owned()
+        } else if let Some(rest) = trimmed.strip_prefix('*') {
+            rest.to_owned()
+        } else {
+            trimmed.to_owned()
+        };
+        result_lines.push(stripped);
+    }
+
+    // Remove leading blank lines
+    while result_lines.first().is_some_and(String::is_empty) {
+        result_lines.remove(0);
+    }
+    // Remove trailing blank lines
+    while result_lines.last().is_some_and(String::is_empty) {
+        result_lines.pop();
+    }
+
+    result_lines.join("\n")
 }
 
 #[cfg(test)]
@@ -1542,5 +1630,62 @@ mod tests {
     fn test_lexer_question_question_not_split() {
         let tokens = tokenize("a ?? b");
         assert_eq!(tokens[1].kind, TokenKind::QuestionQuestion);
+    }
+
+    // ---------------------------------------------------------------
+    // JSDoc comment tests
+    // ---------------------------------------------------------------
+
+    // 65. `/** text */` produces a JsDoc token
+    #[test]
+    fn test_lexer_jsdoc_single_line_produces_jsdoc_token() {
+        let tokens = tokenize("/** Hello world */\nfunction foo() {}");
+        assert!(
+            matches!(&tokens[0].kind, TokenKind::JsDoc(text) if text == "Hello world"),
+            "Expected JsDoc token, got {:?}",
+            tokens[0].kind
+        );
+        assert_eq!(tokens[1].kind, TokenKind::Function);
+    }
+
+    // 66. Regular `/* text */` block comment is skipped
+    #[test]
+    fn test_lexer_block_comment_is_skipped() {
+        let tokens = tokenize("/* regular comment */\nfunction foo() {}");
+        assert_eq!(tokens[0].kind, TokenKind::Function);
+    }
+
+    // 67. Multi-line JSDoc preserves content with * stripping
+    #[test]
+    fn test_lexer_jsdoc_multiline_strips_stars() {
+        let tokens = tokenize(
+            "/**\n * First line\n * Second line\n * @param x - the value\n */\nfunction foo() {}",
+        );
+        if let TokenKind::JsDoc(text) = &tokens[0].kind {
+            assert!(text.contains("First line"), "Missing first line: {text}");
+            assert!(text.contains("Second line"), "Missing second line: {text}");
+            assert!(
+                text.contains("@param x - the value"),
+                "Missing param tag: {text}"
+            );
+        } else {
+            panic!("Expected JsDoc token, got {:?}", tokens[0].kind);
+        }
+    }
+
+    // 68. `/**/` (empty block comment) is NOT treated as JSDoc
+    #[test]
+    fn test_lexer_empty_block_comment_not_jsdoc() {
+        let tokens = tokenize("/**/\nfunction foo() {}");
+        // `/**/` is an empty block comment, should be skipped
+        assert_eq!(tokens[0].kind, TokenKind::Function);
+    }
+
+    // 69. JSDoc followed immediately by declaration
+    #[test]
+    fn test_lexer_jsdoc_followed_by_function() {
+        let tokens = tokenize("/** docs */function foo() {}");
+        assert!(matches!(&tokens[0].kind, TokenKind::JsDoc(_)));
+        assert_eq!(tokens[1].kind, TokenKind::Function);
     }
 }
