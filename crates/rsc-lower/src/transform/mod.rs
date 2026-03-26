@@ -18,8 +18,9 @@ use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
-    RustEnumVariant, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam, RustStructDef,
-    RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl,
+    RustEnumVariant, RustExpr, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam,
+    RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
+    RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -33,8 +34,10 @@ use rsc_typeck::types::Type;
 
 /// Information about a function's signature, collected in a pre-pass.
 ///
-/// Used by call-site lowering to determine whether to insert `?`, and
-/// by Tier 2 ownership inference to record per-parameter borrow modes.
+/// Used by call-site lowering to determine whether to insert `?`, fill in
+/// default values for omitted arguments, wrap optional params, and collect
+/// rest args. Also used by Tier 2 ownership inference for per-parameter
+/// borrow modes.
 #[derive(Debug, Clone)]
 struct FnSignature {
     /// Whether this function has a `throws` annotation.
@@ -44,6 +47,16 @@ struct FnSignature {
     /// Inferred parameter modes from Tier 2 borrow analysis.
     /// `None` means analysis hasn't run (e.g., external functions).
     param_modes: Option<Vec<ParamMode>>,
+    /// Per-parameter flags: whether each parameter is optional.
+    optional_params: Vec<bool>,
+    /// Per-parameter default value expressions (lowered to `RustExpr`).
+    /// `None` means no default; the caller must supply the argument or it
+    /// must be an optional param (in which case `None` is filled in).
+    default_values: Vec<Option<RustExpr>>,
+    /// Whether the last parameter is a rest parameter (`...args`).
+    has_rest_param: bool,
+    /// Total parameter count (including the rest param if any).
+    param_count: usize,
 }
 
 /// Map from function name to its throws signature.
@@ -485,7 +498,7 @@ impl Transform {
     }
 
     /// Register a function signature in the pre-pass for throws and parameter type detection.
-    fn register_fn_signature(&mut self, f: &ast::FnDecl, _ctx: &mut LoweringContext) {
+    fn register_fn_signature(&mut self, f: &ast::FnDecl, ctx: &mut LoweringContext) {
         let throws = f
             .return_type
             .as_ref()
@@ -502,9 +515,35 @@ impl Transform {
                     &self.type_registry,
                     &mut diags,
                 );
-                rsc_typeck::bridge::type_to_rust_type(&ty)
+                let mut rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                // Wrap optional params (without defaults) in Option<T>
+                if p.optional && p.default_value.is_none() {
+                    rust_ty = RustType::Option(Box::new(rust_ty));
+                }
+                rust_ty
             })
             .collect();
+
+        // Collect optional/default/rest info
+        let optional_params: Vec<bool> = f
+            .params
+            .iter()
+            .map(|p| p.optional || p.default_value.is_some())
+            .collect();
+
+        let use_map = ownership::UseMap::empty();
+        let default_values: Vec<Option<RustExpr>> = f
+            .params
+            .iter()
+            .map(|p| {
+                p.default_value
+                    .as_ref()
+                    .map(|dv| self.lower_expr(dv, ctx, &use_map, 0))
+            })
+            .collect();
+
+        let has_rest_param = f.params.last().is_some_and(|p| p.is_rest);
+        let param_count = f.params.len();
 
         // Tier 2: analyze parameter usage to determine borrow modes
         // Skip analysis when --no-borrow-inference is set (all params stay Owned)
@@ -519,7 +558,16 @@ impl Transform {
             let modes: Vec<ParamMode> = param_names
                 .iter()
                 .zip(param_types.iter())
-                .map(|(name, ty)| {
+                .enumerate()
+                .map(|(i, (name, ty))| {
+                    // Optional, default, and rest params always use Owned mode
+                    let is_special = f
+                        .params
+                        .get(i)
+                        .is_some_and(|p| p.optional || p.default_value.is_some() || p.is_rest);
+                    if is_special {
+                        return ParamMode::Owned;
+                    }
                     let usage = usage_map
                         .get(name.as_str())
                         .copied()
@@ -536,6 +584,10 @@ impl Transform {
                 throws,
                 param_types,
                 param_modes,
+                optional_params,
+                default_values,
+                has_rest_param,
+                param_count,
             },
         );
     }
@@ -667,10 +719,16 @@ impl Transform {
                     &generic_names,
                     &mut diags,
                 );
-                let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+                let mut ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
                 for d in diags {
                     ctx.emit_diagnostic(d);
                 }
+
+                // Optional params (without defaults) get wrapped in Option<T>
+                if p.optional && p.default_value.is_none() {
+                    ty = RustType::Option(Box::new(ty));
+                }
+
                 ctx.declare_variable(p.name.name.clone(), ty.clone());
 
                 // Use pre-computed param mode from Tier 2 analysis
@@ -1098,6 +1156,9 @@ mod tests {
                 kind: TypeKind::Named(ident(type_name, 0, type_name.len() as u32)),
                 span: span(0, type_name.len() as u32),
             },
+            optional: false,
+            default_value: None,
+            is_rest: false,
             span: span(0, 10),
         }
     }
@@ -2282,6 +2343,9 @@ mod tests {
                     kind: TypeKind::Named(ident("T", 0, 1)),
                     span: span(0, 1),
                 },
+                optional: false,
+                default_value: None,
+                is_rest: false,
                 span: span(0, 3),
             }],
             return_type: Some(ret_type(TypeAnnotation {
@@ -2336,6 +2400,9 @@ mod tests {
                         kind: TypeKind::Named(ident("T", 0, 1)),
                         span: span(0, 1),
                     },
+                    optional: false,
+                    default_value: None,
+                    is_rest: false,
                     span: span(0, 3),
                 },
                 Param {
@@ -2344,6 +2411,9 @@ mod tests {
                         kind: TypeKind::Named(ident("T", 0, 1)),
                         span: span(0, 1),
                     },
+                    optional: false,
+                    default_value: None,
+                    is_rest: false,
                     span: span(0, 3),
                 },
             ],
@@ -3661,6 +3731,9 @@ mod tests {
                                 ]),
                                 span: span(80, 104),
                             },
+                            optional: false,
+                            default_value: None,
+                            is_rest: false,
                             span: span(73, 104),
                         }],
                         return_type: Some(ReturnTypeAnnotation {
@@ -4778,6 +4851,91 @@ async function main() {
         assert!(
             needs_async_runtime,
             "expected needs_async_runtime to be true when Promise.all is used"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 055: Function Features — Optional, Default, Rest Parameters
+    // ---------------------------------------------------------------------------
+
+    // T055-L1: Optional param → Option<T> in signature
+    #[test]
+    fn test_lower_optional_param_produces_option_type() {
+        let source = "function greet(name: string, title?: string): string { return name; }";
+        let ir = lower_source(source);
+        let RustItem::Function(f) = &ir.items[0] else {
+            panic!("expected function");
+        };
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0].ty, RustType::String);
+        assert_eq!(f.params[1].ty, RustType::Option(Box::new(RustType::String)));
+    }
+
+    // T055-L2: Missing optional arg → None appended
+    #[test]
+    fn test_lower_missing_optional_arg_produces_none() {
+        let output = compile_and_emit(
+            "function greet(name: string, title?: string): string { return name; }\n\
+             function main() { greet(\"Alice\"); }",
+        );
+        assert!(
+            output.contains("None"),
+            "missing optional arg should produce None: {output}"
+        );
+    }
+
+    // T055-L3: Default param → default value inlined at call site
+    #[test]
+    fn test_lower_default_param_inlined_at_call_site() {
+        let output = compile_and_emit(
+            "function connect(host: string, port: i64 = 8080): string { return host; }\n\
+             function main() { connect(\"localhost\"); }",
+        );
+        assert!(
+            output.contains("8080"),
+            "missing default arg should inline 8080: {output}"
+        );
+    }
+
+    // T055-L4: Default param retains base type (not Option)
+    #[test]
+    fn test_lower_default_param_uses_base_type() {
+        let source = "function connect(host: string, port: i64 = 8080): string { return host; }";
+        let ir = lower_source(source);
+        let RustItem::Function(f) = &ir.items[0] else {
+            panic!("expected function");
+        };
+        assert_eq!(f.params[1].ty, RustType::I64);
+    }
+
+    // T055-L5: Rest param → Vec<T> in signature
+    #[test]
+    fn test_lower_rest_param_produces_vec_type() {
+        let source = "function log_all(...messages: Array<string>): void { }";
+        let ir = lower_source(source);
+        let RustItem::Function(f) = &ir.items[0] else {
+            panic!("expected function");
+        };
+        assert_eq!(f.params.len(), 1);
+        assert_eq!(
+            f.params[0].ty,
+            RustType::Generic(
+                Box::new(RustType::Named("Vec".to_owned())),
+                vec![RustType::String]
+            )
+        );
+    }
+
+    // T055-L6: Excess call args → vec![...] for rest param
+    #[test]
+    fn test_lower_excess_args_collected_into_vec() {
+        let output = compile_and_emit(
+            "function log_all(prefix: string, ...messages: Array<string>): void { }\n\
+             function main() { log_all(\"INFO\", \"hello\", \"world\"); }",
+        );
+        assert!(
+            output.contains("vec!["),
+            "excess args should produce vec![]: {output}"
         );
     }
 }

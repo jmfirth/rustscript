@@ -160,6 +160,10 @@ pub(crate) enum TokenKind {
     FatArrow,
     /// `&` (ampersand, used in intersection types)
     Ampersand,
+    /// `...` (spread/rest operator)
+    DotDotDot,
+    /// `?` (question mark, used in optional parameters)
+    Question,
 
     // Delimiters
     /// `(`

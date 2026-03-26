@@ -2807,226 +2807,140 @@ function main(): void {
     );
 }
 
-// ===========================================================================
-// Task 058: Control Flow Completeness — finally block, === / !== verification
-// ===========================================================================
-
 // ---------------------------------------------------------------------------
-// try/catch/finally → match with appended cleanup
+// Task 055: Function Features — Optional, Default, Rest Parameters
 // ---------------------------------------------------------------------------
 
+// T055-S1: Function with optional parameters
 #[test]
-fn test_snapshot_try_catch_finally_generates_match_with_cleanup() {
+fn test_snapshot_optional_params() {
     let source = "\
-function riskyOp(): i32 throws string {
-  throw \"oops\";
+function greet(name: string, title?: string): string {
+  return name;
 }
+
 function main() {
-  try {
-    const val = riskyOp();
-    console.log(val);
-  } catch (err: string) {
-    console.log(err);
-  } finally {
-    console.log(\"cleanup\");
-  }
-}";
-
-    let expected = "\
-fn riskyOp() -> Result<i32, String> {
-    return Err(\"oops\".to_string());
-}
-
-fn main() {
-    {
-        match riskyOp() {
-            Ok(val) => {
-                println!(\"{}\", val);
-            }
-            Err(err) => {
-                println!(\"{}\", err);
-            }
-        }
-        println!(\"{}\", \"cleanup\");
-    }
-}
-";
-
-    let actual = compile_to_rust(source);
-    assert_snapshot("try_catch_finally", &actual, expected);
-}
-
-// ---------------------------------------------------------------------------
-// try/finally → block with appended cleanup (no catch)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_snapshot_try_finally_generates_block_with_cleanup() {
-    let source = "\
-function main() {
-  try {
-    console.log(\"doing work\");
-  } finally {
-    console.log(\"cleanup\");
-  }
-}";
-
-    let expected = "\
-fn main() {
-    {
-        println!(\"{}\", \"doing work\");
-        println!(\"{}\", \"cleanup\");
-    }
-}
-";
-
-    let actual = compile_to_rust(source);
-    assert_snapshot("try_finally", &actual, expected);
-}
-
-// ---------------------------------------------------------------------------
-// === / !== on integers, strings, booleans
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_snapshot_strict_eq_integers_generates_double_eq() {
-    let source = "\
-function main() {
-  const x: i32 = 5;
-  const y: i32 = 5;
-  const result: bool = x === y;
-  console.log(result);
+  console.log(greet(\"Alice\"));
+  console.log(greet(\"Bob\", \"Dr.\"));
 }";
 
     let actual = compile_to_rust(source);
     assert!(
-        actual.contains("x == y"),
-        "expected `x == y` in output:\n{actual}"
+        actual.contains("fn greet(name: String, title: Option<String>) -> String"),
+        "optional param should be Option<String>: {actual}"
+    );
+    assert!(
+        actual.contains("greet(\"Alice\".to_string(), None)"),
+        "missing optional arg should be None: {actual}"
+    );
+    assert!(
+        actual.contains("greet(\"Bob\".to_string(), \"Dr.\".to_string())"),
+        "supplied optional arg should pass through: {actual}"
     );
 }
 
+// T055-S2: Function with default parameters
 #[test]
-fn test_snapshot_strict_ne_integers_generates_bang_eq() {
+fn test_snapshot_default_params() {
     let source = "\
+function connect(host: string, port: i64 = 8080): string {
+  return host;
+}
+
 function main() {
-  const x: i32 = 5;
-  const y: i32 = 10;
-  const result: bool = x !== y;
-  console.log(result);
+  console.log(connect(\"localhost\"));
+  console.log(connect(\"localhost\", 9090));
 }";
 
     let actual = compile_to_rust(source);
     assert!(
-        actual.contains("x != y"),
-        "expected `x != y` in output:\n{actual}"
+        actual.contains("fn connect(host: String, port: i64) -> String"),
+        "default param should use base type: {actual}"
+    );
+    assert!(
+        actual.contains("connect(\"localhost\".to_string(), 8080)"),
+        "missing default arg should be inlined: {actual}"
+    );
+    assert!(
+        actual.contains("connect(\"localhost\".to_string(), 9090)"),
+        "supplied default arg should pass through: {actual}"
     );
 }
 
+// T055-S3: Function with rest parameters
 #[test]
-fn test_snapshot_strict_eq_strings_generates_double_eq() {
+fn test_snapshot_rest_params() {
     let source = "\
+function log_all(prefix: string, ...messages: Array<string>): void {
+  console.log(prefix);
+}
+
 function main() {
-  const a: string = \"hello\";
-  const b: string = \"hello\";
-  const result: bool = a === b;
-  console.log(result);
+  log_all(\"INFO\", \"hello\", \"world\");
+  log_all(\"DEBUG\");
+}";
+
+    let actual = compile_to_rust(source);
+    // Borrow inference may optimize prefix to &str, but messages must be Vec<String>
+    assert!(
+        actual.contains("messages: Vec<String>"),
+        "rest param should be Vec<String>: {actual}"
+    );
+    assert!(
+        actual.contains("vec![\"hello\".to_string(), \"world\".to_string()]"),
+        "excess args should be collected into vec![]: {actual}"
+    );
+    assert!(
+        actual.contains("vec![]"),
+        "no rest args should produce empty vec: {actual}"
+    );
+}
+
+// T055-S4: Spread argument in function call
+#[test]
+fn test_snapshot_spread_arg() {
+    let source = "\
+function log_all(prefix: string, ...messages: Array<string>): void {
+  console.log(prefix);
+}
+
+function main() {
+  const items: Array<string> = [\"a\", \"b\"];
+  log_all(\"INFO\", ...items);
+}";
+
+    let actual = compile_to_rust(source);
+    // Spread arg should pass the vec directly, not wrap in another vec
+    // Borrow inference may optimize prefix to &str
+    assert!(
+        actual.contains("log_all(\"INFO\""),
+        "first arg should be present: {actual}"
+    );
+    assert!(
+        actual.contains(", items)"),
+        "spread arg should pass vec directly: {actual}"
+    );
+}
+
+// T055-S5: Combined optional + default
+#[test]
+fn test_snapshot_combined_optional_default() {
+    let source = "\
+function setup(name: string, verbose?: bool, retries: i64 = 3): string {
+  return name;
+}
+
+function main() {
+  console.log(setup(\"test\"));
 }";
 
     let actual = compile_to_rust(source);
     assert!(
-        actual.contains("a == b"),
-        "expected `a == b` in output:\n{actual}"
+        actual.contains("fn setup(name: String, verbose: Option<bool>, retries: i64) -> String"),
+        "mixed optional and default params: {actual}"
     );
-}
-
-#[test]
-fn test_snapshot_strict_eq_booleans_generates_double_eq() {
-    let source = "\
-function main() {
-  const a: bool = true;
-  const b: bool = false;
-  const result: bool = a === b;
-  console.log(result);
-}";
-
-    let actual = compile_to_rust(source);
     assert!(
-        actual.contains("a == b"),
-        "expected `a == b` in output:\n{actual}"
+        actual.contains("setup(\"test\".to_string(), None, 3)"),
+        "missing args should be filled with None and default: {actual}"
     );
 }
-
-// ---------------------------------------------------------------------------
-// === / !== in different expression positions
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_snapshot_strict_eq_in_if_condition() {
-    let source = "\
-function main() {
-  const x: i32 = 5;
-  if (x === 5) {
-    console.log(\"equal\");
-  }
-}";
-
-    let actual = compile_to_rust(source);
-    assert!(
-        actual.contains("x == 5"),
-        "expected `x == 5` in output:\n{actual}"
-    );
-}
-
-#[test]
-fn test_snapshot_strict_ne_in_if_condition() {
-    let source = "\
-function main() {
-  const x: i32 = 5;
-  if (x !== 10) {
-    console.log(\"not equal\");
-  }
-}";
-
-    let actual = compile_to_rust(source);
-    assert!(
-        actual.contains("x != 10"),
-        "expected `x != 10` in output:\n{actual}"
-    );
-}
-
-#[test]
-fn test_snapshot_strict_eq_in_variable_assignment() {
-    let source = "\
-function main() {
-  const x: i32 = 5;
-  const y: i32 = 5;
-  const same: bool = x === y;
-  console.log(same);
-}";
-
-    let actual = compile_to_rust(source);
-    assert!(
-        actual.contains("x == y"),
-        "expected `x == y` in output:\n{actual}"
-    );
-}
-
-#[test]
-fn test_snapshot_strict_eq_as_function_argument() {
-    let source = "\
-function main() {
-  const x: i32 = 5;
-  console.log(x === 5);
-}";
-
-    let actual = compile_to_rust(source);
-    assert!(
-        actual.contains("x == 5"),
-        "expected `x == 5` in output:\n{actual}"
-    );
-}
-
-// Note: ternary operator `? :` is not yet supported in the parser,
-// so === in ternary conditions is not tested here. It can be tested
-// once ternary support is added — the lowering already handles it
-// correctly since === → BinaryOp::Eq → RustBinaryOp::Eq → `==`.

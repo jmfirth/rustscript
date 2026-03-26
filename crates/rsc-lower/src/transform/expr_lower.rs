@@ -71,93 +71,7 @@ impl Transform {
                 )
             }
             ast::ExprKind::Call(call) => {
-                // Check for builtin free functions (e.g., `spawn`)
-                if let Some(lowering_fn) = self.builtins.lookup_function(&call.callee.name).copied()
-                {
-                    let lowered_args: Vec<RustExpr> = call
-                        .args
-                        .iter()
-                        .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
-                        .collect();
-                    return lowering_fn(lowered_args, expr.span);
-                }
-
-                let sig = self.fn_signatures.get(&call.callee.name);
-                let callee_modes = sig.and_then(|s| s.param_modes.as_ref());
-                let args: Vec<RustExpr> = call
-                    .args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        // Resolve string literals as enum variants when the parameter type is an enum
-                        if let ast::ExprKind::StringLit(s) = &a.kind
-                            && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
-                            && let Some(type_name) = extract_named_type(param_ty)
-                            && let Some(td) = self.type_registry.lookup(&type_name)
-                            && matches!(
-                                &td.kind,
-                                rsc_typeck::registry::TypeDefKind::SimpleEnum(_)
-                                    | rsc_typeck::registry::TypeDefKind::DataEnum(_)
-                            )
-                        {
-                            return RustExpr::new(
-                                RustExprKind::EnumVariant {
-                                    enum_name: type_name,
-                                    variant_name: capitalize_first(s),
-                                },
-                                a.span,
-                            );
-                        }
-                        let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
-
-                        // Tier 2: apply callsite borrow transform
-                        if let Some(modes) = callee_modes
-                            && let Some(mode) = modes.get(i)
-                        {
-                            match mode {
-                                ParamMode::BorrowedStr => {
-                                    // String literal → &str: unwrap .to_string() wrapper
-                                    if let RustExprKind::ToString(inner) = &lowered.kind
-                                        && matches!(inner.kind, RustExprKind::StringLit(_))
-                                    {
-                                        return *inner.clone();
-                                    }
-                                    // Variable → &var (auto-deref handles &String → &str)
-                                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
-                                        return RustExpr::synthetic(RustExprKind::Borrow(
-                                            Box::new(lowered),
-                                        ));
-                                    }
-                                }
-                                ParamMode::Borrowed => {
-                                    // Wrap in & unless already a borrow
-                                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
-                                        return RustExpr::synthetic(RustExprKind::Borrow(
-                                            Box::new(lowered),
-                                        ));
-                                    }
-                                }
-                                ParamMode::Owned => {}
-                            }
-                        }
-                        lowered
-                    })
-                    .collect();
-                let call_expr = RustExpr::new(
-                    RustExprKind::Call {
-                        func: call.callee.name.clone(),
-                        args,
-                    },
-                    expr.span,
-                );
-                // If the callee is a throws function and we're inside a throws function,
-                // wrap with `?` operator.
-                let callee_throws = sig.is_some_and(|sig| sig.throws);
-                if callee_throws && ctx.is_fn_throws() {
-                    RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), expr.span)
-                } else {
-                    call_expr
-                }
+                self.lower_call_expr(call, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::MethodCall(mc) => {
                 self.lower_method_call(mc, expr.span, ctx, use_map, stmt_index)
@@ -369,7 +283,209 @@ impl Transform {
                 let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
                 RustExpr::new(RustExprKind::ArcMutexNew(Box::new(lowered)), expr.span)
             }
+            ast::ExprKind::SpreadArg(inner) => {
+                // SpreadArg is handled at the call-site level. If we reach here,
+                // it's a spread used outside a function call context — just lower
+                // the inner expression.
+                self.lower_expr(inner, ctx, use_map, stmt_index)
+            }
         }
+    }
+
+    /// Lower a function call expression, handling optional, default, and rest parameters.
+    ///
+    /// When the callee has:
+    /// - **Optional parameters**: missing args are filled with `None`.
+    /// - **Default parameters**: missing args are filled with the default value.
+    /// - **Rest parameters**: excess positional args are collected into `vec![...]`.
+    /// - **Spread arguments**: `...arr` passes the array directly to a rest param.
+    #[allow(clippy::too_many_lines)]
+    // Call-site lowering handles enum resolution, borrow transforms, optional/default/rest
+    // param filling, and throws wrapping — splitting would fragment the coherent logic.
+    fn lower_call_expr(
+        &self,
+        call: &ast::CallExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        // Check for builtin free functions (e.g., `spawn`)
+        if let Some(lowering_fn) = self.builtins.lookup_function(&call.callee.name).copied() {
+            let lowered_args: Vec<RustExpr> = call
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return lowering_fn(lowered_args, span);
+        }
+
+        let sig = self.fn_signatures.get(&call.callee.name);
+        let callee_modes = sig.and_then(|s| s.param_modes.as_ref());
+
+        // Determine the number of non-rest parameters
+        let non_rest_count = sig.map_or(0, |s| {
+            if s.has_rest_param {
+                s.param_count.saturating_sub(1)
+            } else {
+                s.param_count
+            }
+        });
+
+        let has_rest = sig.is_some_and(|s| s.has_rest_param);
+        let supplied_count = call.args.len();
+
+        // Lower supplied arguments
+        let mut args: Vec<RustExpr> = Vec::new();
+
+        if has_rest {
+            // Lower non-rest arguments normally
+            for (i, a) in call.args.iter().enumerate() {
+                if i < non_rest_count {
+                    args.push(self.lower_single_arg(
+                        a,
+                        i,
+                        sig,
+                        callee_modes,
+                        ctx,
+                        use_map,
+                        stmt_index,
+                    ));
+                }
+            }
+
+            // Fill in any missing optional/default non-rest args
+            if let Some(s) = sig {
+                for i in supplied_count.min(non_rest_count)..non_rest_count {
+                    if let Some(default_expr) = s.default_values.get(i).and_then(|d| d.as_ref()) {
+                        args.push(default_expr.clone());
+                    } else if s.optional_params.get(i).copied().unwrap_or(false) {
+                        args.push(RustExpr::synthetic(RustExprKind::None));
+                    }
+                }
+            }
+
+            // Collect rest arguments into a vec![]
+            if supplied_count > non_rest_count {
+                // Check if the only rest arg is a SpreadArg — pass directly
+                let rest_args: Vec<&ast::Expr> = call.args[non_rest_count..].iter().collect();
+                if rest_args.len() == 1 {
+                    if let ast::ExprKind::SpreadArg(inner) = &rest_args[0].kind {
+                        args.push(self.lower_expr(inner, ctx, use_map, stmt_index));
+                    } else {
+                        let vec_elements: Vec<RustExpr> = rest_args
+                            .iter()
+                            .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                            .collect();
+                        args.push(RustExpr::synthetic(RustExprKind::VecLit(vec_elements)));
+                    }
+                } else {
+                    let vec_elements: Vec<RustExpr> = rest_args
+                        .iter()
+                        .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                        .collect();
+                    args.push(RustExpr::synthetic(RustExprKind::VecLit(vec_elements)));
+                }
+            } else {
+                // No rest args supplied — pass empty vec
+                args.push(RustExpr::synthetic(RustExprKind::VecLit(Vec::new())));
+            }
+        } else {
+            // No rest param: lower args normally with enum/borrow transforms
+            for (i, a) in call.args.iter().enumerate() {
+                args.push(self.lower_single_arg(a, i, sig, callee_modes, ctx, use_map, stmt_index));
+            }
+
+            // Fill in missing optional/default args
+            if let Some(s) = sig {
+                for i in supplied_count..s.param_count {
+                    if let Some(default_expr) = s.default_values.get(i).and_then(|d| d.as_ref()) {
+                        args.push(default_expr.clone());
+                    } else if s.optional_params.get(i).copied().unwrap_or(false) {
+                        args.push(RustExpr::synthetic(RustExprKind::None));
+                    }
+                }
+            }
+        }
+
+        let call_expr = RustExpr::new(
+            RustExprKind::Call {
+                func: call.callee.name.clone(),
+                args,
+            },
+            span,
+        );
+        // If the callee is a throws function and we're inside a throws function,
+        // wrap with `?` operator.
+        let callee_throws = sig.is_some_and(|sig| sig.throws);
+        if callee_throws && ctx.is_fn_throws() {
+            RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), span)
+        } else {
+            call_expr
+        }
+    }
+
+    /// Lower a single argument at a call site, handling enum resolution and borrow transforms.
+    #[allow(clippy::too_many_arguments)]
+    // Parameters mirror the call-site context needed for enum resolution and borrow transforms
+    fn lower_single_arg(
+        &self,
+        a: &ast::Expr,
+        i: usize,
+        sig: Option<&super::FnSignature>,
+        callee_modes: Option<&Vec<ParamMode>>,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        // Resolve string literals as enum variants when the parameter type is an enum
+        if let ast::ExprKind::StringLit(s) = &a.kind
+            && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
+            && let Some(type_name) = extract_named_type(param_ty)
+            && let Some(td) = self.type_registry.lookup(&type_name)
+            && matches!(
+                &td.kind,
+                rsc_typeck::registry::TypeDefKind::SimpleEnum(_)
+                    | rsc_typeck::registry::TypeDefKind::DataEnum(_)
+            )
+        {
+            return RustExpr::new(
+                RustExprKind::EnumVariant {
+                    enum_name: type_name,
+                    variant_name: capitalize_first(s),
+                },
+                a.span,
+            );
+        }
+        let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+
+        // Tier 2: apply callsite borrow transform
+        if let Some(modes) = callee_modes
+            && let Some(mode) = modes.get(i)
+        {
+            match mode {
+                ParamMode::BorrowedStr => {
+                    // String literal → &str: unwrap .to_string() wrapper
+                    if let RustExprKind::ToString(inner) = &lowered.kind
+                        && matches!(inner.kind, RustExprKind::StringLit(_))
+                    {
+                        return *inner.clone();
+                    }
+                    // Variable → &var (auto-deref handles &String → &str)
+                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
+                        return RustExpr::synthetic(RustExprKind::Borrow(Box::new(lowered)));
+                    }
+                }
+                ParamMode::Borrowed => {
+                    // Wrap in & unless already a borrow
+                    if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
+                        return RustExpr::synthetic(RustExprKind::Borrow(Box::new(lowered)));
+                    }
+                }
+                ParamMode::Owned => {}
+            }
+        }
+        lowered
     }
 
     /// Lower a closure / arrow function expression.
