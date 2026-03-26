@@ -12,8 +12,9 @@ use rsc_syntax::ast::{
     InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
     MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
     Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
+    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
+    VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -158,7 +159,35 @@ impl Printer {
             ItemKind::Class(c) => self.print_class_def(c),
             ItemKind::RustBlock(rb) => self.print_rust_block(rb),
             ItemKind::Const(decl) => self.print_var_decl(decl),
+            ItemKind::TestBlock(tb) => self.print_test_block(tb),
         }
+    }
+
+    /// Print a test block: `test("name", () => { ... })`.
+    fn print_test_block(&mut self, tb: &TestBlock) {
+        let keyword = match tb.kind {
+            TestBlockKind::Test => "test",
+            TestBlockKind::Describe => "describe",
+            TestBlockKind::It => "it",
+        };
+        self.write(keyword);
+        self.write("(\"");
+        self.write(&tb.description);
+        self.write("\", () => ");
+        match &tb.body {
+            TestBody::Stmts(block) => self.print_block(block),
+            TestBody::Items(items) => {
+                self.writeln("{");
+                self.indent();
+                for item in items {
+                    self.print_test_block(item);
+                    self.newline();
+                }
+                self.dedent();
+                self.write("}");
+            }
+        }
+        self.writeln(");");
     }
 
     /// Print a `JSDoc` comment block: `/** ... */`.

@@ -5,11 +5,12 @@
 //! output, records the corresponding `.rts` [`Span`] (if any).
 
 use rsc_syntax::rust_ir::{
-    IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustConstItem, RustElse,
-    RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
-    RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt,
-    RustMethod, RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
-    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam, SpreadOp,
+    IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustConstItem,
+    RustDescribeModule, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl,
+    RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt,
+    RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
+    RustStructDef, RustTestItem, RustTestModule, RustTraitDef, RustTraitImplBlock,
+    RustTryFinallyStmt, RustType, RustTypeParam, SpreadOp,
 };
 use rsc_syntax::span::Span;
 
@@ -157,6 +158,14 @@ impl Emitter {
             }
             self.emit_item(item);
         }
+
+        // Emit test module at the end of the file
+        if let Some(ref test_module) = file.test_module {
+            if !file.items.is_empty() {
+                self.newline();
+            }
+            self.emit_test_module(test_module);
+        }
     }
 
     /// Emit a top-level item.
@@ -187,6 +196,65 @@ impl Emitter {
         self.write(" = ");
         self.emit_expr(&c.init);
         self.writeln(";");
+    }
+
+    /// Emit a `#[cfg(test)] mod tests { ... }` block.
+    fn emit_test_module(&mut self, test_module: &RustTestModule) {
+        self.write_indent();
+        self.writeln("#[cfg(test)]");
+        self.write_indent();
+        self.writeln("mod tests {");
+        self.push_indent();
+        self.write_indent();
+        self.writeln("use super::*;");
+
+        for item in &test_module.items {
+            self.newline();
+            self.emit_test_item(item);
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
+    }
+
+    /// Emit a single test item (test function or describe module).
+    fn emit_test_item(&mut self, item: &RustTestItem) {
+        match item {
+            RustTestItem::TestFn(test_fn) => {
+                self.write_indent();
+                self.writeln("#[test]");
+                self.write_indent();
+                self.write("fn ");
+                self.write(&test_fn.name);
+                self.write("() ");
+                self.emit_block(&test_fn.body);
+                self.newline();
+            }
+            RustTestItem::DescribeModule(describe) => {
+                self.emit_describe_module(describe);
+            }
+        }
+    }
+
+    /// Emit a nested `describe` module: `mod name { use super::*; ... }`.
+    fn emit_describe_module(&mut self, describe: &RustDescribeModule) {
+        self.write_indent();
+        self.write("mod ");
+        self.write(&describe.name);
+        self.writeln(" {");
+        self.push_indent();
+        self.write_indent();
+        self.writeln("use super::*;");
+
+        for item in &describe.items {
+            self.newline();
+            self.emit_test_item(item);
+        }
+
+        self.pop_indent();
+        self.write_indent();
+        self.writeln("}");
     }
 
     /// Emit a struct definition.
@@ -1753,6 +1821,7 @@ mod tests {
         RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -1785,6 +1854,7 @@ mod tests {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2233,6 +2303,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![
                 RustItem::Function(RustFnDecl {
                     attributes: vec![],
@@ -2277,6 +2348,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2314,6 +2386,7 @@ fn answer() -> i32 {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2509,6 +2582,7 @@ fn complex() {
                 span: None,
             }],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2552,6 +2626,7 @@ fn main() {
                     span: None,
                 },
             ],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2585,6 +2660,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2664,6 +2740,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Struct(RustStructDef {
                 public: false,
                 name: "User".to_owned(),
@@ -2773,6 +2850,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2810,6 +2888,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -2858,6 +2937,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Struct(RustStructDef {
                 public: false,
                 name: "Container".to_owned(),
@@ -2905,6 +2985,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Enum(RustEnumDef {
                 public: false,
                 name: "Direction".to_owned(),
@@ -2949,6 +3030,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Enum(RustEnumDef {
                 public: false,
                 name: "Shape".to_owned(),
@@ -3005,6 +3087,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3058,6 +3141,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3200,6 +3284,7 @@ fn main() {
                 span: None,
             }],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3231,6 +3316,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3327,6 +3413,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3564,6 +3651,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3607,6 +3695,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Trait(RustTraitDef {
                 public: false,
                 name: "Serializable".to_owned(),
@@ -3638,6 +3727,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3674,6 +3764,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Trait(RustTraitDef {
                 public: false,
                 name: "Cloneable".to_owned(),
@@ -3759,6 +3850,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3788,6 +3880,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -3825,6 +3918,7 @@ fn main() {
                 span: None,
             }],
             mod_decls: vec![],
+            test_module: None,
             items: vec![],
         };
         let output = emit_source(&file);
@@ -3844,6 +3938,7 @@ fn main() {
                 span: None,
             }],
             mod_decls: vec![],
+            test_module: None,
             items: vec![],
         };
         let output = emit_source(&file);
@@ -3863,6 +3958,7 @@ fn main() {
                 public: false,
                 span: None,
             }],
+            test_module: None,
             items: vec![],
         };
         let output = emit_source(&file);
@@ -3882,6 +3978,7 @@ fn main() {
                 public: true,
                 span: None,
             }],
+            test_module: None,
             items: vec![],
         };
         let output = emit_source(&file);
@@ -3897,6 +3994,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Struct(RustStructDef {
                 public: true,
                 name: "User".to_owned(),
@@ -3929,6 +4027,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Counter".to_owned(),
                 type_params: vec![],
@@ -3979,6 +4078,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::TraitImpl(RustTraitImplBlock {
                 trait_name: "Describable".to_owned(),
                 type_name: "User".to_owned(),
@@ -4027,6 +4127,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -4055,6 +4156,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Foo".to_owned(),
                 type_params: vec![],
@@ -4092,6 +4194,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: true,
@@ -4192,6 +4295,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Impl(RustImplBlock {
                 type_name: "Server".to_owned(),
                 type_params: vec![],
@@ -4225,6 +4329,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: true,
@@ -4300,6 +4405,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![RustAttribute {
                     path: "tokio::main".to_owned(),
@@ -4343,6 +4449,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: true,
@@ -4378,6 +4485,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![RustAttribute {
                     path: "tokio::main".to_owned(),
@@ -4593,6 +4701,7 @@ fn main() {
         RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -4753,6 +4862,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -4826,6 +4936,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,
@@ -4860,6 +4971,7 @@ fn main() {
         let file = RustFile {
             uses: vec![],
             mod_decls: vec![],
+            test_module: None,
             items: vec![RustItem::Function(RustFnDecl {
                 attributes: vec![],
                 is_async: false,

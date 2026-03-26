@@ -10,6 +10,7 @@ mod expr_lower;
 mod import_lower;
 mod match_lower;
 mod stmt_lower;
+mod test_lower;
 mod use_collector;
 
 use std::collections::HashSet;
@@ -92,6 +93,8 @@ impl Transform {
     /// Performs a pre-pass to register all type definitions, then lowers
     /// each item. Returns the Rust IR, diagnostics, and any external crate
     /// dependencies discovered from import statements.
+    #[allow(clippy::too_many_lines)]
+    // Item-kind dispatch across all module-level constructs; splitting would obscure the flow
     pub fn lower_module(
         &mut self,
         module: &ast::Module,
@@ -110,7 +113,8 @@ impl Transform {
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
                 | ast::ItemKind::RustBlock(_)
-                | ast::ItemKind::Const(_) => {}
+                | ast::ItemKind::Const(_)
+                | ast::ItemKind::TestBlock(_) => {}
             }
         }
 
@@ -183,6 +187,8 @@ impl Transform {
                     let lowered = self.lower_top_level_const(decl, exported, &mut ctx);
                     items.push(lowered);
                 }
+                // Test blocks are handled separately by collect_test_module
+                ast::ItemKind::TestBlock(_) => {}
             }
         }
 
@@ -196,12 +202,16 @@ impl Transform {
         import_uses.retain(|u| seen_paths.insert(u.path.clone()));
         let uses = import_uses;
 
+        // Collect test blocks (test(), describe(), it()) from top-level items
+        let test_module = self.collect_test_module(module, &mut ctx);
+
         let diagnostics = ctx.into_diagnostics();
         (
             RustFile {
                 uses,
                 mod_decls: Vec::new(),
                 items,
+                test_module,
             },
             diagnostics,
             crate_deps,

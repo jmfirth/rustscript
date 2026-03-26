@@ -3760,3 +3760,190 @@ function main() {
         "&&= should generate truthy check. Got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test Syntax: test() blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_simple_test_block_generates_cfg_test_module() {
+    let source = r#"
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+test("adds two numbers", () => {
+  const result: i32 = add(2, 3);
+  assert(result === 5);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("#[cfg(test)]"),
+        "expected #[cfg(test)] in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("mod tests {"),
+        "expected mod tests in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("use super::*;"),
+        "expected use super::* in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("#[test]"),
+        "expected #[test] in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn adds_two_numbers()"),
+        "expected fn adds_two_numbers() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("assert_eq!(result, 5)"),
+        "expected assert_eq!(result, 5) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_multiple_test_blocks_in_single_module() {
+    let source = r#"
+test("first test", () => {
+  assert(true);
+});
+
+test("second test", () => {
+  assert(1 === 1);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn first_test()"),
+        "expected fn first_test() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn second_test()"),
+        "expected fn second_test() in output:\n{actual}"
+    );
+    // Should only have one test module
+    let cfg_count = actual.matches("#[cfg(test)]").count();
+    assert_eq!(
+        cfg_count, 1,
+        "expected exactly 1 #[cfg(test)], got {cfg_count}:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_assert_eq_from_triple_equals() {
+    let source = r#"
+test("equality check", () => {
+  const x: i32 = 5;
+  assert(x === 5);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("assert_eq!(x, 5)"),
+        "expected assert_eq!(x, 5) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_assert_ne_from_not_equals() {
+    let source = r#"
+test("inequality check", () => {
+  const x: i32 = 5;
+  assert(x !== 3);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("assert_ne!(x, 3)"),
+        "expected assert_ne!(x, 3) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_assert_boolean_expr() {
+    let source = r#"
+test("boolean assert", () => {
+  const flag: bool = true;
+  assert(flag);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("assert!(flag)"),
+        "expected assert!(flag) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_assert_comparison_passthrough() {
+    let source = r#"
+test("comparison assert", () => {
+  const x: i32 = 10;
+  assert(x > 5);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("assert!(x > 5)"),
+        "expected assert!(x > 5) in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_describe_it_nested_modules() {
+    let source = r#"
+describe("Calculator", () => {
+  describe("add", () => {
+    it("should add positive numbers", () => {
+      assert(1 + 2 === 3);
+    });
+
+    it("should handle zero", () => {
+      assert(0 + 5 === 5);
+    });
+  });
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("mod calculator {"),
+        "expected mod calculator in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("mod add {"),
+        "expected mod add in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn should_add_positive_numbers()"),
+        "expected fn should_add_positive_numbers() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn should_handle_zero()"),
+        "expected fn should_handle_zero() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_test_name_sanitization() {
+    let source = r#"
+test("should handle (edge) cases!", () => {
+  assert(true);
+});
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn should_handle_edge_cases()"),
+        "expected sanitized fn name in output:\n{actual}"
+    );
+}

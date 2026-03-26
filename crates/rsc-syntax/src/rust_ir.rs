@@ -24,6 +24,9 @@ pub struct RustFile {
     pub mod_decls: Vec<RustModDecl>,
     /// The top-level items in this file.
     pub items: Vec<RustItem>,
+    /// Optional test module produced by `test()` / `describe()` / `it()` blocks.
+    /// Emitted as `#[cfg(test)] mod tests { use super::*; ... }`.
+    pub test_module: Option<RustTestModule>,
 }
 
 /// A Rust `use` declaration.
@@ -93,6 +96,50 @@ pub struct RustConstItem {
     pub init: RustExpr,
     /// The source span, if derived from source.
     pub span: Option<Span>,
+}
+
+/// A test module: `#[cfg(test)] mod tests { ... }`.
+///
+/// Produced by lowering `test()`, `describe()`, and `it()` blocks from
+/// `RustScript` source. All test blocks in a file are collected into a single
+/// test module.
+#[derive(Debug, Clone)]
+pub struct RustTestModule {
+    /// Test items: functions and nested `describe` modules.
+    pub items: Vec<RustTestItem>,
+}
+
+/// An item inside a test module.
+///
+/// Either a `#[test]` function or a nested `mod` block (from `describe`).
+#[derive(Debug, Clone)]
+pub enum RustTestItem {
+    /// A `#[test] fn name() { ... }` test function.
+    TestFn(RustTestFn),
+    /// A nested module from `describe("name", () => { ... })`.
+    DescribeModule(RustDescribeModule),
+}
+
+/// A `#[test]` function inside a test module.
+///
+/// Produced by lowering `test("name", () => { ... })` or `it("name", () => { ... })`.
+#[derive(Debug, Clone)]
+pub struct RustTestFn {
+    /// The sanitized function name (derived from the test description string).
+    pub name: String,
+    /// The function body.
+    pub body: RustBlock,
+}
+
+/// A nested module inside a test module, from `describe("name", ...)`.
+///
+/// Contains `#[test]` functions and further nested `describe` modules.
+#[derive(Debug, Clone)]
+pub struct RustDescribeModule {
+    /// The sanitized module name (derived from the describe description string).
+    pub name: String,
+    /// The items inside this describe block.
+    pub items: Vec<RustTestItem>,
 }
 
 /// A generic type parameter in Rust: `T` or `T: Bound`.
