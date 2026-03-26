@@ -105,6 +105,21 @@ impl Emitter {
         self.indent -= 1;
     }
 
+    /// Emit `///` doc comment lines before a declaration, translating `JSDoc`
+    /// tags (`@param`, `@returns`, `@throws`, `@example`) to Rustdoc sections.
+    fn emit_doc_comment(&mut self, doc: &str) {
+        let translated = translate_jsdoc_to_rustdoc(doc);
+        for line in translated.lines() {
+            self.write_indent();
+            if line.is_empty() {
+                self.writeln("///");
+            } else {
+                self.write("/// ");
+                self.writeln(line);
+            }
+        }
+    }
+
     /// Emit an entire Rust source file.
     fn emit_file(&mut self, file: &RustFile) {
         // Emit use declarations first (these are compiler-generated, no .rts span)
@@ -177,6 +192,9 @@ impl Emitter {
     /// Emit a struct definition.
     fn emit_struct(&mut self, s: &RustStructDef) {
         self.set_span(s.span);
+        if let Some(ref doc) = s.doc_comment {
+            self.emit_doc_comment(doc);
+        }
         if !s.derives.is_empty() {
             self.write_indent();
             self.write("#[derive(");
@@ -196,6 +214,9 @@ impl Emitter {
 
         for field in &s.fields {
             self.set_span(field.span);
+            if let Some(ref doc) = field.doc_comment {
+                self.emit_doc_comment(doc);
+            }
             self.write_indent();
             if field.public {
                 self.write("pub ");
@@ -214,6 +235,9 @@ impl Emitter {
     /// Emit an enum definition.
     fn emit_enum(&mut self, e: &RustEnumDef) {
         self.set_span(e.span);
+        if let Some(ref doc) = e.doc_comment {
+            self.emit_doc_comment(doc);
+        }
         if !e.derives.is_empty() {
             self.write_indent();
             self.write("#[derive(");
@@ -307,6 +331,9 @@ impl Emitter {
     /// Emit a trait definition.
     fn emit_trait(&mut self, t: &RustTraitDef) {
         self.set_span(t.span);
+        if let Some(ref doc) = t.doc_comment {
+            self.emit_doc_comment(doc);
+        }
         self.write_indent();
         if t.public {
             self.write("pub trait ");
@@ -418,6 +445,9 @@ impl Emitter {
     /// Emit a single method within an impl block.
     fn emit_method(&mut self, method: &RustMethod) {
         self.set_span(method.span);
+        if let Some(ref doc) = method.doc_comment {
+            self.emit_doc_comment(doc);
+        }
         self.write_indent();
         if method.is_async {
             self.write("async fn ");
@@ -533,6 +563,10 @@ impl Emitter {
     /// Emit a function declaration.
     fn emit_fn(&mut self, f: &RustFnDecl) {
         self.set_span(f.span);
+        // Emit doc comment before the function declaration
+        if let Some(ref doc) = f.doc_comment {
+            self.emit_doc_comment(doc);
+        }
         // Emit attributes before the function declaration
         for attr in &f.attributes {
             self.write_indent();
@@ -1495,6 +1529,122 @@ impl Emitter {
 /// Returns an [`EmitResult`] containing both the generated `.rs` source text
 /// and a line-level source map mapping each `.rs` line to its originating
 /// `.rts` span (if any).
+/// Translate `JSDoc` content to Rustdoc format.
+///
+/// Converts `JSDoc` tags to their Rustdoc equivalents:
+/// - `@param name - description` → listed under `# Arguments` as `` * `name` - description ``
+/// - `@returns description` → listed under `# Returns`
+/// - `@throws ErrorType` → listed under `# Errors`
+/// - `@example` → listed under `# Examples`
+/// - Plain text → plain doc comment text
+///
+/// Unrecognized tags are passed through as-is.
+fn translate_jsdoc_to_rustdoc(doc: &str) -> String {
+    let mut plain_lines: Vec<String> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+    let mut returns_lines: Vec<String> = Vec::new();
+    let mut errors_lines: Vec<String> = Vec::new();
+    let mut example_lines: Vec<String> = Vec::new();
+    let mut in_example = false;
+
+    for line in doc.lines() {
+        let trimmed = line.trim();
+
+        if in_example {
+            // Everything after @example until end or another @tag is example content
+            if trimmed.starts_with('@') && !trimmed.starts_with("@example") {
+                in_example = false;
+                // Fall through to process this line as a tag
+            } else {
+                example_lines.push(trimmed.to_owned());
+                continue;
+            }
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("@param") {
+            // Format: @param name - description  OR  @param name description
+            let rest = rest.trim();
+            if let Some((name, desc)) = rest.split_once(" - ") {
+                params.push(format!("* `{}` - {}", name.trim(), desc.trim()));
+            } else if let Some((name, desc)) = rest.split_once(' ') {
+                params.push(format!("* `{}` - {}", name.trim(), desc.trim()));
+            } else {
+                params.push(format!("* `{rest}`"));
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("@returns") {
+            returns_lines.push(rest.trim().to_owned());
+        } else if let Some(rest) = trimmed.strip_prefix("@return") {
+            returns_lines.push(rest.trim().to_owned());
+        } else if let Some(rest) = trimmed.strip_prefix("@throws") {
+            errors_lines.push(rest.trim().to_owned());
+        } else if trimmed.starts_with("@example") {
+            in_example = true;
+        } else {
+            plain_lines.push(line.to_owned());
+        }
+    }
+
+    let mut result = String::new();
+
+    // Emit plain text
+    for line in &plain_lines {
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    // Emit # Arguments section
+    if !params.is_empty() {
+        if !result.trim().is_empty() {
+            result.push('\n');
+        }
+        result.push_str("# Arguments\n\n");
+        for param in &params {
+            result.push_str(param);
+            result.push('\n');
+        }
+    }
+
+    // Emit # Returns section
+    if !returns_lines.is_empty() {
+        if !result.trim().is_empty() {
+            result.push('\n');
+        }
+        result.push_str("# Returns\n\n");
+        for line in &returns_lines {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    // Emit # Errors section
+    if !errors_lines.is_empty() {
+        if !result.trim().is_empty() {
+            result.push('\n');
+        }
+        result.push_str("# Errors\n\n");
+        for line in &errors_lines {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    // Emit # Examples section
+    if !example_lines.is_empty() {
+        if !result.trim().is_empty() {
+            result.push('\n');
+        }
+        result.push_str("# Examples\n\n");
+        for line in &example_lines {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    // Remove trailing newline (the emitter adds its own)
+    result.truncate(result.trim_end_matches('\n').len());
+    result
+}
+
 pub fn emit(file: &RustFile) -> EmitResult {
     let mut emitter = Emitter::new();
     emitter.emit_file(file);
@@ -1521,6 +1671,66 @@ mod tests {
     /// Helper: emit and return just the source string (ignoring the source map).
     fn emit_source(file: &RustFile) -> String {
         emit(file).source
+    }
+
+    // ---------------------------------------------------------------
+    // JSDoc → Rustdoc translation tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_translate_jsdoc_plain_text() {
+        let result = super::translate_jsdoc_to_rustdoc("Hello world");
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn test_translate_jsdoc_param_tag() {
+        let result = super::translate_jsdoc_to_rustdoc("@param name - The user's name");
+        assert!(
+            result.contains("# Arguments"),
+            "Missing Arguments header: {result}"
+        );
+        assert!(
+            result.contains("* `name` - The user's name"),
+            "Missing param entry: {result}"
+        );
+    }
+
+    #[test]
+    fn test_translate_jsdoc_returns_tag() {
+        let result = super::translate_jsdoc_to_rustdoc("@returns The new user");
+        assert!(
+            result.contains("# Returns"),
+            "Missing Returns header: {result}"
+        );
+        assert!(
+            result.contains("The new user"),
+            "Missing return text: {result}"
+        );
+    }
+
+    #[test]
+    fn test_translate_jsdoc_throws_tag() {
+        let result = super::translate_jsdoc_to_rustdoc("@throws ValidationError");
+        assert!(
+            result.contains("# Errors"),
+            "Missing Errors header: {result}"
+        );
+        assert!(
+            result.contains("ValidationError"),
+            "Missing error type: {result}"
+        );
+    }
+
+    #[test]
+    fn test_translate_jsdoc_full_function_doc() {
+        let doc = "Creates a user.\n@param name - The display name\n@returns The user object";
+        let result = super::translate_jsdoc_to_rustdoc(doc);
+        assert!(result.contains("Creates a user."));
+        assert!(result.contains("# Arguments"));
+        assert!(result.contains("* `name` - The display name"));
+        assert!(result.contains("# Returns"));
+        assert!(result.contains("The user object"));
     }
 
     /// Helper: construct a synthetic expression.
@@ -1555,6 +1765,7 @@ mod tests {
                     stmts,
                     expr: expr.map(Box::new),
                 },
+                doc_comment: None,
                 span: None,
             })],
         }
@@ -1599,6 +1810,7 @@ mod tests {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2034,6 +2246,7 @@ fn main() {
                         stmts: vec![],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }),
                 RustItem::Function(RustFnDecl {
@@ -2048,6 +2261,7 @@ fn main() {
                         stmts: vec![],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }),
             ],
@@ -2075,6 +2289,7 @@ fn main() {
                     stmts: vec![],
                     expr: Some(Box::new(int_lit(42))),
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2155,6 +2370,7 @@ fn answer() -> i32 {
                     ],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2305,6 +2521,7 @@ fn complex() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2347,6 +2564,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2379,6 +2597,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2454,16 +2673,19 @@ fn main() {
                         public: true,
                         name: "name".to_owned(),
                         ty: RustType::String,
+                        doc_comment: None,
                         span: None,
                     },
                     RustFieldDef {
                         public: true,
                         name: "age".to_owned(),
                         ty: RustType::U32,
+                        doc_comment: None,
                         span: None,
                     },
                 ],
                 derives: vec![],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2574,6 +2796,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2618,6 +2841,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2645,9 +2869,11 @@ fn main() {
                     public: true,
                     name: "value".to_owned(),
                     ty: RustType::TypeParam("T".to_owned()),
+                    doc_comment: None,
                     span: None,
                 }],
                 derives: vec![],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2705,6 +2931,7 @@ fn main() {
                     },
                 ],
                 derives: vec![],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2732,6 +2959,7 @@ fn main() {
                             public: true,
                             name: "radius".to_owned(),
                             ty: RustType::F64,
+                            doc_comment: None,
                             span: None,
                         }],
                         span: None,
@@ -2743,12 +2971,14 @@ fn main() {
                                 public: true,
                                 name: "width".to_owned(),
                                 ty: RustType::F64,
+                                doc_comment: None,
                                 span: None,
                             },
                             RustFieldDef {
                                 public: true,
                                 name: "height".to_owned(),
                                 ty: RustType::F64,
+                                doc_comment: None,
                                 span: None,
                             },
                         ],
@@ -2756,6 +2986,7 @@ fn main() {
                     },
                 ],
                 derives: vec![],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2811,6 +3042,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2865,6 +3097,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -2979,6 +3212,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3012,6 +3246,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3107,6 +3342,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3353,6 +3589,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3381,6 +3618,7 @@ fn main() {
                     has_self: true,
                     span: None,
                 }],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3420,6 +3658,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3446,6 +3685,7 @@ fn main() {
                     has_self: true,
                     span: None,
                 }],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3531,6 +3771,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3559,6 +3800,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3663,9 +3905,11 @@ fn main() {
                     public: true,
                     name: "name".to_owned(),
                     ty: RustType::String,
+                    doc_comment: None,
                     span: None,
                 }],
                 derives: vec![],
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3709,6 +3953,7 @@ fn main() {
                         }))],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }],
                 span: None,
@@ -3753,6 +3998,7 @@ fn main() {
                         })],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }],
                 span: None,
@@ -3793,6 +4039,7 @@ fn main() {
                     stmts: vec![RustStmt::Semi(expr)],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3822,6 +4069,7 @@ fn main() {
                         stmts: vec![],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }],
                 span: None,
@@ -3861,6 +4109,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -3957,6 +4206,7 @@ fn main() {
                         stmts: vec![],
                         expr: None,
                     },
+                    doc_comment: None,
                     span: None,
                 }],
                 span: None,
@@ -3987,6 +4237,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -4064,6 +4315,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -4103,6 +4355,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -4140,6 +4393,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         };
@@ -4351,6 +4605,7 @@ fn main() {
                     stmts: vec![RustStmt::Semi(expr)],
                     expr: None,
                 },
+                doc_comment: None,
                 span: None,
             })],
         }
@@ -4513,6 +4768,7 @@ fn main() {
                     })],
                     expr: None,
                 },
+                doc_comment: None,
                 span: Some(span),
             })],
         };
@@ -4587,6 +4843,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: Some(span),
             })],
         };
@@ -4623,6 +4880,7 @@ fn main() {
                     stmts: vec![],
                     expr: None,
                 },
+                doc_comment: None,
                 span: Some(span),
             })],
         };

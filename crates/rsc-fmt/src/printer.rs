@@ -133,6 +133,18 @@ impl Printer {
 
     /// Print a top-level item.
     fn print_item(&mut self, item: &Item) {
+        // Emit doc comment before the item if present
+        let doc = match &item.kind {
+            ItemKind::Function(f) => f.doc_comment.as_deref(),
+            ItemKind::TypeDef(t) => t.doc_comment.as_deref(),
+            ItemKind::EnumDef(e) => e.doc_comment.as_deref(),
+            ItemKind::Interface(i) => i.doc_comment.as_deref(),
+            ItemKind::Class(c) => c.doc_comment.as_deref(),
+            _ => None,
+        };
+        if let Some(doc) = doc {
+            self.print_jsdoc(doc);
+        }
         if item.exported {
             self.write("export ");
         }
@@ -147,6 +159,16 @@ impl Printer {
             ItemKind::RustBlock(rb) => self.print_rust_block(rb),
             ItemKind::Const(decl) => self.print_var_decl(decl),
         }
+    }
+
+    /// Print a `JSDoc` comment block: `/** ... */`.
+    fn print_jsdoc(&mut self, doc: &str) {
+        self.writeln("/**");
+        for line in doc.lines() {
+            self.write(" * ");
+            self.writeln(line);
+        }
+        self.writeln(" */");
     }
 
     /// Print an import declaration.
@@ -447,6 +469,9 @@ impl Printer {
 
     /// Print a class field.
     fn print_class_field(&mut self, field: &rsc_syntax::ast::ClassField) {
+        if let Some(ref doc) = field.doc_comment {
+            self.print_jsdoc(doc);
+        }
         match field.visibility {
             Visibility::Private => self.write("private "),
             Visibility::Public => {}
@@ -469,6 +494,9 @@ impl Printer {
 
     /// Print a class constructor.
     fn print_class_constructor(&mut self, ctor: &rsc_syntax::ast::ClassConstructor) {
+        if let Some(ref doc) = ctor.doc_comment {
+            self.print_jsdoc(doc);
+        }
         self.write("constructor(");
         self.print_constructor_params(&ctor.params);
         self.write(") ");
@@ -496,6 +524,9 @@ impl Printer {
 
     /// Print a class method.
     fn print_class_method(&mut self, method: &rsc_syntax::ast::ClassMethod) {
+        if let Some(ref doc) = method.doc_comment {
+            self.print_jsdoc(doc);
+        }
         match method.visibility {
             Visibility::Private => self.write("private "),
             Visibility::Public => {}
@@ -1118,6 +1149,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1160,6 +1192,7 @@ mod tests {
                         })],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1233,6 +1266,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1262,6 +1296,7 @@ mod tests {
                             stmts: vec![],
                             span: Span::dummy(),
                         },
+                        doc_comment: None,
                         span: Span::dummy(),
                     }),
                     exported: false,
@@ -1278,6 +1313,7 @@ mod tests {
                             stmts: vec![],
                             span: Span::dummy(),
                         },
+                        doc_comment: None,
                         span: Span::dummy(),
                     }),
                     exported: false,
@@ -1307,6 +1343,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1388,6 +1425,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1472,6 +1510,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: false,
@@ -1500,6 +1539,7 @@ mod tests {
                         stmts: vec![],
                         span: Span::dummy(),
                     },
+                    doc_comment: None,
                     span: Span::dummy(),
                 }),
                 exported: true,

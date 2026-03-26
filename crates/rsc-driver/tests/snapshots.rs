@@ -3627,3 +3627,77 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("056_struct_spread_pure_copy", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// 58. JSDoc Comments → Rustdoc
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_jsdoc_function_generates_doc_comments() {
+    let source = "\
+/**
+ * Creates a new user with the given name.
+ * @param name - The user's display name
+ * @returns The newly created user
+ */
+function createUser(name: string): string {
+  return name;
+}";
+
+    let expected = "\
+/// Creates a new user with the given name.
+///
+/// # Arguments
+///
+/// * `name` - The user's display name
+///
+/// # Returns
+///
+/// The newly created user
+fn createUser(name: String) -> String {
+    return name;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("059_jsdoc_function", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_jsdoc_type_generates_doc_comments() {
+    let source = "\
+/** A point in 2D space */
+type Point = {
+  x: f64,
+  y: f64
+}";
+
+    let expected = "\
+/// A point in 2D space
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("059_jsdoc_type", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_jsdoc_no_comment_generates_no_doc() {
+    let source = "\
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}";
+
+    let expected = "\
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("059_jsdoc_no_comment", &actual, expected);
+}

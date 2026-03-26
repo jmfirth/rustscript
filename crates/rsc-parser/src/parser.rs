@@ -68,6 +68,9 @@ pub(crate) struct Parser<'src> {
     /// The original source text, needed for extracting raw content from
     /// inline Rust blocks (where we need the verbatim text between braces).
     source: &'src str,
+    /// Pending `JSDoc` comment from a `/** ... */` token. Drained and attached
+    /// to the next declaration the parser encounters.
+    pending_doc: Option<String>,
 }
 
 impl<'src> Parser<'src> {
@@ -81,12 +84,27 @@ impl<'src> Parser<'src> {
             expr_depth: 0,
             block_depth: 0,
             source,
+            pending_doc: None,
         }
     }
 
     /// Consume the parser and return accumulated diagnostics.
     pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
+    }
+
+    /// Drain the pending `JSDoc` comment, if any, and return it.
+    fn take_pending_doc(&mut self) -> Option<String> {
+        self.pending_doc.take()
+    }
+
+    /// Consume any `JsDoc` tokens at the current position, storing the last one
+    /// as `pending_doc`. Multiple consecutive `JSDoc` comments: last one wins.
+    fn consume_jsdoc_tokens(&mut self) {
+        while let TokenKind::JsDoc(text) = self.peek().clone() {
+            self.pending_doc = Some(text);
+            self.advance();
+        }
     }
 
     // ---------------------------------------------------------------
@@ -267,6 +285,7 @@ impl<'src> Parser<'src> {
             TokenKind::Tilde => "`~`",
             TokenKind::As => "`as`",
             TokenKind::TypeOf => "`typeof`",
+            TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
     }
@@ -315,6 +334,9 @@ impl<'src> Parser<'src> {
         let mut items = Vec::new();
 
         while !self.at_end() {
+            // Consume any JSDoc tokens before the next item so that
+            // `pending_doc` is set for the subsequent `parse_item`.
+            self.consume_jsdoc_tokens();
             let before = self.pos;
             if let Some(item) = self.parse_item() {
                 items.push(item);
@@ -630,6 +652,7 @@ impl<'src> Parser<'src> {
     /// before calling this method. `async_span` is the span of that keyword
     /// (used to extend the overall function span).
     fn parse_function_decl(&mut self, is_async: bool, async_span: Option<Span>) -> Option<FnDecl> {
+        let doc_comment = self.take_pending_doc();
         let fn_token = self.advance(); // consume `function`
         let start = async_span.unwrap_or(fn_token.span);
 
@@ -670,6 +693,7 @@ impl<'src> Parser<'src> {
             params,
             return_type,
             body,
+            doc_comment,
             span,
         })
     }
@@ -736,6 +760,7 @@ impl<'src> Parser<'src> {
     /// - String literal → simple enum
     /// - `|` → data enum (discriminated union)
     fn parse_type_or_enum_def(&mut self) -> Option<Item> {
+        let doc_comment = self.take_pending_doc();
         let type_token = self.advance(); // consume `type`
         let start = type_token.span;
 
@@ -754,7 +779,8 @@ impl<'src> Parser<'src> {
         match self.peek() {
             TokenKind::StringLit(_) => {
                 // Simple enum: type Name = "a" | "b" | "c"
-                let enum_def = self.parse_simple_enum(name, start)?;
+                let mut enum_def = self.parse_simple_enum(name, start)?;
+                enum_def.doc_comment = doc_comment;
                 let span = enum_def.span;
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
@@ -764,7 +790,8 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Pipe => {
                 // Data enum: type Name = | { kind: "a", ... } | { kind: "b", ... }
-                let enum_def = self.parse_data_enum(name, start)?;
+                let mut enum_def = self.parse_data_enum(name, start)?;
+                enum_def.doc_comment = doc_comment;
                 let span = enum_def.span;
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
@@ -782,6 +809,7 @@ impl<'src> Parser<'src> {
                     name,
                     type_params,
                     fields,
+                    doc_comment,
                     span,
                 };
                 Some(Item {
@@ -831,6 +859,7 @@ impl<'src> Parser<'src> {
         Some(EnumDef {
             name,
             variants,
+            doc_comment: None,
             span,
         })
     }
@@ -909,6 +938,7 @@ impl<'src> Parser<'src> {
         Some(EnumDef {
             name,
             variants,
+            doc_comment: None,
             span,
         })
     }
@@ -958,6 +988,7 @@ impl<'src> Parser<'src> {
 
     /// Parse an interface definition: `interface Name<T> { method(): Type; ... }`.
     fn parse_interface_def(&mut self) -> Option<InterfaceDef> {
+        let doc_comment = self.take_pending_doc();
         let interface_token = self.advance(); // consume `interface`
         let start = interface_token.span;
 
@@ -995,6 +1026,7 @@ impl<'src> Parser<'src> {
             name,
             type_params,
             methods,
+            doc_comment,
             span,
         })
     }
@@ -1028,6 +1060,7 @@ impl<'src> Parser<'src> {
 
     /// Parse a class definition: `class Name [<T>] [implements I1, I2] { members }`.
     fn parse_class_def(&mut self) -> Option<ClassDef> {
+        let doc_comment = self.take_pending_doc();
         let class_token = self.advance(); // consume `class`
         let start = class_token.span;
 
@@ -1060,6 +1093,8 @@ impl<'src> Parser<'src> {
 
         let mut members = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            // Consume JSDoc tokens before each class member
+            self.consume_jsdoc_tokens();
             if let Some(member) = self.parse_class_member() {
                 members.push(member);
             } else {
@@ -1082,6 +1117,7 @@ impl<'src> Parser<'src> {
             type_params,
             implements,
             members,
+            doc_comment,
             span,
         })
     }
@@ -1106,9 +1142,13 @@ impl<'src> Parser<'src> {
     // Class member parsing must disambiguate many syntactic forms; splitting would
     // fragment the grammar-driven structure.
     fn parse_class_member(&mut self) -> Option<ClassMember> {
+        let doc_comment = self.take_pending_doc();
+
         // Check for constructor
         if matches!(self.peek(), TokenKind::Constructor) {
-            return self.parse_class_constructor().map(ClassMember::Constructor);
+            return self
+                .parse_class_constructor(doc_comment)
+                .map(ClassMember::Constructor);
         }
 
         // Parse optional visibility modifier
@@ -1208,6 +1248,7 @@ impl<'src> Parser<'src> {
                 initializer,
                 readonly,
                 is_static,
+                doc_comment,
                 span,
             }));
         }
@@ -1237,6 +1278,7 @@ impl<'src> Parser<'src> {
             params,
             return_type,
             body,
+            doc_comment,
             span,
         }))
     }
@@ -1244,7 +1286,7 @@ impl<'src> Parser<'src> {
     /// Parse a class constructor: `constructor([public|private] params) { body }`.
     ///
     /// Constructor parameters may have visibility modifiers to create parameter properties.
-    fn parse_class_constructor(&mut self) -> Option<ClassConstructor> {
+    fn parse_class_constructor(&mut self, doc_comment: Option<String>) -> Option<ClassConstructor> {
         let ctor_token = self.advance(); // consume `constructor`
         let start = ctor_token.span;
 
@@ -1255,7 +1297,12 @@ impl<'src> Parser<'src> {
         let body = self.parse_block()?;
         let span = start.merge(body.span);
 
-        Some(ClassConstructor { params, body, span })
+        Some(ClassConstructor {
+            params,
+            body,
+            doc_comment,
+            span,
+        })
     }
 
     /// Parse a constructor parameter list with optional visibility modifiers.
@@ -7394,6 +7441,87 @@ function main(): void {
             assert!(slit.fields.is_empty(), "expected no field overrides");
         } else {
             panic!("expected StructLit, got {:?}", decl.init.kind);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // JSDoc attachment tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_jsdoc_before_function_attached_to_fn_decl() {
+        let source = "/** Creates a user */\nfunction createUser() {}";
+        let (module, _) = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.doc_comment.as_deref(), Some("Creates a user"));
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_parser_jsdoc_before_type_attached_to_typedef() {
+        let source = "/** A user type */\ntype User = { name: string }";
+        let (module, _) = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::TypeDef(td) = &module.items[0].kind {
+            assert_eq!(td.doc_comment.as_deref(), Some("A user type"));
+        } else {
+            panic!("Expected type def");
+        }
+    }
+
+    #[test]
+    fn test_parser_jsdoc_before_class_attached_to_class_def() {
+        let source = "/** A counter class */\nclass Counter {\n  count: i32;\n}";
+        let (module, _) = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            assert_eq!(cls.doc_comment.as_deref(), Some("A counter class"));
+        } else {
+            panic!("Expected class def");
+        }
+    }
+
+    #[test]
+    fn test_parser_no_jsdoc_produces_none() {
+        let source = "function foo() {}";
+        let (module, _) = parse_source(source);
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert!(f.doc_comment.is_none());
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_parser_multiple_jsdoc_last_one_wins() {
+        let source = "/** First */\n/** Second */\nfunction foo() {}";
+        let (module, _) = parse_source(source);
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.doc_comment.as_deref(), Some("Second"));
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_parser_jsdoc_before_class_method_attached_to_method() {
+        let source = "\
+class Foo {
+  /** Does something */
+  doIt(): void {}
+}";
+        let (module, _) = parse_source(source);
+        if let ItemKind::Class(cls) = &module.items[0].kind {
+            if let ClassMember::Method(m) = &cls.members[0] {
+                assert_eq!(m.doc_comment.as_deref(), Some("Does something"));
+            } else {
+                panic!("Expected method");
+            }
+        } else {
+            panic!("Expected class");
         }
     }
 }

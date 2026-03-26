@@ -130,6 +130,7 @@ impl Transform {
                             public: vis == ast::Visibility::Public,
                             name: p.name.name.clone(),
                             ty: rust_ty,
+                            doc_comment: None,
                             span: Some(p.span),
                         });
                     }
@@ -154,6 +155,7 @@ impl Transform {
                         public: f.visibility == ast::Visibility::Public,
                         name: f.name.name.clone(),
                         ty: rust_ty,
+                        doc_comment: f.doc_comment.clone(),
                         span: Some(f.span),
                     })
                 }
@@ -177,6 +179,7 @@ impl Transform {
             type_params: type_params.clone(),
             fields,
             derives,
+            doc_comment: cls.doc_comment.clone(),
             span: Some(cls.span),
         }));
 
@@ -497,6 +500,7 @@ impl Transform {
             params,
             return_type: Some(RustType::SelfType),
             body,
+            doc_comment: ctor.doc_comment.clone(),
             span: Some(ctor.span),
         }
     }
@@ -631,6 +635,7 @@ impl Transform {
             params,
             return_type,
             body,
+            doc_comment: method.doc_comment.clone(),
             span: Some(method.span),
         }
     }
@@ -679,6 +684,7 @@ impl Transform {
             params: vec![],
             return_type,
             body,
+            doc_comment: None,
             span: Some(getter.span),
         }
     }
@@ -727,6 +733,7 @@ impl Transform {
             params,
             return_type: None,
             body,
+            doc_comment: None,
             span: Some(setter.span),
         }
     }

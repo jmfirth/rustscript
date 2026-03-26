@@ -252,6 +252,7 @@ impl Transform {
                     public: true,
                     name: f.name.name.clone(),
                     ty: rust_ty,
+                    doc_comment: None,
                     span: Some(f.span),
                 }
             })
@@ -268,6 +269,7 @@ impl Transform {
             type_params,
             fields,
             derives,
+            doc_comment: td.doc_comment.clone(),
             span: Some(td.span),
         }
     }
@@ -439,6 +441,7 @@ impl Transform {
             name: iface.name.name.clone(),
             type_params,
             methods,
+            doc_comment: iface.doc_comment.clone(),
             span: Some(iface.span),
         }
     }
@@ -472,6 +475,7 @@ impl Transform {
                                 public: true,
                                 name: f.name.name.clone(),
                                 ty: rust_ty,
+                                doc_comment: None,
                                 span: Some(f.span),
                             }
                         })
@@ -493,6 +497,7 @@ impl Transform {
             name: ed.name.name.clone(),
             variants,
             derives,
+            doc_comment: ed.doc_comment.clone(),
             span: Some(ed.span),
         }
     }
@@ -832,6 +837,7 @@ impl Transform {
             params,
             return_type,
             body,
+            doc_comment: f.doc_comment.clone(),
             span: Some(f.span),
         }
     }
@@ -1153,6 +1159,7 @@ mod tests {
                 stmts: body,
                 span: span(0, 100),
             },
+            doc_comment: None,
             span: span(0, 100),
         }
     }
@@ -1627,6 +1634,7 @@ mod tests {
                 ],
                 span: span(5, 55),
             },
+            doc_comment: None,
             span: span(0, 55),
         };
 
@@ -1701,6 +1709,7 @@ mod tests {
                 ],
                 span: span(28, 68),
             },
+            doc_comment: None,
             span: span(0, 68),
         };
 
@@ -1773,6 +1782,7 @@ mod tests {
                 ],
                 span: span(28, 63),
             },
+            doc_comment: None,
             span: span(0, 63),
         };
 
@@ -1871,6 +1881,7 @@ mod tests {
                 ],
                 span: span(14, 52),
             },
+            doc_comment: None,
             span: span(0, 52),
         };
 
@@ -2171,6 +2182,7 @@ mod tests {
                     span: span(0, 6),
                 },
             ],
+            doc_comment: None,
             span: span(0, 50),
         };
         let module = Module {
@@ -2222,6 +2234,7 @@ mod tests {
                     span: span(0, 4),
                 },
             ],
+            doc_comment: None,
             span: span(0, 30),
         };
         let body = vec![Stmt::VarDecl(VarDecl {
@@ -2368,6 +2381,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 30),
         };
         let module = make_module(vec![fn_item(f)]);
@@ -2437,6 +2451,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
         let module = make_module(vec![fn_item(f)]);
@@ -2473,6 +2488,7 @@ mod tests {
                 },
                 span: span(0, 8),
             }],
+            doc_comment: None,
             span: span(0, 30),
         };
         let module = make_module(vec![Item {
@@ -2703,6 +2719,7 @@ mod tests {
                         EnumVariant::Simple(ident("East", 0, 4), span(0, 4)),
                         EnumVariant::Simple(ident("West", 0, 4), span(0, 4)),
                     ],
+                    doc_comment: None,
                     span: span(0, 50),
                 }),
                 exported: false,
@@ -2771,6 +2788,7 @@ mod tests {
                             span: span(0, 50),
                         },
                     ],
+                    doc_comment: None,
                     span: span(0, 80),
                 }),
                 exported: false,
@@ -3051,6 +3069,7 @@ mod tests {
                 })],
                 span: span(14, 26),
             },
+            doc_comment: None,
             span: span(0, 26),
         })]);
 
@@ -3127,6 +3146,7 @@ mod tests {
                 })],
                 span: span(14, 29),
             },
+            doc_comment: None,
             span: span(0, 29),
         })]);
 
@@ -3304,6 +3324,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
 
@@ -3349,6 +3370,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
 
@@ -3399,6 +3421,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
 
@@ -3449,6 +3472,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
 
@@ -3484,6 +3508,7 @@ mod tests {
                 })],
                 span: span(0, 20),
             },
+            doc_comment: None,
             span: span(0, 50),
         };
 
@@ -3616,6 +3641,7 @@ mod tests {
                         }),
                         span: span(15, 35),
                     }],
+                    doc_comment: None,
                     span: span(0, 37),
                 }),
                 exported: false,
@@ -3660,6 +3686,7 @@ mod tests {
                         }),
                         span: span(12, 26),
                     }],
+                    doc_comment: None,
                     span: span(0, 28),
                 }),
                 exported: false,
@@ -3700,6 +3727,7 @@ mod tests {
                             }),
                             span: span(15, 35),
                         }],
+                        doc_comment: None,
                         span: span(0, 37),
                     }),
                     exported: false,
@@ -3715,6 +3743,7 @@ mod tests {
                             return_type: None,
                             span: span(52, 60),
                         }],
+                        doc_comment: None,
                         span: span(40, 62),
                     }),
                     exported: false,
@@ -3770,6 +3799,7 @@ mod tests {
                             })],
                             span: span(115, 150),
                         },
+                        doc_comment: None,
                         span: span(65, 150),
                     }),
                     exported: false,
