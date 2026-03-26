@@ -8,10 +8,11 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    RustBlock, RustDestructureDefaultField, RustDestructureDefaultsStmt, RustDestructureField,
-    RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt, RustIfLetStmt, RustIfStmt,
-    RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt, RustStmt,
-    RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileLetStmt, RustWhileStmt,
+    IteratorTerminal, RustBlock, RustDestructureDefaultField, RustDestructureDefaultsStmt,
+    RustDestructureField, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt,
+    RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt,
+    RustStmt, RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileLetStmt,
+    RustWhileStmt,
 };
 
 use crate::context::LoweringContext;
@@ -21,6 +22,32 @@ use super::async_lower::block_contains_await;
 use super::{
     Transform, capitalize_first, element_type_is_copy, extract_named_type, is_default_literal_type,
 };
+
+/// Check whether a lowered expression already returns `Option<T>`.
+///
+/// Detects `IteratorChain` with `Find` terminal (which emits `.find().cloned()`
+/// returning `Option<T>`) to prevent double-wrapping in `Some()`.
+fn returns_option(expr: &RustExpr) -> bool {
+    matches!(
+        &expr.kind,
+        RustExprKind::IteratorChain {
+            terminal: IteratorTerminal::Find(..),
+            ..
+        }
+    )
+}
+
+/// If the expression is an identifier that is a reference variable
+/// (e.g., a for-of loop variable), wrap it in `.clone()` to convert
+/// from `&T` to `T`. Returns the expression unchanged otherwise.
+fn clone_if_reference(expr: &RustExpr, ctx: &LoweringContext) -> RustExpr {
+    if let RustExprKind::Ident(name) = &expr.kind
+        && ctx.is_reference_variable(name)
+    {
+        return RustExpr::synthetic(RustExprKind::Clone(Box::new(expr.clone())));
+    }
+    expr.clone()
+}
 
 impl Transform {
     /// Lower a block of statements.
@@ -284,6 +311,17 @@ impl Transform {
                 }
                 // Non-null return in Option context → wrap in Some(...)
                 let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
+
+                // Bug 3: If the lowered expression is an IteratorChain with a
+                // Find terminal, it already returns Option<T> (via .find().cloned()).
+                // Don't double-wrap in Some().
+                if returns_option(&lowered) {
+                    return lowered;
+                }
+
+                // Bug 2: If the return value is a reference variable (e.g.,
+                // a for-of loop variable), clone it before wrapping in Some().
+                let lowered = clone_if_reference(&lowered, ctx);
                 RustExpr::synthetic(RustExprKind::Some(Box::new(lowered)))
             } else if is_union_return {
                 let lowered = self.lower_return_value(v, ctx, use_map, stmt_index, is_tuple_return);
@@ -521,7 +559,20 @@ impl Transform {
             false
         };
 
+        // Mark the loop variable as a reference when iterating non-Copy types.
+        // In `for x in &items`, x is `&T`. Any use that needs ownership (return,
+        // passing to a function with owned param) should auto-clone.
+        let var_name = for_of.variable.name.clone();
+        if !deref_pattern {
+            ctx.mark_as_reference(var_name.clone());
+        }
+
         let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
+
+        // Unmark the loop variable after leaving the for-of body.
+        if !deref_pattern {
+            ctx.unmark_reference(&var_name);
+        }
 
         RustForInStmt {
             variable: for_of.variable.name.clone(),

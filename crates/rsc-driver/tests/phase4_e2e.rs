@@ -343,3 +343,69 @@ function main(): void {
     let stdout = String::from_utf8(output.stdout).expect("not utf-8");
     assert_eq!(stdout.trim(), "5\n5");
 }
+
+// ===========================================================================
+// Task 047: Borrow-to-owned context crossing — full demo program
+//
+// Exercises all four fixed bugs together:
+// - Array index with variable (usize cast)
+// - for-of return with clone
+// - .find() returning Option without double-wrap
+// - Iterator closure parameter clone for function calls
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_e2e_p4_borrow_edge_cases_demo() {
+    let source = r#"
+class User {
+  constructor(public id: i32, public name: string) {}
+}
+
+function formatUser(u: User): string {
+  return u.name;
+}
+
+function findByIndex(users: Array<User>, i: i32): string {
+  return users[i].name;
+}
+
+function findByLoop(users: Array<User>, targetId: i32): User | null {
+  for (const u of users) {
+    if (u.id === targetId) {
+      return u;
+    }
+  }
+  return null;
+}
+
+function findByFind(users: Array<User>, targetId: i32): User | null {
+  return users.find((u) => u.id === targetId);
+}
+
+function formatAll(users: Array<User>): Array<string> {
+  return users.map((u) => formatUser(u));
+}
+
+function main(): void {
+  const users: Array<User> = [new User(1, "Alice"), new User(2, "Bob"), new User(3, "Charlie")];
+
+  console.log(findByIndex(users, 1));
+
+  const loopResult: User | null = findByLoop(users, 2);
+  if (loopResult !== null) {
+    console.log(loopResult.name);
+  }
+
+  const findResult: User | null = findByFind(users, 3);
+  if (findResult !== null) {
+    console.log(findResult.name);
+  }
+
+  const names: Array<string> = formatAll(users);
+  console.log(names[0]);
+}
+"#;
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "Bob\nBob\nCharlie\nAlice");
+}

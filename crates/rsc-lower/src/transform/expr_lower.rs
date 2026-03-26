@@ -15,8 +15,8 @@ use crate::context::LoweringContext;
 use crate::ownership::{self, UseMap};
 
 use super::{
-    Transform, capitalize_first, detect_compound_assign, extract_named_type, lower_binary_op,
-    lower_unary_op,
+    Transform, capitalize_first, detect_compound_assign, element_type_is_copy, extract_named_type,
+    lower_binary_op, lower_unary_op,
 };
 
 impl Transform {
@@ -207,6 +207,20 @@ impl Transform {
 
                 let object = self.lower_expr(&index_expr.object, ctx, use_map, stmt_index);
                 let index = self.lower_expr(&index_expr.index, ctx, use_map, stmt_index);
+
+                // Rust arrays/Vecs require usize for indexing. When the index
+                // is a non-literal expression (e.g., a variable of type i64),
+                // wrap it in `as usize` to satisfy the type requirement.
+                // Literal integers are left as-is since Rust infers usize.
+                let index = if matches!(index.kind, RustExprKind::IntLit(_)) {
+                    index
+                } else {
+                    RustExpr::synthetic(RustExprKind::Cast(
+                        Box::new(index),
+                        RustType::Named("usize".to_owned()),
+                    ))
+                };
+
                 RustExpr::new(
                     RustExprKind::Index {
                         object: Box::new(object),
@@ -642,9 +656,28 @@ impl Transform {
                         return RustExpr::synthetic(RustExprKind::Borrow(Box::new(lowered)));
                     }
                 }
-                ParamMode::Owned => {}
+                ParamMode::Owned => {
+                    // When the argument is a reference variable (e.g., an
+                    // iterator closure param or for-of loop variable) and the
+                    // callee expects an owned value, clone to convert &T → T.
+                    if let RustExprKind::Ident(name) = &lowered.kind
+                        && ctx.is_reference_variable(name)
+                    {
+                        return RustExpr::synthetic(RustExprKind::Clone(Box::new(lowered)));
+                    }
+                }
             }
         }
+
+        // Even without callee mode info, clone reference variables passed
+        // to function calls since the default is Owned.
+        if let RustExprKind::Ident(name) = &lowered.kind
+            && ctx.is_reference_variable(name)
+            && callee_modes.is_none()
+        {
+            return RustExpr::synthetic(RustExprKind::Clone(Box::new(lowered)));
+        }
+
         lowered
     }
 
@@ -913,11 +946,41 @@ impl Transform {
             .is_some()
         {
             let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+
+            // Mark iterator closure parameters as reference variables.
+            // In `.iter()` chains, closures receive `&T`. When the closure body
+            // uses the parameter in an owned context (e.g., passing to a function
+            // that takes T), it needs to be cloned.
+            let mut ref_params: Vec<String> = Vec::new();
+            for a in &mc.args {
+                if let ast::ExprKind::Closure(c) = &a.kind {
+                    for p in &c.params {
+                        // Only mark non-Copy types as references
+                        let is_copy_param = if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+                            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+                        {
+                            element_type_is_copy(&var_info.ty)
+                        } else {
+                            false
+                        };
+                        if !is_copy_param {
+                            ctx.mark_as_reference(p.name.name.clone());
+                            ref_params.push(p.name.name.clone());
+                        }
+                    }
+                }
+            }
+
             let lowered_args: Vec<RustExpr> = mc
                 .args
                 .iter()
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
+
+            // Unmark the closure parameters after lowering
+            for name in &ref_params {
+                ctx.unmark_reference(name);
+            }
 
             // Try to merge into an existing chain first (for chained calls)
             if matches!(receiver.kind, RustExprKind::IteratorChain { .. })
