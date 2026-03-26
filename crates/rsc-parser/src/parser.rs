@@ -1994,6 +1994,12 @@ impl<'src> Parser<'src> {
         let for_token = self.advance(); // consume `for`
         let start = for_token.span;
 
+        // Check for `for await (...)` — async iteration syntax
+        let is_await = self.current_token().kind == TokenKind::Await;
+        if is_await {
+            self.advance(); // consume `await`
+        }
+
         self.expect(&TokenKind::LParen)?;
 
         // Parse binding kind: `const` or `let`
@@ -2052,6 +2058,7 @@ impl<'src> Parser<'src> {
             variable,
             iterable,
             body,
+            is_await,
             span: start.merge(body_span),
         })
     }
@@ -8021,6 +8028,76 @@ class Foo {
             }
         } else {
             panic!("expected ArrayDestructure");
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 066: Async iteration and Promise methods
+    // ---------------------------------------------------------------
+
+    // T066-1: Parse `for await (const item of stream) { ... }` → ForOfStmt with is_await = true
+    #[test]
+    fn test_parser_for_await_const_produces_for_of_stmt_with_is_await() {
+        let source = r#"async function main() {
+  for await (const msg of channel) {
+    console.log(msg);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::For(for_of) => {
+                assert!(for_of.is_await, "expected is_await = true");
+                assert_eq!(for_of.binding, VarBinding::Const);
+                assert_eq!(for_of.variable.name, "msg");
+                match &for_of.iterable.kind {
+                    ExprKind::Ident(ident) => assert_eq!(ident.name, "channel"),
+                    other => panic!("expected Ident iterable, got {other:?}"),
+                }
+                assert!(!for_of.body.stmts.is_empty());
+            }
+            other => panic!("expected For statement, got {other:?}"),
+        }
+    }
+
+    // T066-2: Parse regular `for (const x of items)` still has is_await = false
+    #[test]
+    fn test_parser_regular_for_of_has_is_await_false() {
+        let source = r#"function main() {
+  for (const x of items) {
+    console.log(x);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::For(for_of) => {
+                assert!(!for_of.is_await, "regular for-of should not have is_await");
+            }
+            other => panic!("expected For statement, got {other:?}"),
+        }
+    }
+
+    // T066-3: Parse `for await (let item of stream)` with let binding
+    #[test]
+    fn test_parser_for_await_let_binding() {
+        let source = r#"async function process() {
+  for await (let item of stream) {
+    console.log(item);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::For(for_of) => {
+                assert!(for_of.is_await, "expected is_await = true");
+                assert_eq!(for_of.binding, VarBinding::Let);
+                assert_eq!(for_of.variable.name, "item");
+            }
+            other => panic!("expected For statement, got {other:?}"),
         }
     }
 }

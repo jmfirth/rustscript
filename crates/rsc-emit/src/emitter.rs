@@ -9,7 +9,7 @@ use rsc_syntax::rust_ir::{
     RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl, RustForInStmt, RustIfLetStmt,
     RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt, RustMatchResultStmt, RustMatchStmt,
     RustMethod, RustPattern, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
-    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam, SpreadOp,
+    RustTraitImplBlock, RustTryFinallyStmt, RustType, RustTypeParam, RustWhileLetStmt, SpreadOp,
 };
 use rsc_syntax::span::Span;
 
@@ -850,6 +850,12 @@ impl Emitter {
                 self.emit_try_finally(tf);
                 self.newline();
             }
+            RustStmt::WhileLet(wl) => {
+                self.set_span(wl.span);
+                self.write_indent();
+                self.emit_while_let(wl);
+                self.newline();
+            }
         }
     }
 
@@ -982,6 +988,18 @@ impl Emitter {
         self.emit_expr(&for_in.iterable);
         self.write(" ");
         self.emit_block(&for_in.body);
+    }
+
+    /// Emit a while-let loop for async iteration.
+    ///
+    /// `while let Some(item) = stream.next().await { body }`
+    fn emit_while_let(&mut self, wl: &RustWhileLetStmt) {
+        self.write("while let Some(");
+        self.write(&wl.binding);
+        self.write(") = ");
+        self.emit_expr(&wl.stream);
+        self.write(".next().await ");
+        self.emit_block(&wl.body);
     }
 
     /// Emit an expression.
@@ -1327,6 +1345,28 @@ impl Emitter {
                     self.emit_expr(expr);
                 }
                 self.write(")");
+            }
+            RustExprKind::TokioSelect(exprs) => {
+                self.write("tokio::select! { ");
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write("result = ");
+                    self.emit_expr(expr);
+                    self.write(" => result");
+                }
+                self.write(" }");
+            }
+            RustExprKind::FuturesSelectOk(exprs) => {
+                self.write("futures::future::select_ok(vec![");
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(expr);
+                }
+                self.write("]).await.expect(\"all promises rejected\").0");
             }
             RustExprKind::IteratorChain {
                 source,
@@ -1705,8 +1745,8 @@ mod tests {
         RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetStmt, RustMatchArm,
         RustMatchResultStmt, RustMatchStmt, RustMethod, RustModDecl, RustParam, RustPattern,
         RustReturnStmt, RustSelfParam, RustStmt, RustStructDef, RustTraitDef, RustTraitImplBlock,
-        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileStmt,
-        SpreadOp,
+        RustTraitMethod, RustType, RustTypeParam, RustUnaryOp, RustUseDecl, RustWhileLetStmt,
+        RustWhileStmt, SpreadOp,
     };
 
     use super::emit;
@@ -5139,6 +5179,90 @@ fn main() {
         assert!(
             output.contains("User { name: \"Bob\", ..user.clone() }"),
             "should emit struct update: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 066: Async iteration and Promise method emitter tests
+    // ---------------------------------------------------------------
+
+    // Test: Emitter — while let Some(item) = stream.next().await
+    #[test]
+    fn test_emit_while_let_async_iteration() {
+        let wl = RustWhileLetStmt {
+            binding: "msg".into(),
+            stream: syn(RustExprKind::Ident("channel".into())),
+            body: RustBlock {
+                stmts: vec![RustStmt::Semi(syn(RustExprKind::Macro {
+                    name: "println".into(),
+                    args: vec![
+                        syn(RustExprKind::StringLit("{}".into())),
+                        syn(RustExprKind::Ident("msg".into())),
+                    ],
+                }))],
+                expr: None,
+            },
+            span: None,
+        };
+        let file = simple_fn("test", vec![RustStmt::WhileLet(wl)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("while let Some(msg) = channel.next().await"),
+            "expected while let pattern, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tokio::select!
+    #[test]
+    fn test_emit_tokio_select_macro_syntax() {
+        let select_expr = syn(RustExprKind::TokioSelect(vec![
+            syn(RustExprKind::Call {
+                func: "fetch1".into(),
+                args: vec![],
+            }),
+            syn(RustExprKind::Call {
+                func: "fetch2".into(),
+                args: vec![],
+            }),
+        ]));
+        let file = simple_fn("test", vec![RustStmt::Semi(select_expr)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("tokio::select!"),
+            "expected tokio::select!, got: {output}"
+        );
+        assert!(
+            output.contains("result = fetch1() => result"),
+            "expected first branch, got: {output}"
+        );
+        assert!(
+            output.contains("result = fetch2() => result"),
+            "expected second branch, got: {output}"
+        );
+    }
+
+    // Test: Emitter — futures::future::select_ok
+    #[test]
+    fn test_emit_futures_select_ok_syntax() {
+        let select_ok_expr = syn(RustExprKind::FuturesSelectOk(vec![
+            syn(RustExprKind::Call {
+                func: "try_a".into(),
+                args: vec![],
+            }),
+            syn(RustExprKind::Call {
+                func: "try_b".into(),
+                args: vec![],
+            }),
+        ]));
+        let file = simple_fn("test", vec![RustStmt::Semi(select_ok_expr)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("futures::future::select_ok(vec![try_a(), try_b()])"),
+            "expected select_ok call, got: {output}"
+        );
+        assert!(
+            output.contains(".await.expect(\"all promises rejected\").0"),
+            "expected .await.expect(...).0, got: {output}"
         );
     }
 }

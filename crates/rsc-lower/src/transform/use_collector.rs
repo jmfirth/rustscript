@@ -8,16 +8,18 @@ use rsc_syntax::rust_ir::{
     RustType, RustUseDecl,
 };
 
-/// Scan generated items for usage of `HashMap`, `HashSet`, `Arc`, and `Mutex`
-/// types and produce the corresponding `use` declarations.
+/// Scan generated items for usage of `HashMap`, `HashSet`, `Arc`, `Mutex`,
+/// and `futures::StreamExt` types and produce the corresponding `use` declarations.
 pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     let mut needs_hashmap = false;
     let mut needs_hashset = false;
     let mut needs_arc_mutex = false;
+    let mut needs_stream_ext = false;
 
     for item in items {
         scan_item_for_collections(item, &mut needs_hashmap, &mut needs_hashset);
         scan_item_for_arc_mutex(item, &mut needs_arc_mutex);
+        scan_item_for_stream_ext(item, &mut needs_stream_ext);
     }
 
     let mut uses = Vec::new();
@@ -43,6 +45,13 @@ pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
         });
         uses.push(RustUseDecl {
             path: "std::sync::Mutex".to_owned(),
+            public: false,
+            span: None,
+        });
+    }
+    if needs_stream_ext {
+        uses.push(RustUseDecl {
+            path: "futures::StreamExt".to_owned(),
             public: false,
             span: None,
         });
@@ -285,6 +294,50 @@ fn scan_expr_for_arc_mutex(expr: &RustExpr, needs_arc_mutex: &mut bool) {
     }
 }
 
+/// Scan an item for `WhileLet` (async iteration requiring `futures::StreamExt`).
+fn scan_item_for_stream_ext(item: &RustItem, needs_stream_ext: &mut bool) {
+    match item {
+        RustItem::Function(f) => scan_block_for_stream_ext(&f.body, needs_stream_ext),
+        RustItem::Impl(imp) => {
+            for method in &imp.methods {
+                scan_block_for_stream_ext(&method.body, needs_stream_ext);
+            }
+        }
+        RustItem::TraitImpl(ti) => {
+            for method in &ti.methods {
+                scan_block_for_stream_ext(&method.body, needs_stream_ext);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block for `WhileLet` statements (async iteration).
+fn scan_block_for_stream_ext(block: &RustBlock, needs_stream_ext: &mut bool) {
+    for stmt in &block.stmts {
+        scan_stmt_for_stream_ext(stmt, needs_stream_ext);
+    }
+}
+
+/// Scan a statement for `WhileLet` (async for-await loops).
+fn scan_stmt_for_stream_ext(stmt: &RustStmt, needs_stream_ext: &mut bool) {
+    match stmt {
+        RustStmt::WhileLet(wl) => {
+            *needs_stream_ext = true;
+            scan_block_for_stream_ext(&wl.body, needs_stream_ext);
+        }
+        RustStmt::If(if_stmt) => {
+            scan_block_for_stream_ext(&if_stmt.then_block, needs_stream_ext);
+            if let Some(RustElse::Block(block)) = &if_stmt.else_clause {
+                scan_block_for_stream_ext(block, needs_stream_ext);
+            }
+        }
+        RustStmt::While(w) => scan_block_for_stream_ext(&w.body, needs_stream_ext),
+        RustStmt::ForIn(f) => scan_block_for_stream_ext(&f.body, needs_stream_ext),
+        _ => {}
+    }
+}
+
 /// Scan a type for `HashMap` or `HashSet` references.
 fn scan_type_for_collections(ty: &RustType, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
     match ty {
@@ -424,6 +477,10 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
                 scan_stmt_for_collections(s, needs_hashmap, needs_hashset);
             }
         }
+        RustStmt::WhileLet(wl) => {
+            scan_expr_for_collections(&wl.stream, needs_hashmap, needs_hashset);
+            scan_block_for_collections(&wl.body, needs_hashmap, needs_hashset);
+        }
         RustStmt::Break(_) | RustStmt::Continue(_) | RustStmt::RawRust(_) => {}
     }
 }
@@ -528,7 +585,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(block, needs_hashmap, needs_hashset);
             }
         },
-        RustExprKind::TokioJoin(exprs) => {
+        RustExprKind::TokioJoin(exprs)
+        | RustExprKind::TokioSelect(exprs)
+        | RustExprKind::FuturesSelectOk(exprs) => {
             for expr in exprs {
                 scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             }

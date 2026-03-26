@@ -765,6 +765,10 @@ pub struct TryCatchStmt {
 ///
 /// Corresponds to `RustScript` `for (const/let IDENT of EXPR) { body }`.
 /// Lowers to Rust `for x in &items { body }`.
+///
+/// When `is_await` is true, this is an async iteration:
+/// `for await (const item of stream) { body }` which lowers to
+/// `while let Some(item) = stream.next().await { body }`.
 #[derive(Debug, Clone)]
 pub struct ForOfStmt {
     /// The binding kind (`const` or `let`).
@@ -775,6 +779,8 @@ pub struct ForOfStmt {
     pub iterable: Expr,
     /// The loop body.
     pub body: Block,
+    /// Whether this is a `for await` async iteration loop.
+    pub is_await: bool,
     /// The span covering the entire for-of statement.
     pub span: Span,
 }

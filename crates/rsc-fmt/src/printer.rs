@@ -813,7 +813,11 @@ impl Printer {
 
     /// Print a for-of statement.
     fn print_for_of_stmt(&mut self, f: &ForOfStmt) {
-        self.write("for (");
+        if f.is_await {
+            self.write("for await (");
+        } else {
+            self.write("for (");
+        }
         match f.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
@@ -1613,5 +1617,63 @@ mod tests {
         printer.print_expr(&expr);
         let output = printer.into_output();
         assert_eq!(output, "`Hello, ${name}!`");
+    }
+
+    // ---------------------------------------------------------------
+    // Task 066: for await formatting
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_printer_for_await_preserves_await_keyword() {
+        let for_stmt = ForOfStmt {
+            binding: VarBinding::Const,
+            variable: ident("msg"),
+            iterable: ident_expr("channel"),
+            body: Block {
+                stmts: vec![],
+                span: Span::dummy(),
+            },
+            is_await: true,
+            span: Span::dummy(),
+        };
+
+        let mut printer = Printer::new();
+        printer.print_for_of_stmt(&for_stmt);
+        let output = printer.into_output();
+        assert!(
+            output.starts_with("for await ("),
+            "should start with 'for await (': {output}"
+        );
+        assert!(
+            output.contains("const msg"),
+            "should contain binding: {output}"
+        );
+    }
+
+    #[test]
+    fn test_printer_regular_for_no_await() {
+        let for_stmt = ForOfStmt {
+            binding: VarBinding::Const,
+            variable: ident("x"),
+            iterable: ident_expr("items"),
+            body: Block {
+                stmts: vec![],
+                span: Span::dummy(),
+            },
+            is_await: false,
+            span: Span::dummy(),
+        };
+
+        let mut printer = Printer::new();
+        printer.print_for_of_stmt(&for_stmt);
+        let output = printer.into_output();
+        assert!(
+            output.starts_with("for ("),
+            "regular for should start with 'for (': {output}"
+        );
+        assert!(
+            !output.contains("await"),
+            "regular for should not contain await: {output}"
+        );
     }
 }

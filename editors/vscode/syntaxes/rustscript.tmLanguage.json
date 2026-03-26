@@ -137,6 +137,14 @@
     "keywords": {
       "patterns": [
         {
+          "comment": "for await loop — async iteration",
+          "match": "\\b(for)\\s+(await)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.flow.rustscript" },
+            "2": { "name": "keyword.async.rustscript" }
+          }
+        },
+        {
           "name": "keyword.control.flow.rustscript",
           "match": "\\b(if|else|while|for|return|break|continue|switch|case|default)\\b"
         },

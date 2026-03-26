@@ -203,6 +203,9 @@ fn translate_type_names(input: &str) -> String {
     // 5. impl Trait (after Fn translations to avoid double-matching)
     output = translate_impl_trait(&output);
 
+    // 6. Async pattern names — translate Rust macro/function names back to RustScript
+    output = translate_async_patterns(&output);
+
     output
 }
 
@@ -448,6 +451,31 @@ fn split_type_list(input: &str) -> Vec<&str> {
     }
     parts.push(&input[last..]);
     parts
+}
+
+/// Translate async-pattern-related terms back to `RustScript` equivalents.
+///
+/// Maps Rust macro/function names from generated code to the `RustScript` constructs
+/// that produced them, making error messages more understandable.
+fn translate_async_patterns(input: &str) -> String {
+    let mut output = input.to_owned();
+    // tokio::select! errors → mention Promise.race
+    output = output.replace("tokio::select!", "Promise.race (tokio::select!)");
+    // futures::future::select_ok errors → mention Promise.any
+    output = output.replace(
+        "futures::future::select_ok",
+        "Promise.any (futures::future::select_ok)",
+    );
+    // StreamExt trait errors → explain for await
+    output = output.replace("StreamExt", "StreamExt (required by `for await`)");
+    // futures::Stream trait errors → explain for await
+    if output.contains("futures::Stream") && !output.contains("StreamExt") {
+        output = output.replace(
+            "futures::Stream",
+            "futures::Stream (the iterable in `for await` must implement the Stream trait)",
+        );
+    }
+    output
 }
 
 /// Replace a generic type like `Vec<T>` → `Array<T>` with balanced bracket matching.
@@ -1190,5 +1218,39 @@ mod tests {
         let input = "found (String, i32, bool)";
         let result = translate_type_names(input);
         assert_eq!(result, "found [string, i32, bool]");
+    }
+
+    // ---------------------------------------------------------------
+    // Task 066: Async pattern error translations
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_translate_tokio_select_mentions_promise_race() {
+        let input = "error in tokio::select! macro expansion";
+        let result = translate_type_names(input);
+        assert!(
+            result.contains("Promise.race"),
+            "should mention Promise.race: {result}"
+        );
+    }
+
+    #[test]
+    fn test_translate_futures_select_ok_mentions_promise_any() {
+        let input = "error in futures::future::select_ok call";
+        let result = translate_type_names(input);
+        assert!(
+            result.contains("Promise.any"),
+            "should mention Promise.any: {result}"
+        );
+    }
+
+    #[test]
+    fn test_translate_stream_ext_mentions_for_await() {
+        let input = "the trait `StreamExt` is not implemented";
+        let result = translate_type_names(input);
+        assert!(
+            result.contains("for await"),
+            "should mention for await: {result}"
+        );
     }
 }
