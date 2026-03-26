@@ -266,6 +266,12 @@ impl Project {
         Err(DriverError::MainSourceNotFound)
     }
 
+    /// Return the project's source directory (`<root>/src`).
+    #[must_use]
+    pub fn source_dir(&self) -> PathBuf {
+        self.root.join("src")
+    }
+
     /// Discover all `.rts` source files in the `src/` directory (non-recursive for Phase 1).
     ///
     /// Returns a list of paths to `.rts` files, excluding the main entry point.
