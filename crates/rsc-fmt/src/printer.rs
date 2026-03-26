@@ -224,9 +224,19 @@ impl Printer {
             if i > 0 {
                 self.write(", ");
             }
+            if param.is_rest {
+                self.write("...");
+            }
             self.write(&param.name.name);
+            if param.optional {
+                self.write("?");
+            }
             self.write(": ");
             self.print_type_annotation(&param.type_ann);
+            if let Some(default) = &param.default_value {
+                self.write(" = ");
+                self.print_expr(default);
+            }
         }
     }
 
@@ -724,6 +734,10 @@ impl Printer {
                 self.print_expr(inner);
                 self.write(")");
             }
+            ExprKind::SpreadArg(inner) => {
+                self.write("...");
+                self.print_expr(inner);
+            }
         }
     }
 
@@ -1084,16 +1098,25 @@ mod tests {
                         Param {
                             name: ident("a"),
                             type_ann: named_type("i32"),
+                            optional: false,
+                            default_value: None,
+                            is_rest: false,
                             span: Span::dummy(),
                         },
                         Param {
                             name: ident("b"),
                             type_ann: named_type("i32"),
+                            optional: false,
+                            default_value: None,
+                            is_rest: false,
                             span: Span::dummy(),
                         },
                         Param {
                             name: ident("c"),
                             type_ann: named_type("i32"),
+                            optional: false,
+                            default_value: None,
+                            is_rest: false,
                             span: Span::dummy(),
                         },
                     ],
@@ -1247,6 +1270,9 @@ mod tests {
                     params: vec![Param {
                         name: ident("x"),
                         type_ann: named_type("i32"),
+                        optional: false,
+                        default_value: None,
+                        is_rest: false,
                         span: Span::dummy(),
                     }],
                     return_type: None,
@@ -1296,6 +1322,9 @@ mod tests {
                 params: vec![Param {
                     name: ident("x"),
                     type_ann: named_type("i32"),
+                    optional: false,
+                    default_value: None,
+                    is_rest: false,
                     span: Span::dummy(),
                 }],
                 return_type: Some(named_type("i32")),

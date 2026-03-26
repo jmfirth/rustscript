@@ -734,11 +734,12 @@ impl<'a> Lexer<'a> {
         let first = self.peek()?;
         let second = self.peek_next()?;
 
-        // 3-char operators: `===` and `!==`
+        // 3-char operators: `===`, `!==`, `...`
         if let Some(third) = self.peek_two_ahead() {
             let kind_3 = match (first, second, third) {
                 (b'=', b'=', b'=') => Some(TokenKind::EqEqEq),
                 (b'!', b'=', b'=') => Some(TokenKind::BangEqEq),
+                (b'.', b'.', b'.') => Some(TokenKind::DotDotDot),
                 _ => None,
             };
             if let Some(kind) = kind_3 {
@@ -802,6 +803,7 @@ impl<'a> Lexer<'a> {
             b'[' => Some(TokenKind::LBracket),
             b']' => Some(TokenKind::RBracket),
             b'&' => Some(TokenKind::Ampersand),
+            b'?' => Some(TokenKind::Question),
             _ => None,
         }
     }
@@ -1410,5 +1412,54 @@ mod tests {
         let tokens = tokenize("await fetchData()");
         assert_eq!(tokens[0].kind, TokenKind::Await);
         assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "fetchData"));
+    }
+
+    // --- Task 055: DotDotDot and Question tokens ---
+
+    // 51. `...` tokenizes as DotDotDot
+    #[test]
+    fn test_lexer_dot_dot_dot_produces_dot_dot_dot_token() {
+        let tokens = tokenize("...args");
+        assert_eq!(tokens[0].kind, TokenKind::DotDotDot);
+    }
+
+    // 52. `...` is distinguished from single `.`
+    #[test]
+    fn test_lexer_dot_dot_dot_not_three_dots() {
+        let tokens = tokenize("...x");
+        assert_eq!(tokens.len(), 3); // DotDotDot + Ident + Eof
+        assert_eq!(tokens[0].kind, TokenKind::DotDotDot);
+        assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "x"));
+    }
+
+    // 53. Single `.` still produces Dot
+    #[test]
+    fn test_lexer_single_dot_still_works() {
+        let tokens = tokenize("a.b");
+        assert_eq!(tokens[1].kind, TokenKind::Dot);
+    }
+
+    // 54. `?` standalone produces Question
+    #[test]
+    fn test_lexer_question_mark_produces_question_token() {
+        let tokens = tokenize("x?: string");
+        // x, ?, :, string, Eof
+        assert!(matches!(tokens[0].kind, TokenKind::Ident(_)));
+        assert_eq!(tokens[1].kind, TokenKind::Question);
+        assert_eq!(tokens[2].kind, TokenKind::Colon);
+    }
+
+    // 55. `?.` still produces QuestionDot (not Question + Dot)
+    #[test]
+    fn test_lexer_question_dot_still_works() {
+        let tokens = tokenize("x?.y");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionDot);
+    }
+
+    // 56. `??` still produces QuestionQuestion
+    #[test]
+    fn test_lexer_question_question_still_works() {
+        let tokens = tokenize("x ?? y");
+        assert_eq!(tokens[1].kind, TokenKind::QuestionQuestion);
     }
 }

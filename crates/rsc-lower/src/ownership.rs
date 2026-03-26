@@ -547,7 +547,8 @@ impl UseMap {
             }
             ast::ExprKind::Throw(inner)
             | ast::ExprKind::Await(inner)
-            | ast::ExprKind::Shared(inner) => {
+            | ast::ExprKind::Shared(inner)
+            | ast::ExprKind::SpreadArg(inner) => {
                 Self::collect_expr_uses(
                     inner,
                     stmt_index,
@@ -1145,7 +1146,8 @@ fn collect_param_usage_expr(
         ast::ExprKind::Paren(inner)
         | ast::ExprKind::Throw(inner)
         | ast::ExprKind::Await(inner)
-        | ast::ExprKind::Shared(inner) => {
+        | ast::ExprKind::Shared(inner)
+        | ast::ExprKind::SpreadArg(inner) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
         }
         ast::ExprKind::IntLit(_)
@@ -1256,7 +1258,8 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         }
         ast::ExprKind::Throw(inner)
         | ast::ExprKind::Await(inner)
-        | ast::ExprKind::Shared(inner) => {
+        | ast::ExprKind::Shared(inner)
+        | ast::ExprKind::SpreadArg(inner) => {
             collect_idents_in_expr(inner, names);
         }
         ast::ExprKind::Closure(_)

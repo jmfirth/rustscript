@@ -2806,3 +2806,141 @@ function main(): void {
         result_without.rust_source,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 055: Function Features — Optional, Default, Rest Parameters
+// ---------------------------------------------------------------------------
+
+// T055-S1: Function with optional parameters
+#[test]
+fn test_snapshot_optional_params() {
+    let source = "\
+function greet(name: string, title?: string): string {
+  return name;
+}
+
+function main() {
+  console.log(greet(\"Alice\"));
+  console.log(greet(\"Bob\", \"Dr.\"));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn greet(name: String, title: Option<String>) -> String"),
+        "optional param should be Option<String>: {actual}"
+    );
+    assert!(
+        actual.contains("greet(\"Alice\".to_string(), None)"),
+        "missing optional arg should be None: {actual}"
+    );
+    assert!(
+        actual.contains("greet(\"Bob\".to_string(), \"Dr.\".to_string())"),
+        "supplied optional arg should pass through: {actual}"
+    );
+}
+
+// T055-S2: Function with default parameters
+#[test]
+fn test_snapshot_default_params() {
+    let source = "\
+function connect(host: string, port: i64 = 8080): string {
+  return host;
+}
+
+function main() {
+  console.log(connect(\"localhost\"));
+  console.log(connect(\"localhost\", 9090));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn connect(host: String, port: i64) -> String"),
+        "default param should use base type: {actual}"
+    );
+    assert!(
+        actual.contains("connect(\"localhost\".to_string(), 8080)"),
+        "missing default arg should be inlined: {actual}"
+    );
+    assert!(
+        actual.contains("connect(\"localhost\".to_string(), 9090)"),
+        "supplied default arg should pass through: {actual}"
+    );
+}
+
+// T055-S3: Function with rest parameters
+#[test]
+fn test_snapshot_rest_params() {
+    let source = "\
+function log_all(prefix: string, ...messages: Array<string>): void {
+  console.log(prefix);
+}
+
+function main() {
+  log_all(\"INFO\", \"hello\", \"world\");
+  log_all(\"DEBUG\");
+}";
+
+    let actual = compile_to_rust(source);
+    // Borrow inference may optimize prefix to &str, but messages must be Vec<String>
+    assert!(
+        actual.contains("messages: Vec<String>"),
+        "rest param should be Vec<String>: {actual}"
+    );
+    assert!(
+        actual.contains("vec![\"hello\".to_string(), \"world\".to_string()]"),
+        "excess args should be collected into vec![]: {actual}"
+    );
+    assert!(
+        actual.contains("vec![]"),
+        "no rest args should produce empty vec: {actual}"
+    );
+}
+
+// T055-S4: Spread argument in function call
+#[test]
+fn test_snapshot_spread_arg() {
+    let source = "\
+function log_all(prefix: string, ...messages: Array<string>): void {
+  console.log(prefix);
+}
+
+function main() {
+  const items: Array<string> = [\"a\", \"b\"];
+  log_all(\"INFO\", ...items);
+}";
+
+    let actual = compile_to_rust(source);
+    // Spread arg should pass the vec directly, not wrap in another vec
+    // Borrow inference may optimize prefix to &str
+    assert!(
+        actual.contains("log_all(\"INFO\""),
+        "first arg should be present: {actual}"
+    );
+    assert!(
+        actual.contains(", items)"),
+        "spread arg should pass vec directly: {actual}"
+    );
+}
+
+// T055-S5: Combined optional + default
+#[test]
+fn test_snapshot_combined_optional_default() {
+    let source = "\
+function setup(name: string, verbose?: bool, retries: i64 = 3): string {
+  return name;
+}
+
+function main() {
+  console.log(setup(\"test\"));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn setup(name: String, verbose: Option<bool>, retries: i64) -> String"),
+        "mixed optional and default params: {actual}"
+    );
+    assert!(
+        actual.contains("setup(\"test\".to_string(), None, 3)"),
+        "missing args should be filled with None and default: {actual}"
+    );
+}

@@ -360,13 +360,23 @@ pub struct FieldDef {
 
 /// A function parameter with a name and type annotation.
 ///
-/// Corresponds to `name: Type` in a function parameter list.
+/// Corresponds to `name: Type`, `name?: Type`, `name: Type = default`,
+/// or `...name: Array<Type>` in a function parameter list.
 #[derive(Debug, Clone)]
 pub struct Param {
     /// The parameter name.
     pub name: Ident,
     /// The type annotation.
     pub type_ann: TypeAnnotation,
+    /// Whether this parameter is optional (`name?:` syntax).
+    /// Lowers to `Option<T>` in Rust with `None` at call sites.
+    pub optional: bool,
+    /// Optional default value expression.
+    /// When present, the default is inlined at call sites that omit this argument.
+    pub default_value: Option<Expr>,
+    /// Whether this is a rest parameter (`...name` syntax).
+    /// Must be the last parameter. Lowers to `Vec<T>` in Rust.
+    pub is_rest: bool,
     /// The span covering the parameter.
     pub span: Span,
 }
@@ -753,6 +763,9 @@ pub enum ExprKind {
     Await(Box<Expr>),
     /// A `shared(expr)` constructor: wraps a value in `Arc::new(Mutex::new(expr))`.
     Shared(Box<Expr>),
+    /// A spread argument in a function call: `...expr`.
+    /// In function calls to rest-parameter functions, passes a `Vec<T>` directly.
+    SpreadArg(Box<Expr>),
 }
 
 /// A binary expression with an operator and two operands.
@@ -1072,6 +1085,9 @@ mod tests {
                         kind: TypeKind::Named(ident("i32", 7, 10)),
                         span: span(7, 10),
                     },
+                    optional: false,
+                    default_value: None,
+                    is_rest: false,
                     span: span(4, 10),
                 },
                 Param {
@@ -1080,6 +1096,9 @@ mod tests {
                         kind: TypeKind::Named(ident("i32", 15, 18)),
                         span: span(15, 18),
                     },
+                    optional: false,
+                    default_value: None,
+                    is_rest: false,
                     span: span(12, 18),
                 },
             ],

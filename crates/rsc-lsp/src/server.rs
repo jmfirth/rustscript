@@ -989,7 +989,11 @@ fn find_hover_in_expr(
             find_hover_in_expr(&bin.right, pos, cache)
         }
         ExprKind::Unary(un) => find_hover_in_expr(&un.operand, pos, cache),
-        ExprKind::Paren(inner) => find_hover_in_expr(inner, pos, cache),
+        ExprKind::Paren(inner)
+        | ExprKind::Await(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::Shared(inner)
+        | ExprKind::SpreadArg(inner) => find_hover_in_expr(inner, pos, cache),
         ExprKind::FieldAccess(fa) => {
             if fa.field.span.contains(pos) {
                 return Some(format!("```rustscript\n.{}\n```", fa.field.name));
@@ -1010,9 +1014,6 @@ fn find_hover_in_expr(
                 }
             }
             None
-        }
-        ExprKind::Await(inner) | ExprKind::Throw(inner) | ExprKind::Shared(inner) => {
-            find_hover_in_expr(inner, pos, cache)
         }
         ExprKind::TemplateLit(tl) => {
             for part in &tl.parts {

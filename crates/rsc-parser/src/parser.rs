@@ -253,6 +253,8 @@ impl<'src> Parser<'src> {
             TokenKind::BangEqEq => "`!==`",
             TokenKind::LBracket => "`[`",
             TokenKind::RBracket => "`]`",
+            TokenKind::DotDotDot => "`...`",
+            TokenKind::Question => "`?`",
             TokenKind::TemplateHead(_) | TokenKind::TemplateNoSub(_) => "template literal",
             TokenKind::TemplateMiddle(_) => "template literal middle",
             TokenKind::TemplateTail(_) => "template literal tail",
@@ -1244,16 +1246,37 @@ impl<'src> Parser<'src> {
         params
     }
 
-    /// Parse a single parameter: `IDENT : type`.
+    /// Parse a single parameter: `IDENT : type`, `IDENT?: type`,
+    /// `IDENT: type = default`, or `...IDENT: Array<type>`.
     fn parse_param(&mut self) -> Option<Param> {
         let start = self.current_token().span;
+
+        // Rest parameter: `...name: Array<Type>`
+        let is_rest = self.eat(&TokenKind::DotDotDot);
+
         let name = self.parse_ident()?;
+
+        // Optional parameter: `name?: Type`
+        let optional = self.eat(&TokenKind::Question);
+
         self.expect(&TokenKind::Colon)?;
         let type_ann = self.parse_type_annotation()?;
-        let span = start.merge(type_ann.span);
+
+        // Default value: `name: Type = expr`
+        let default_value = if self.eat(&TokenKind::Eq) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let end_span = default_value.as_ref().map_or(type_ann.span, |dv| dv.span);
+        let span = start.merge(end_span);
         Some(Param {
             name,
             type_ann,
+            optional,
+            default_value,
+            is_rest,
             span,
         })
     }
@@ -1302,6 +1325,9 @@ impl<'src> Parser<'src> {
             Some(Param {
                 name,
                 type_ann,
+                optional: false,
+                default_value: None,
+                is_rest: false,
                 span,
             })
         } else {
@@ -1312,6 +1338,9 @@ impl<'src> Parser<'src> {
                     kind: TypeKind::Inferred,
                     span,
                 },
+                optional: false,
+                default_value: None,
+                is_rest: false,
                 span,
             })
         }
@@ -2527,6 +2556,8 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a comma-separated argument list (without the surrounding parens).
+    ///
+    /// Handles spread arguments: `...expr` is parsed as `SpreadArg(expr)`.
     fn parse_arg_list(&mut self) -> Vec<Expr> {
         let mut args = Vec::new();
 
@@ -2535,7 +2566,18 @@ impl<'src> Parser<'src> {
         }
 
         loop {
-            if let Some(arg) = self.parse_expr() {
+            // Check for spread argument: `...expr`
+            if self.check(&TokenKind::DotDotDot) {
+                let start = self.current_token().span;
+                self.advance(); // consume `...`
+                if let Some(inner) = self.parse_expr() {
+                    let span = start.merge(inner.span);
+                    args.push(Expr {
+                        kind: ExprKind::SpreadArg(Box::new(inner)),
+                        span,
+                    });
+                }
+            } else if let Some(arg) = self.parse_expr() {
                 args.push(arg);
             }
 
@@ -2937,6 +2979,9 @@ impl<'src> Parser<'src> {
                                     kind: TypeKind::Inferred,
                                     span: param_span,
                                 },
+                                optional: false,
+                                default_value: None,
+                                is_rest: false,
                                 span: param_span,
                             }],
                             return_type: None,
@@ -6044,5 +6089,126 @@ function main(): void {
             diagnostics.iter().any(|d| d.message.contains("shared")),
             "expected shared-related diagnostic, got: {diagnostics:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 055: Function Features — Optional, Default, Rest Parameters
+    // ---------------------------------------------------------------------------
+
+    // T055-P1: Optional parameter
+    #[test]
+    fn test_parser_optional_param() {
+        let source = "function greet(name: string, title?: string): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.params.len(), 2);
+            assert!(!f.params[0].optional);
+            assert!(f.params[1].optional);
+            assert_eq!(f.params[1].name.name, "title");
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // T055-P2: Default parameter
+    #[test]
+    fn test_parser_default_param() {
+        let source = "function connect(host: string, port: i32 = 8080): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.params.len(), 2);
+            assert!(f.params[1].default_value.is_some());
+            if let Some(Expr {
+                kind: ExprKind::IntLit(v),
+                ..
+            }) = &f.params[1].default_value
+            {
+                assert_eq!(*v, 8080);
+            } else {
+                panic!("expected IntLit default value");
+            }
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // T055-P3: Rest parameter
+    #[test]
+    fn test_parser_rest_param() {
+        let source = "function log(...messages: Array<string>): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.params.len(), 1);
+            assert!(f.params[0].is_rest);
+            assert_eq!(f.params[0].name.name, "messages");
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // T055-P4: Combined params
+    #[test]
+    fn test_parser_combined_params() {
+        let source = "function foo(a: string, b?: i32, c: bool = true): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.params.len(), 3);
+            assert!(!f.params[0].optional);
+            assert!(f.params[0].default_value.is_none());
+            assert!(!f.params[0].is_rest);
+
+            assert!(f.params[1].optional);
+            assert!(f.params[1].default_value.is_none());
+
+            assert!(!f.params[2].optional);
+            assert!(f.params[2].default_value.is_some());
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // T055-P5: Spread argument in call
+    #[test]
+    fn test_parser_spread_arg() {
+        let source = "function main() { foo(...items); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            if let Stmt::Expr(expr) = &f.body.stmts[0] {
+                if let ExprKind::Call(call) = &expr.kind {
+                    assert_eq!(call.args.len(), 1);
+                    assert!(matches!(call.args[0].kind, ExprKind::SpreadArg(_)));
+                } else {
+                    panic!("expected call expression");
+                }
+            } else {
+                panic!("expected expression statement");
+            }
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // T055-P6: DotDotDot token
+    #[test]
+    fn test_parser_dot_dot_dot_token() {
+        let source = "function f(...args: Array<i32>): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert!(f.params[0].is_rest);
+        } else {
+            panic!("expected function");
+        }
     }
 }
