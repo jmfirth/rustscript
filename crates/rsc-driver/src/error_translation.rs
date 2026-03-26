@@ -5,6 +5,7 @@
 //! those messages into `RustScript` equivalents so the developer sees familiar terms.
 
 use regex::Regex;
+use rsc_syntax::diagnostic::ColorMode;
 use rsc_syntax::span::Span;
 use std::sync::LazyLock;
 
@@ -88,6 +89,27 @@ pub fn translate_rustc_errors(
     rts_source: Option<&str>,
     rts_filename: Option<&str>,
 ) -> String {
+    translate_rustc_errors_colored(
+        stderr,
+        source_map,
+        rts_source,
+        rts_filename,
+        ColorMode::Never,
+    )
+}
+
+/// Translate `rustc` error output into `RustScript`-friendly terms, with optional color.
+///
+/// Same as [`translate_rustc_errors`] but applies ANSI color codes to the header
+/// when `color` is [`ColorMode::Always`].
+#[must_use]
+pub fn translate_rustc_errors_colored(
+    stderr: &str,
+    source_map: Option<&[Option<Span>]>,
+    rts_source: Option<&str>,
+    rts_filename: Option<&str>,
+    color: ColorMode,
+) -> String {
     if stderr.trim().is_empty() {
         return String::new();
     }
@@ -106,10 +128,20 @@ pub fn translate_rustc_errors(
 
     // If we actually changed something, use the translated header.
     // If nothing changed, use the raw header as fallback.
-    if did_translate {
-        format!("{TRANSLATED_HEADER}\n{translated}")
+    let header = if did_translate {
+        color_header(TRANSLATED_HEADER, color)
     } else {
-        format!("{RAW_HEADER}\n{stderr}")
+        color_header(RAW_HEADER, color)
+    };
+    let body = if did_translate { &translated } else { stderr };
+    format!("{header}\n{body}")
+}
+
+/// Apply ANSI bold red to a header string when colors are enabled.
+fn color_header(header: &str, color: ColorMode) -> String {
+    match color {
+        ColorMode::Always => format!("\x1b[1;31m{header}\x1b[0m"),
+        ColorMode::Never => header.to_owned(),
     }
 }
 
@@ -1083,5 +1115,41 @@ mod tests {
         let input = "found Box<dyn Display>, expected String";
         let result = translate_type_names(input);
         assert_eq!(result, "found Display, expected string");
+    }
+
+    // --- Color header tests ---
+    #[test]
+    fn test_color_header_never_returns_plain_text() {
+        let result = color_header("error header", ColorMode::Never);
+        assert_eq!(result, "error header");
+        assert!(!result.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_color_header_always_returns_ansi_codes() {
+        let result = color_header("error header", ColorMode::Always);
+        assert!(result.contains("\x1b[1;31m"), "should contain bold red");
+        assert!(result.contains("\x1b[0m"), "should contain reset");
+        assert!(result.contains("error header"), "should contain the text");
+    }
+
+    #[test]
+    fn test_translate_rustc_errors_colored_never_matches_plain() {
+        let input = "error[E0308]: expected String, found i32";
+        let plain = translate_rustc_errors(input, None, None, None);
+        let colored_never =
+            translate_rustc_errors_colored(input, None, None, None, ColorMode::Never);
+        assert_eq!(plain, colored_never);
+    }
+
+    #[test]
+    fn test_translate_rustc_errors_colored_always_adds_ansi() {
+        let input = "error[E0308]: expected String, found i32";
+        let colored = translate_rustc_errors_colored(input, None, None, None, ColorMode::Always);
+        assert!(
+            colored.contains("\x1b["),
+            "colored output should contain ANSI codes"
+        );
+        assert!(colored.contains("string"), "should still translate types");
     }
 }

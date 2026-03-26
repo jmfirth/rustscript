@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rsc_lower::CrateDependency;
-use rsc_syntax::diagnostic::{Severity, render_diagnostics};
+use rsc_syntax::diagnostic::{ColorMode, Severity, render_diagnostics_colored};
 use rsc_syntax::rust_ir::RustModDecl;
 
 use crate::error::{DriverError, Result};
-use crate::error_translation::translate_rustc_errors;
+use crate::error_translation::translate_rustc_errors_colored;
 use crate::pipeline::CompileResult;
 
 /// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
@@ -201,6 +201,8 @@ pub struct Project {
     pub name: String,
     /// Compilation options (e.g., `--no-borrow-inference`).
     pub compile_options: crate::pipeline::CompileOptions,
+    /// Color mode for diagnostic rendering.
+    pub color_mode: ColorMode,
 }
 
 impl Project {
@@ -224,6 +226,7 @@ impl Project {
                     root: current,
                     name,
                     compile_options: crate::pipeline::CompileOptions::default(),
+                    color_mode: ColorMode::default(),
                 });
             }
 
@@ -235,6 +238,7 @@ impl Project {
                     root: current,
                     name,
                     compile_options: crate::pipeline::CompileOptions::default(),
+                    color_mode: ColorMode::default(),
                 });
             }
 
@@ -339,7 +343,7 @@ impl Project {
 
             if module_result.has_errors {
                 has_module_errors = true;
-                render_errors(&module_result);
+                render_errors(&module_result, self.color_mode);
                 continue;
             }
 
@@ -492,7 +496,7 @@ impl Project {
             self.compile_for_target(wasm_target.as_ref())?;
 
         if result.has_errors {
-            render_errors(&result);
+            render_errors(&result, self.color_mode);
             let error_count = result
                 .diagnostics
                 .iter()
@@ -503,45 +507,45 @@ impl Project {
 
         // Emit warning if async + WASM
         if wasm_target.is_some() && result.needs_async_runtime {
-            eprintln!("warning: async runtime (tokio) is not available for WASM targets");
+            eprintln!(
+                "{}",
+                format_status(
+                    "warning:",
+                    "async runtime (tokio) is not available for WASM targets",
+                    StatusStyle::Warning,
+                    self.color_mode,
+                )
+            );
         }
+
+        eprintln!(
+            "{}",
+            format_status(
+                "Compiling",
+                &format!("{} v0.1.0", self.name),
+                StatusStyle::Success,
+                self.color_mode,
+            )
+        );
 
         let mut cmd = Command::new("cargo");
         cmd.arg("build").current_dir(&build_dir);
-
         if release {
             cmd.arg("--release");
         }
-
-        // Pass --target to Cargo for any target (WASM or otherwise)
         if let Some(t) = target {
             cmd.arg("--target").arg(t);
         }
-
         let output = cmd.output()?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Check for "target may not be installed" hint from Cargo
-            if let Some(ref wt) = wasm_target
-                && (stderr.contains("target may not be installed")
-                    || stderr.contains("can't find crate")
-                    || stderr.contains("no matching package"))
-            {
-                let triple = wt.triple();
-                eprintln!("error: WASM target not installed. Run: rustup target add {triple}");
-                return Err(DriverError::CargoBuildFailed);
-            }
-
-            let source_map = if result.source_map_lines.is_empty() {
-                None
-            } else {
-                Some(result.source_map_lines.as_slice())
-            };
-            let translated =
-                translate_rustc_errors(&stderr, source_map, Some(&rts_source), Some(&rts_filename));
-            eprint!("{translated}");
+            self.handle_build_failure(
+                &output,
+                &result,
+                wasm_target.as_ref(),
+                &rts_source,
+                &rts_filename,
+            );
             return Err(DriverError::CargoBuildFailed);
         }
 
@@ -550,6 +554,21 @@ impl Project {
         if !stdout.is_empty() {
             print!("{stdout}");
         }
+
+        let profile_label = if release {
+            "release [optimized]"
+        } else {
+            "dev [unoptimized + debuginfo]"
+        };
+        eprintln!(
+            "{}",
+            format_status(
+                "Finished",
+                &format!("`{profile_label}` target"),
+                StatusStyle::Success,
+                self.color_mode,
+            )
+        );
 
         // Report the output path for WASM targets
         if let Some(ref wt) = wasm_target {
@@ -565,6 +584,51 @@ impl Project {
         }
 
         Ok(())
+    }
+
+    /// Handle a failed `cargo build` by translating and printing error messages.
+    fn handle_build_failure(
+        &self,
+        output: &std::process::Output,
+        result: &CompileResult,
+        wasm_target: Option<&WasmTarget>,
+        rts_source: &str,
+        rts_filename: &str,
+    ) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Check for "target may not be installed" hint from Cargo
+        if let Some(wt) = wasm_target
+            && (stderr.contains("target may not be installed")
+                || stderr.contains("can't find crate")
+                || stderr.contains("no matching package"))
+        {
+            let triple = wt.triple();
+            eprintln!(
+                "{}",
+                format_status(
+                    "error:",
+                    &format!("WASM target not installed. Run: rustup target add {triple}"),
+                    StatusStyle::Error,
+                    self.color_mode,
+                )
+            );
+            return;
+        }
+
+        let source_map = if result.source_map_lines.is_empty() {
+            None
+        } else {
+            Some(result.source_map_lines.as_slice())
+        };
+        let translated = translate_rustc_errors_colored(
+            &stderr,
+            source_map,
+            Some(rts_source),
+            Some(rts_filename),
+            self.color_mode,
+        );
+        eprint!("{translated}");
     }
 
     /// Run the project: compile, then invoke `cargo run` on the output.
@@ -588,7 +652,7 @@ impl Project {
         let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
-            render_errors(&result);
+            render_errors(&result, self.color_mode);
             let error_count = result
                 .diagnostics
                 .iter()
@@ -621,11 +685,12 @@ impl Project {
                 } else {
                     Some(result.source_map_lines.as_slice())
                 };
-                let translated = translate_rustc_errors(
+                let translated = translate_rustc_errors_colored(
                     &stderr,
                     source_map,
                     Some(&rts_source),
                     Some(&rts_filename),
+                    self.color_mode,
                 );
                 eprint!("{translated}");
             }
@@ -647,7 +712,7 @@ impl Project {
         let (result, build_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
-            render_errors(&result);
+            render_errors(&result, self.color_mode);
             let error_count = result
                 .diagnostics
                 .iter()
@@ -691,11 +756,12 @@ impl Project {
                 } else {
                     Some(result.source_map_lines.as_slice())
                 };
-                let translated = translate_rustc_errors(
+                let translated = translate_rustc_errors_colored(
                     &stderr,
                     source_map,
                     Some(&rts_source),
                     Some(&rts_filename),
+                    self.color_mode,
                 );
                 eprint!("{translated}");
             }
@@ -779,11 +845,46 @@ fn has_rts_files(dir: &Path) -> bool {
         .any(|e| e.path().extension().is_some_and(|ext| ext == "rts"))
 }
 
-/// Render error diagnostics to stderr.
-fn render_errors(result: &CompileResult) {
+/// Render error diagnostics to stderr with the specified color mode.
+fn render_errors(result: &CompileResult, color: ColorMode) {
     let mut stderr = std::io::stderr();
     // Ignore rendering errors — we're already in an error path.
-    let _ = render_diagnostics(&result.diagnostics, &result.source_map, &mut stderr);
+    let _ = render_diagnostics_colored(&result.diagnostics, &result.source_map, &mut stderr, color);
+}
+
+/// Format a status label with ANSI color when enabled.
+///
+/// Labels are right-aligned to 12 characters (matching Cargo's formatting).
+/// Green is used for progress labels, red for errors, yellow for warnings.
+fn format_status(label: &str, message: &str, style: StatusStyle, color: ColorMode) -> String {
+    match color {
+        ColorMode::Always => {
+            let code = match style {
+                StatusStyle::Success => "\x1b[1;32m", // bold green
+                StatusStyle::Error => "\x1b[1;31m",   // bold red
+                StatusStyle::Warning => "\x1b[1;33m", // bold yellow
+                StatusStyle::Note => "\x1b[1;36m",    // bold cyan
+            };
+            format!("{code}{label:>12}\x1b[0m {message}")
+        }
+        ColorMode::Never => {
+            format!("{label:>12} {message}")
+        }
+    }
+}
+
+/// Style for status labels in build output.
+#[derive(Debug, Clone, Copy)]
+enum StatusStyle {
+    /// Green — compiling, finished, success labels.
+    Success,
+    /// Red — error labels.
+    Error,
+    /// Yellow — warning labels.
+    Warning,
+    /// Cyan — note/help labels.
+    #[allow(dead_code)]
+    Note,
 }
 
 #[cfg(test)]
@@ -1897,6 +1998,71 @@ async function fetchData(): string {
         assert!(
             matches!(err, DriverError::WasmRunUnsupported),
             "expected WasmRunUnsupported, got: {err:?}"
+        );
+    }
+
+    // --- Color output tests ---
+    #[test]
+    fn test_format_status_never_produces_plain_text() {
+        let result = format_status(
+            "Compiling",
+            "myproject v0.1.0",
+            StatusStyle::Success,
+            ColorMode::Never,
+        );
+        assert_eq!(result, "   Compiling myproject v0.1.0");
+        assert!(!result.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_format_status_always_produces_ansi_green_for_success() {
+        let result = format_status(
+            "Compiling",
+            "myproject v0.1.0",
+            StatusStyle::Success,
+            ColorMode::Always,
+        );
+        assert!(result.contains("\x1b[1;32m"), "should contain bold green");
+        assert!(result.contains("\x1b[0m"), "should contain reset");
+        assert!(result.contains("Compiling"), "should contain the label");
+        assert!(
+            result.contains("myproject v0.1.0"),
+            "should contain the message"
+        );
+    }
+
+    #[test]
+    fn test_format_status_always_produces_ansi_red_for_error() {
+        let result = format_status(
+            "error:",
+            "something broke",
+            StatusStyle::Error,
+            ColorMode::Always,
+        );
+        assert!(result.contains("\x1b[1;31m"), "should contain bold red");
+    }
+
+    #[test]
+    fn test_format_status_always_produces_ansi_yellow_for_warning() {
+        let result = format_status(
+            "warning:",
+            "something off",
+            StatusStyle::Warning,
+            ColorMode::Always,
+        );
+        assert!(result.contains("\x1b[1;33m"), "should contain bold yellow");
+    }
+
+    #[test]
+    fn test_project_open_defaults_to_no_color() {
+        let tmp = TempDir::new().unwrap();
+        let _project_dir = init_project("color-test", tmp.path(), None).unwrap();
+
+        let project = Project::open(&tmp.path().join("color-test")).unwrap();
+        assert_eq!(
+            project.color_mode,
+            ColorMode::Never,
+            "default should be Never"
         );
     }
 }
