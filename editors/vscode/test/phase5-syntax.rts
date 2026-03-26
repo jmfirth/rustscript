@@ -1,0 +1,55 @@
+// Phase 5 syntax fixture: every keyword and operator for grammar verification.
+// This file is NOT valid RustScript — it exists solely to test syntax highlighting.
+
+// --- Keywords: class modifiers ---
+class Example {
+  readonly x: i32;
+  static count: i32 = 0;
+  abstract doWork(): void;
+  override toString(): string { return "Example"; }
+
+  get value(): i32 { return this.x; }
+  set value(v: i32) { this.x = v; }
+}
+
+// --- Keywords: type operator ---
+const y = x satisfies MyType;
+
+// --- Keywords: as, typeof (already present, verify) ---
+const z = x as f64;
+const t = typeof x;
+
+// --- Operators: exponentiation ---
+const power = a ** b;
+
+// --- Operators: spread ---
+const arr = [...items, 1, 2];
+const obj = { ...base, x: 1 };
+
+// --- Operators: compound assignment ---
+x ??= defaultValue;
+x ||= fallback;
+x &&= guard;
+
+// --- Operators: bitwise ---
+const band = a & b;
+const bor = a | b;
+const bxor = a ^ b;
+const bnot = ~a;
+const shl = a << 2;
+const shr = a >> 2;
+
+// --- Ternary ---
+const result = condition ? yes : no;
+
+// --- Non-null assertion ---
+const val = maybeNull!;
+
+// --- Try/catch/finally ---
+try {
+  doWork();
+} catch (e: Error) {
+  handleError(e);
+} finally {
+  cleanup();
+}

@@ -186,3 +186,35 @@ fn test_error_translation_str_ref_becomes_string_reference() {
         "should translate &str to string (reference), got: {translated}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 062: Phase 5 tooling catch-up — new type translations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_error_translation_arc_mutex_becomes_shared() {
+    let rustc_stderr = "error: expected Arc<Mutex<i32>>, found String\n";
+
+    let translated = translate_rustc_errors(rustc_stderr, None, None, None);
+
+    assert!(
+        translated.contains("shared<i32>"),
+        "should translate Arc<Mutex<i32>> to shared<i32>, got: {translated}"
+    );
+}
+
+#[test]
+fn test_error_translation_box_dyn_becomes_trait_name() {
+    let rustc_stderr = "error: expected Box<dyn Serializable>, found i32\n";
+
+    let translated = translate_rustc_errors(rustc_stderr, None, None, None);
+
+    assert!(
+        translated.contains("Serializable"),
+        "should translate Box<dyn Serializable> to Serializable, got: {translated}"
+    );
+    assert!(
+        !translated.contains("Box<dyn"),
+        "should not contain Box<dyn wrapper, got: {translated}"
+    );
+}

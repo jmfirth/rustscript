@@ -638,6 +638,10 @@ fn find_hover_info(
                     let code = format!("```rustscript\n{hover}\n```");
                     return Some(hover_with_doc(&code, class.doc_comment.as_deref()));
                 }
+                // Walk class members for hover on fields, methods, getters, setters.
+                if let Some(info) = find_hover_in_class_members(class, pos, cache) {
+                    return Some(info);
+                }
             }
             _ => {}
         }
@@ -749,6 +753,28 @@ fn find_hover_in_stmts(
                     return Some(info);
                 }
             }
+            Stmt::Return(ret) => {
+                if let Some(value) = &ret.value
+                    && let Some(info) = find_hover_in_expr(value, pos, cache)
+                {
+                    return Some(info);
+                }
+            }
+            Stmt::TryCatch(tc) => {
+                if let Some(info) = find_hover_in_stmts(&tc.try_block.stmts, pos, cache) {
+                    return Some(info);
+                }
+                if let Some(block) = &tc.catch_block
+                    && let Some(info) = find_hover_in_stmts(&block.stmts, pos, cache)
+                {
+                    return Some(info);
+                }
+                if let Some(finally_block) = &tc.finally_block
+                    && let Some(info) = find_hover_in_stmts(&finally_block.stmts, pos, cache)
+                {
+                    return Some(info);
+                }
+            }
             _ => {}
         }
     }
@@ -791,8 +817,24 @@ fn format_function_signature(func: &rsc_syntax::ast::FnDecl) -> String {
 }
 
 /// Format a parameter for hover display.
+///
+/// Includes `...` prefix for rest parameters, `?` suffix for optional parameters,
+/// and `= defaultValue` for parameters with defaults.
 fn format_param(param: &rsc_syntax::ast::Param) -> String {
-    format!("{}: {}", param.name.name, format_type(&param.type_ann))
+    let mut result = String::new();
+    if param.is_rest {
+        result.push_str("...");
+    }
+    result.push_str(&param.name.name);
+    if param.optional {
+        result.push('?');
+    }
+    result.push_str(": ");
+    result.push_str(&format_type(&param.type_ann));
+    if param.default_value.is_some() {
+        result.push_str(" = ...");
+    }
+    result
 }
 
 /// Format optional type parameters for display: `<T, U extends Comparable>`.
@@ -996,17 +1038,62 @@ fn find_hover_in_expr(
         ExprKind::FloatLit(v) => Some(format!("```rustscript\n{v}: f64\n```")),
         ExprKind::StringLit(_) => Some("```rustscript\nstring\n```".to_owned()),
         ExprKind::Binary(bin) => {
+            // Try children first; if cursor is not on a child, provide operator hover.
             if let Some(info) = find_hover_in_expr(&bin.left, pos, cache) {
                 return Some(info);
             }
-            find_hover_in_expr(&bin.right, pos, cache)
+            if let Some(info) = find_hover_in_expr(&bin.right, pos, cache) {
+                return Some(info);
+            }
+            // Cursor is on the operator itself — provide operator-specific hover.
+            Some(format_binary_op_hover(bin.op))
         }
-        ExprKind::Unary(un) => find_hover_in_expr(&un.operand, pos, cache),
+        ExprKind::Unary(un) => {
+            if let Some(info) = find_hover_in_expr(&un.operand, pos, cache) {
+                return Some(info);
+            }
+            Some(format_unary_op_hover(un.op))
+        }
+        ExprKind::Ternary(cond, then_expr, else_expr) => {
+            if let Some(info) = find_hover_in_expr(cond, pos, cache) {
+                return Some(info);
+            }
+            if let Some(info) = find_hover_in_expr(then_expr, pos, cache) {
+                return Some(info);
+            }
+            if let Some(info) = find_hover_in_expr(else_expr, pos, cache) {
+                return Some(info);
+            }
+            Some("```rustscript\n(ternary) condition ? consequent : alternate\n```\nShort-circuit conditional. Lowers to `if/else` expression.".to_owned())
+        }
+        ExprKind::NonNullAssert(inner) => {
+            if let Some(info) = find_hover_in_expr(inner, pos, cache) {
+                return Some(info);
+            }
+            Some("```rustscript\n(assert) expr!\n```\nNon-null assertion. Lowers to `.unwrap()`. Panics if `None`.".to_owned())
+        }
+        ExprKind::Cast(inner, _ty) => {
+            if let Some(info) = find_hover_in_expr(inner, pos, cache) {
+                return Some(info);
+            }
+            Some("```rustscript\n(cast) expr as Type\n```\nType cast. Lowers to Rust `as` for numeric types.".to_owned())
+        }
+        ExprKind::TypeOf(inner) => {
+            if let Some(info) = find_hover_in_expr(inner, pos, cache) {
+                return Some(info);
+            }
+            Some("```rustscript\n(operator) typeof expr\n```\nType-of operator. Resolves statically at compile time.".to_owned())
+        }
+        ExprKind::SpreadArg(inner) => {
+            if let Some(info) = find_hover_in_expr(inner, pos, cache) {
+                return Some(info);
+            }
+            Some("```rustscript\n(spread) ...expr\n```\nSpread operator. Expands array/object elements inline.".to_owned())
+        }
         ExprKind::Paren(inner)
         | ExprKind::Await(inner)
         | ExprKind::Throw(inner)
-        | ExprKind::Shared(inner)
-        | ExprKind::SpreadArg(inner) => find_hover_in_expr(inner, pos, cache),
+        | ExprKind::Shared(inner) => find_hover_in_expr(inner, pos, cache),
         ExprKind::FieldAccess(fa) => {
             if fa.field.span.contains(pos) {
                 return Some(format!("```rustscript\n.{}\n```", fa.field.name));
@@ -1043,6 +1130,187 @@ fn find_hover_in_expr(
             None
         }
         _ => None,
+    }
+}
+
+/// Walk class members for hover information.
+///
+/// Provides hover for class fields (including `readonly` / `static` modifiers),
+/// methods (including `static` prefix), getters, setters, and constructor parameters
+/// (including parameter properties).
+#[allow(clippy::too_many_lines)]
+fn find_hover_in_class_members(
+    class: &rsc_syntax::ast::ClassDef,
+    pos: rsc_syntax::span::BytePos,
+    cache: Option<&CachedCompileInfo>,
+) -> Option<String> {
+    use rsc_syntax::ast::{ClassMember, Visibility};
+
+    for member in &class.members {
+        match member {
+            ClassMember::Field(field) => {
+                if field.name.span.contains(pos) {
+                    let mut hover = String::new();
+                    if field.is_static {
+                        hover.push_str("static ");
+                    }
+                    if field.readonly {
+                        hover.push_str("readonly ");
+                    }
+                    hover.push_str(&field.name.name);
+                    hover.push_str(": ");
+                    hover.push_str(&format_type(&field.type_ann));
+                    if field.initializer.is_some() {
+                        hover.push_str(" = ...");
+                    }
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, field.doc_comment.as_deref()));
+                }
+            }
+            ClassMember::Method(method) => {
+                if method.name.span.contains(pos) {
+                    let mut hover = String::new();
+                    if matches!(method.visibility, Visibility::Private) {
+                        hover.push_str("private ");
+                    }
+                    if method.is_static {
+                        hover.push_str("static ");
+                    }
+                    if method.is_async {
+                        hover.push_str("async ");
+                    }
+                    hover.push_str(&method.name.name);
+                    hover.push('(');
+                    for (i, param) in method.params.iter().enumerate() {
+                        if i > 0 {
+                            hover.push_str(", ");
+                        }
+                        hover.push_str(&format_param(param));
+                    }
+                    hover.push(')');
+                    if let Some(ret) = &method.return_type
+                        && let Some(type_ann) = &ret.type_ann
+                    {
+                        hover.push_str(": ");
+                        hover.push_str(&format_type(type_ann));
+                    }
+                    let code = format!("```rustscript\n{hover}\n```");
+                    return Some(hover_with_doc(&code, method.doc_comment.as_deref()));
+                }
+                // Walk method body for variable hover.
+                for param in &method.params {
+                    if param.span.contains(pos) {
+                        let p = format_param(param);
+                        return Some(format!("```rustscript\n(parameter) {p}\n```"));
+                    }
+                }
+                if let Some(info) = find_hover_in_stmts(&method.body.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
+            ClassMember::Getter(getter) => {
+                if getter.name.span.contains(pos) {
+                    let mut hover = String::from("(getter) get ");
+                    hover.push_str(&getter.name.name);
+                    hover.push_str("()");
+                    if let Some(ret) = &getter.return_type
+                        && let Some(type_ann) = &ret.type_ann
+                    {
+                        hover.push_str(": ");
+                        hover.push_str(&format_type(type_ann));
+                    }
+                    return Some(format!(
+                        "```rustscript\n{hover}\n```\nProperty getter. Accessed as `obj.{}`.)",
+                        getter.name.name
+                    ));
+                }
+                if let Some(info) = find_hover_in_stmts(&getter.body.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
+            ClassMember::Setter(setter) => {
+                if setter.name.span.contains(pos) {
+                    let mut hover = String::from("(setter) set ");
+                    hover.push_str(&setter.name.name);
+                    hover.push('(');
+                    hover.push_str(&setter.param.name.name);
+                    hover.push_str(": ");
+                    hover.push_str(&format_type(&setter.param.type_ann));
+                    hover.push(')');
+                    return Some(format!(
+                        "```rustscript\n{hover}\n```\nProperty setter. Assigned as `obj.{} = value`.)",
+                        setter.name.name
+                    ));
+                }
+                if let Some(info) = find_hover_in_stmts(&setter.body.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
+            ClassMember::Constructor(ctor) => {
+                // Constructor param properties
+                for param in &ctor.params {
+                    if param.name.span.contains(pos) {
+                        let mut hover = String::new();
+                        if param.property_visibility.is_some() {
+                            hover.push_str("(parameter property) ");
+                        } else {
+                            hover.push_str("(parameter) ");
+                        }
+                        hover.push_str(&param.name.name);
+                        hover.push_str(": ");
+                        hover.push_str(&format_type(&param.type_ann));
+                        if param.property_visibility.is_some() {
+                            hover.push_str("\n\nAutomatically creates and assigns a field.");
+                        }
+                        return Some(format!("```rustscript\n{hover}\n```"));
+                    }
+                }
+                if let Some(info) = find_hover_in_stmts(&ctor.body.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Format hover text for a binary operator.
+fn format_binary_op_hover(op: rsc_syntax::ast::BinaryOp) -> String {
+    use rsc_syntax::ast::BinaryOp;
+    match op {
+        BinaryOp::Pow => "```rustscript\n(operator) **\n```\nExponentiation. Lowers to `.pow()` for integers, `.powf()` for floats.".to_owned(),
+        BinaryOp::BitAnd => "```rustscript\n(operator) &\n```\nBitwise AND. Direct passthrough to Rust.".to_owned(),
+        BinaryOp::BitOr => "```rustscript\n(operator) |\n```\nBitwise OR. Direct passthrough to Rust.".to_owned(),
+        BinaryOp::BitXor => "```rustscript\n(operator) ^\n```\nBitwise XOR. Direct passthrough to Rust.".to_owned(),
+        BinaryOp::Shl => "```rustscript\n(operator) <<\n```\nLeft shift. Direct passthrough to Rust.".to_owned(),
+        BinaryOp::Shr => "```rustscript\n(operator) >>\n```\nRight shift. Direct passthrough to Rust.".to_owned(),
+        BinaryOp::Add => "```rustscript\n(operator) +\n```\nAddition.".to_owned(),
+        BinaryOp::Sub => "```rustscript\n(operator) -\n```\nSubtraction.".to_owned(),
+        BinaryOp::Mul => "```rustscript\n(operator) *\n```\nMultiplication.".to_owned(),
+        BinaryOp::Div => "```rustscript\n(operator) /\n```\nDivision.".to_owned(),
+        BinaryOp::Mod => "```rustscript\n(operator) %\n```\nModulo / remainder.".to_owned(),
+        BinaryOp::Eq => "```rustscript\n(operator) ==\n```\nEquality comparison.".to_owned(),
+        BinaryOp::Ne => "```rustscript\n(operator) !=\n```\nInequality comparison.".to_owned(),
+        BinaryOp::Lt => "```rustscript\n(operator) <\n```\nLess than.".to_owned(),
+        BinaryOp::Gt => "```rustscript\n(operator) >\n```\nGreater than.".to_owned(),
+        BinaryOp::Le => "```rustscript\n(operator) <=\n```\nLess than or equal.".to_owned(),
+        BinaryOp::Ge => "```rustscript\n(operator) >=\n```\nGreater than or equal.".to_owned(),
+        BinaryOp::And => "```rustscript\n(operator) &&\n```\nLogical AND.".to_owned(),
+        BinaryOp::Or => "```rustscript\n(operator) ||\n```\nLogical OR.".to_owned(),
+    }
+}
+
+/// Format hover text for a unary operator.
+fn format_unary_op_hover(op: rsc_syntax::ast::UnaryOp) -> String {
+    use rsc_syntax::ast::UnaryOp;
+    match op {
+        UnaryOp::Neg => "```rustscript\n(operator) -\n```\nNegation.".to_owned(),
+        UnaryOp::Not => "```rustscript\n(operator) !\n```\nLogical NOT.".to_owned(),
+        UnaryOp::BitNot => {
+            "```rustscript\n(operator) ~\n```\nBitwise NOT. Lowers to Rust `!` on integer types."
+                .to_owned()
+        }
     }
 }
 
@@ -1795,6 +2063,188 @@ mod tests {
         assert!(
             !text.contains("String"),
             "hover must not contain 'String' (should be 'string'): {text}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 062: Phase 5 expression hover tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_server_hover_ternary_expression() {
+        let source = "function foo(x: bool): i32 { const r = x ? 1 : 0; return r; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // The ternary expression `x ? 1 : 0` starts around offset 40-50.
+        // Search for hover on the `?` or the ternary region.
+        // The entire `x ? 1 : 0` is in the init expression of `const r`.
+        // "r" is at offset 35, and the init expression is after "= ".
+        // Let's try offset 44 which should be somewhere in the ternary.
+        let info = find_hover_info(&module, 44, None);
+        assert!(info.is_some(), "should find hover for ternary expression");
+        // Could be on a sub-expression or on the ternary itself
+    }
+
+    #[test]
+    fn test_server_hover_non_null_assert() {
+        let source = "function foo(x: i32 | null): i32 { return x!; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "x!" starts at offset 42
+        let info = find_hover_info(&module, 43, None);
+        assert!(info.is_some(), "should find hover for non-null assert");
+    }
+
+    #[test]
+    fn test_server_hover_as_cast() {
+        let source = "function foo(x: i32): f64 { return x as f64; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "x as f64" starts around offset 35
+        let info = find_hover_info(&module, 37, None);
+        assert!(info.is_some(), "should find hover for as cast");
+    }
+
+    #[test]
+    fn test_server_hover_typeof_expression() {
+        let source = "function foo(x: i32): string { return typeof x; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "typeof x" starts around offset 38
+        let info = find_hover_info(&module, 40, None);
+        assert!(info.is_some(), "should find hover for typeof");
+    }
+
+    #[test]
+    fn test_server_hover_exponentiation_operator() {
+        let source = "function foo(a: i32, b: i32): i32 { return a ** b; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "a ** b" starts around offset 43. The `**` operator is at ~45.
+        let info = find_hover_info(&module, 45, None);
+        assert!(info.is_some(), "should find hover for ** operator");
+        let text = info.unwrap();
+        assert!(
+            text.contains("**") || text.contains("pow"),
+            "should mention ** or pow: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_bitwise_operator() {
+        let source = "function foo(a: i32, b: i32): i32 { return a & b; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "a & b" starts around offset 43. The `&` operator is at ~45.
+        let info = find_hover_info(&module, 45, None);
+        assert!(info.is_some(), "should find hover for bitwise operator");
+        let text = info.unwrap();
+        assert!(
+            text.contains("&") || text.contains("Bitwise"),
+            "should mention bitwise: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_optional_param_shows_question_mark() {
+        let source = "function foo(x?: string) {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "x" is at offset 13
+        let info = find_hover_info(&module, 13, None);
+        assert!(info.is_some(), "should find hover for optional param");
+        let text = info.unwrap();
+        assert!(text.contains("x?"), "should show optional marker: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_rest_param_shows_dots() {
+        let source = "function foo(...args: Array<i32>) {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "args" starts around offset 16
+        let info = find_hover_info(&module, 16, None);
+        assert!(info.is_some(), "should find hover for rest param");
+        let text = info.unwrap();
+        assert!(text.contains("...args"), "should show rest prefix: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_default_param_shows_default() {
+        let source = "function foo(x: i32 = 5) {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "x" is at offset 13
+        let info = find_hover_info(&module, 13, None);
+        assert!(info.is_some(), "should find hover for default param");
+        let text = info.unwrap();
+        assert!(text.contains("= ..."), "should show default marker: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_readonly_field() {
+        let source = "class C { readonly x: i32 = 0; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "x" is at offset 19
+        let info = find_hover_info(&module, 19, None);
+        assert!(info.is_some(), "should find hover for readonly field");
+        let text = info.unwrap();
+        assert!(text.contains("readonly"), "should show readonly: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_static_method() {
+        let source = "class C { static foo(): void {} }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "foo" starts at offset 17
+        let info = find_hover_info(&module, 17, None);
+        assert!(info.is_some(), "should find hover for static method");
+        let text = info.unwrap();
+        assert!(text.contains("static"), "should show static: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_getter_shows_get() {
+        let source = "class C { x: i32 = 0; get value(): i32 { return this.x; } }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "value" in "get value()" is at offset 26
+        let info = find_hover_info(&module, 26, None);
+        assert!(info.is_some(), "should find hover for getter");
+        let text = info.unwrap();
+        assert!(text.contains("get"), "should show getter: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_setter_shows_set() {
+        let source = "class C { x: i32 = 0; set value(v: i32) { this.x = v; } }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "value" in "set value()" is at offset 26
+        let info = find_hover_info(&module, 26, None);
+        assert!(info.is_some(), "should find hover for setter");
+        let text = info.unwrap();
+        assert!(text.contains("set"), "should show setter: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_spread_arg() {
+        // Spread inside a function call (SpreadArg variant), not array literal
+        let source = "function bar(...args: Array<i32>) {} function foo() { bar(...items); }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+        // "...items" is in foo's body. "bar(...items);" starts after `{ `.
+        // The SpreadArg expression `...items` is inside a call.
+        // We need an offset inside the spread expression.
+        // "foo() { bar(...items); }" — "bar" starts at ~53, "..." at 57, "items" at 60
+        let info = find_hover_info(&module, 60, None);
+        // The `items` identifier inside the spread should produce hover
+        // (or the spread itself if the offset is between ... and the ident)
+        assert!(
+            info.is_some(),
+            "should find hover for identifier within spread arg"
         );
     }
 }

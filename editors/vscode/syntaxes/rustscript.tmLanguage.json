@@ -189,6 +189,18 @@
           "match": "\\b(private|public)\\b"
         },
         {
+          "name": "keyword.other.modifier.rustscript",
+          "match": "\\b(readonly|static|abstract|override)\\b"
+        },
+        {
+          "name": "keyword.other.satisfies.rustscript",
+          "match": "\\bsatisfies\\b"
+        },
+        {
+          "name": "keyword.other.accessor.rustscript",
+          "match": "\\b(get|set)\\b"
+        },
+        {
           "name": "keyword.control.of.rustscript",
           "match": "\\bof\\b"
         },
