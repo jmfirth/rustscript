@@ -12,7 +12,7 @@ mod match_lower;
 mod stmt_lower;
 mod use_collector;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
@@ -60,7 +60,80 @@ struct FnSignature {
 }
 
 /// Map from function name to its throws signature.
-type FunctionSignatureMap = std::collections::HashMap<String, FnSignature>;
+type FunctionSignatureMap = HashMap<String, FnSignature>;
+
+/// Registry of generated union types, keyed by canonical enum name.
+///
+/// Tracks all union types encountered during lowering to ensure each distinct
+/// union produces exactly one enum definition. The canonical name is computed
+/// by sorting variant names alphabetically and joining with "Or".
+struct UnionRegistry {
+    /// Map from canonical enum name to its variant list.
+    unions: HashMap<String, Vec<(String, RustType)>>,
+}
+
+impl UnionRegistry {
+    /// Create an empty union registry.
+    fn new() -> Self {
+        Self {
+            unions: HashMap::new(),
+        }
+    }
+
+    /// Register a union type if not already known.
+    fn register(&mut self, name: &str, variants: &[(String, RustType)]) {
+        self.unions
+            .entry(name.to_owned())
+            .or_insert_with(|| variants.to_vec());
+    }
+
+    /// Generate all enum definitions and From impls for registered unions.
+    fn generate_items(&self) -> Vec<RustItem> {
+        let mut items = Vec::new();
+        // Sort by name for deterministic output
+        let mut names: Vec<&str> = self.unions.keys().map(String::as_str).collect();
+        names.sort_unstable();
+
+        for name in names {
+            let variants = &self.unions[name];
+
+            // Generate enum definition with tuple variants
+            let enum_variants: Vec<RustEnumVariant> = variants
+                .iter()
+                .map(|(variant_name, inner_ty)| RustEnumVariant {
+                    name: variant_name.clone(),
+                    fields: vec![],
+                    tuple_types: vec![inner_ty.clone()],
+                    span: None,
+                })
+                .collect();
+
+            let derives = derive_inference::infer_enum_derives(&enum_variants);
+
+            items.push(RustItem::Enum(RustEnumDef {
+                public: false,
+                name: name.to_owned(),
+                variants: enum_variants,
+                derives,
+                doc_comment: None,
+                span: None,
+            }));
+
+            // Generate From impls for each variant as raw Rust
+            for (variant_name, inner_ty) in variants {
+                let from_code = format!(
+                    "impl From<{inner_ty}> for {name} {{\n    \
+                     fn from(v: {inner_ty}) -> Self {{\n        \
+                     Self::{variant_name}(v)\n    \
+                     }}\n}}"
+                );
+                items.push(RustItem::RawRust(from_code));
+            }
+        }
+
+        items
+    }
+}
 
 /// The AST-to-IR transformer.
 ///
@@ -73,6 +146,8 @@ pub(crate) struct Transform {
     fn_signatures: FunctionSignatureMap,
     /// When true, disables Tier 2 borrow inference (all params stay Owned).
     no_borrow_inference: bool,
+    /// Registry of auto-generated union enum types encountered during lowering.
+    union_registry: UnionRegistry,
 }
 
 impl Transform {
@@ -84,6 +159,117 @@ impl Transform {
             type_registry: TypeRegistry::new(),
             fn_signatures: FunctionSignatureMap::new(),
             no_borrow_inference,
+            union_registry: UnionRegistry::new(),
+        }
+    }
+
+    /// Recursively register any generated union types found within a `RustType`.
+    fn register_union_type(&mut self, ty: &RustType) {
+        match ty {
+            RustType::GeneratedUnion { name, variants } => {
+                self.union_registry.register(name, variants);
+                for (_, inner_ty) in variants {
+                    self.register_union_type(inner_ty);
+                }
+            }
+            RustType::Option(inner) | RustType::ArcMutex(inner) => {
+                self.register_union_type(inner);
+            }
+            RustType::Result(ok, err) => {
+                self.register_union_type(ok);
+                self.register_union_type(err);
+            }
+            RustType::Generic(base, args) => {
+                self.register_union_type(base);
+                for arg in args {
+                    self.register_union_type(arg);
+                }
+            }
+            RustType::Tuple(types) => {
+                for ty in types {
+                    self.register_union_type(ty);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resolve a type annotation and register any union types it contains.
+    fn resolve_and_register_type(
+        &mut self,
+        ann: &ast::TypeAnnotation,
+        generic_names: &[String],
+        diags: &mut Vec<Diagnostic>,
+    ) -> RustType {
+        let ty_inner = resolve::resolve_type_annotation_with_generics(
+            ann,
+            &self.type_registry,
+            generic_names,
+            diags,
+        );
+        let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+        self.register_union_type(&rust_ty);
+        rust_ty
+    }
+
+    /// Pre-pass: scan all type annotations in the module and register any
+    /// general union types. This ensures enum definitions are generated before
+    /// the functions that use them.
+    fn register_union_types_in_module(&mut self, module: &ast::Module) {
+        for item in &module.items {
+            if let ast::ItemKind::Function(f) = &item.kind {
+                let generic_names = collect_generic_param_names(f.type_params.as_ref());
+                let mut diags = Vec::new();
+                // Scan parameter types
+                for p in &f.params {
+                    self.resolve_and_register_type(&p.type_ann, &generic_names, &mut diags);
+                }
+                // Scan return type
+                if let Some(rt) = &f.return_type
+                    && let Some(ann) = &rt.type_ann
+                {
+                    self.resolve_and_register_type(ann, &generic_names, &mut diags);
+                }
+                // Scan variable declarations in function body
+                self.scan_stmts_for_unions(&f.body.stmts, &generic_names);
+            }
+        }
+    }
+
+    /// Recursively scan statements for union type annotations to register.
+    fn scan_stmts_for_unions(&mut self, stmts: &[ast::Stmt], generic_names: &[String]) {
+        for stmt in stmts {
+            match stmt {
+                ast::Stmt::VarDecl(decl) => {
+                    if let Some(ann) = &decl.type_ann {
+                        let mut diags = Vec::new();
+                        self.resolve_and_register_type(ann, generic_names, &mut diags);
+                    }
+                }
+                ast::Stmt::If(if_stmt) => {
+                    self.scan_stmts_for_unions(&if_stmt.then_block.stmts, generic_names);
+                    if let Some(else_clause) = &if_stmt.else_clause {
+                        match else_clause {
+                            ast::ElseClause::Block(block) => {
+                                self.scan_stmts_for_unions(&block.stmts, generic_names);
+                            }
+                            ast::ElseClause::ElseIf(nested_if) => {
+                                self.scan_stmts_for_unions(
+                                    &nested_if.then_block.stmts,
+                                    generic_names,
+                                );
+                            }
+                        }
+                    }
+                }
+                ast::Stmt::While(w) => {
+                    self.scan_stmts_for_unions(&w.body.stmts, generic_names);
+                }
+                ast::Stmt::For(f) => {
+                    self.scan_stmts_for_unions(&f.body.stmts, generic_names);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -135,6 +321,10 @@ impl Transform {
                 self.register_fn_signature(f, &mut ctx);
             }
         }
+
+        // Pre-pass: scan all type annotations and register any general union types
+        // so their enum definitions will be generated.
+        self.register_union_types_in_module(module);
 
         let mut items: Vec<RustItem> = Vec::new();
         let mut import_uses: Vec<RustUseDecl> = Vec::new();
@@ -199,6 +389,15 @@ impl Transform {
                     items.push(lowered);
                 }
             }
+        }
+
+        // Generate auto-generated union enum definitions and From impls.
+        // These are prepended before user items so they are available to all functions.
+        let union_items = self.union_registry.generate_items();
+        if !union_items.is_empty() {
+            let mut all_items = union_items;
+            all_items.append(&mut items);
+            items = all_items;
         }
 
         // Collect use declarations by scanning generated items for HashMap/HashSet usage
@@ -529,6 +728,7 @@ impl Transform {
                 ast::EnumVariant::Simple(ident, span) => RustEnumVariant {
                     name: ident.name.clone(),
                     fields: vec![],
+                    tuple_types: vec![],
                     span: Some(*span),
                 },
                 ast::EnumVariant::Data {
@@ -556,6 +756,7 @@ impl Transform {
                     RustEnumVariant {
                         name: name.name.clone(),
                         fields: rust_fields,
+                        tuple_types: vec![],
                         span: Some(*span),
                     }
                 }

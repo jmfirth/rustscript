@@ -34,6 +34,11 @@ pub enum Type {
     ArcMutex(Box<Type>),
     /// A tuple type: `(T1, T2, ...)` — from `[T1, T2]`.
     Tuple(Vec<Type>),
+    /// A general union type: `string | i32`, `string | i32 | bool`.
+    /// Distinguished from `Option` (`T | null`). The members are the non-null
+    /// component types, sorted alphabetically by their canonical names for
+    /// deterministic enum name generation.
+    Union(Vec<Type>),
     /// Type could not be resolved — used for error recovery.
     Error,
 }

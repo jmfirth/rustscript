@@ -258,7 +258,17 @@ impl Emitter {
             self.set_span(variant.span);
             self.write_indent();
             self.write(&variant.name);
-            if variant.fields.is_empty() {
+            if !variant.tuple_types.is_empty() {
+                // Tuple-style variant: `Name(Type1, Type2)`
+                self.write("(");
+                for (i, ty) in variant.tuple_types.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&ty.to_string());
+                }
+                self.writeln("),");
+            } else if variant.fields.is_empty() {
                 self.writeln(",");
             } else {
                 self.writeln(" {");
@@ -291,7 +301,10 @@ impl Emitter {
     /// Simple enums (all variants fieldless) map each variant to its name.
     /// Data enums delegate to `Debug` formatting.
     fn emit_enum_display(&mut self, e: &RustEnumDef) {
-        let is_simple = e.variants.iter().all(|v| v.fields.is_empty());
+        let is_simple = e
+            .variants
+            .iter()
+            .all(|v| v.fields.is_empty() && v.tuple_types.is_empty());
 
         self.writeln("");
         self.write_indent();
@@ -3120,21 +3133,25 @@ fn main() {
                     RustEnumVariant {
                         name: "North".to_owned(),
                         fields: vec![],
+                        tuple_types: vec![],
                         span: None,
                     },
                     RustEnumVariant {
                         name: "South".to_owned(),
                         fields: vec![],
+                        tuple_types: vec![],
                         span: None,
                     },
                     RustEnumVariant {
                         name: "East".to_owned(),
                         fields: vec![],
+                        tuple_types: vec![],
                         span: None,
                     },
                     RustEnumVariant {
                         name: "West".to_owned(),
                         fields: vec![],
+                        tuple_types: vec![],
                         span: None,
                     },
                 ],
@@ -3170,6 +3187,7 @@ fn main() {
                             doc_comment: None,
                             span: None,
                         }],
+                        tuple_types: vec![],
                         span: None,
                     },
                     RustEnumVariant {
@@ -3190,6 +3208,7 @@ fn main() {
                                 span: None,
                             },
                         ],
+                        tuple_types: vec![],
                         span: None,
                     },
                 ],

@@ -40,7 +40,9 @@ pub(crate) fn infer_struct_derives(
 /// `Hash` in addition to `Debug` and `Clone`. Data enums derive based on the
 /// union of all variant field types.
 pub(crate) fn infer_enum_derives(variants: &[RustEnumVariant]) -> Vec<String> {
-    let is_simple = variants.iter().all(|v| v.fields.is_empty());
+    let is_simple = variants
+        .iter()
+        .all(|v| v.fields.is_empty() && v.tuple_types.is_empty());
 
     if is_simple {
         return vec![
@@ -53,10 +55,10 @@ pub(crate) fn infer_enum_derives(variants: &[RustEnumVariant]) -> Vec<String> {
         ];
     }
 
-    // Data enum: collect all field types across all variants
+    // Data enum: collect all field types across all variants (struct fields + tuple types)
     let field_types: Vec<&RustType> = variants
         .iter()
-        .flat_map(|v| v.fields.iter().map(|f| &f.ty))
+        .flat_map(|v| v.fields.iter().map(|f| &f.ty).chain(v.tuple_types.iter()))
         .collect();
 
     let mut derives = vec!["Debug".to_owned(), "Clone".to_owned()];
@@ -98,6 +100,9 @@ fn supports_partial_eq(ty: &RustType) -> bool {
             supports_partial_eq(base) && args.iter().all(supports_partial_eq)
         }
         RustType::Tuple(types) => types.iter().all(supports_partial_eq),
+        RustType::GeneratedUnion { variants, .. } => {
+            variants.iter().all(|(_, ty)| supports_partial_eq(ty))
+        }
         RustType::TypeParam(_)
         | RustType::ImplFn(_, _)
         | RustType::SelfType
@@ -131,6 +136,7 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::SelfType
         | RustType::Infer
         | RustType::ArcMutex(_) => false,
+        RustType::GeneratedUnion { variants, .. } => variants.iter().all(|(_, ty)| supports_eq(ty)),
         RustType::Tuple(types) => types.iter().all(supports_eq),
         RustType::Option(inner) => supports_eq(inner),
         RustType::Result(ok, err) => supports_eq(ok) && supports_eq(err),
@@ -180,11 +186,13 @@ mod tests {
             RustEnumVariant {
                 name: "North".to_owned(),
                 fields: vec![],
+                tuple_types: vec![],
                 span: None,
             },
             RustEnumVariant {
                 name: "South".to_owned(),
                 fields: vec![],
+                tuple_types: vec![],
                 span: None,
             },
         ];
@@ -209,6 +217,7 @@ mod tests {
                     doc_comment: None,
                     span: None,
                 }],
+                tuple_types: vec![],
                 span: None,
             },
             RustEnumVariant {
@@ -220,6 +229,7 @@ mod tests {
                     doc_comment: None,
                     span: None,
                 }],
+                tuple_types: vec![],
                 span: None,
             },
         ];
@@ -283,6 +293,54 @@ mod tests {
         assert!(derives.contains(&"Debug".to_owned()));
         assert!(derives.contains(&"Clone".to_owned()));
         assert!(!derives.contains(&"PartialEq".to_owned()));
+        assert!(!derives.contains(&"Eq".to_owned()));
+    }
+
+    // ---- Task 065: Tuple-variant enum derive inference ----
+
+    #[test]
+    fn test_derive_inference_tuple_variant_enum_with_eq_types() {
+        let variants = vec![
+            RustEnumVariant {
+                name: "String".to_owned(),
+                fields: vec![],
+                tuple_types: vec![RustType::String],
+                span: None,
+            },
+            RustEnumVariant {
+                name: "I32".to_owned(),
+                fields: vec![],
+                tuple_types: vec![RustType::I32],
+                span: None,
+            },
+        ];
+        let derives = infer_enum_derives(&variants);
+        assert!(derives.contains(&"Debug".to_owned()));
+        assert!(derives.contains(&"Clone".to_owned()));
+        assert!(derives.contains(&"PartialEq".to_owned()));
+        assert!(derives.contains(&"Eq".to_owned()));
+    }
+
+    #[test]
+    fn test_derive_inference_tuple_variant_enum_with_float_excludes_eq() {
+        let variants = vec![
+            RustEnumVariant {
+                name: "String".to_owned(),
+                fields: vec![],
+                tuple_types: vec![RustType::String],
+                span: None,
+            },
+            RustEnumVariant {
+                name: "F64".to_owned(),
+                fields: vec![],
+                tuple_types: vec![RustType::F64],
+                span: None,
+            },
+        ];
+        let derives = infer_enum_derives(&variants);
+        assert!(derives.contains(&"Debug".to_owned()));
+        assert!(derives.contains(&"Clone".to_owned()));
+        assert!(derives.contains(&"PartialEq".to_owned()));
         assert!(!derives.contains(&"Eq".to_owned()));
     }
 }

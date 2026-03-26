@@ -509,7 +509,8 @@ pub struct TypeAnnotation {
 /// `Named` covers primitive types (`i32`, `i64`, `f64`, `bool`, `string`) and
 /// user-defined types. `Void` represents the absence of a return value.
 /// `Generic` represents parameterized types like `Array<string>`.
-/// `Union` represents `T | null` syntax (only `T | null` is currently supported).
+/// `Union` represents union types: `T | null` lowers to `Option<T>`, and
+/// general unions like `string | i32` lower to auto-generated enum types.
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     /// A named type (e.g., `i32`, `bool`, `string`, or a user-defined name).
@@ -519,8 +520,9 @@ pub enum TypeKind {
     /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
     /// The `Ident` is the base type name; the `Vec` is the type arguments.
     Generic(Ident, Vec<TypeAnnotation>),
-    /// Union type: `T | null`. Only `T | null` is currently supported.
-    /// Lowers to `Option<T>` in Rust.
+    /// Union type: `T | null` or `string | i32` or `string | i32 | bool`.
+    /// `T | null` lowers to `Option<T>`, general unions lower to auto-generated
+    /// enum types with `From` impls.
     Union(Vec<TypeAnnotation>),
     /// Function type: `(i32, i32) => i32`.
     /// Lowers to `impl Fn(i32, i32) -> i32` in Rust.

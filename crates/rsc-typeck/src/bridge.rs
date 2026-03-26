@@ -35,8 +35,71 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
         ),
         Type::ArcMutex(inner) => RustType::ArcMutex(Box::new(type_to_rust_type(inner))),
         Type::Tuple(types) => RustType::Tuple(types.iter().map(type_to_rust_type).collect()),
+        Type::Union(members) => {
+            let variants: Vec<(String, RustType)> = members
+                .iter()
+                .map(|m| {
+                    let rust_ty = type_to_rust_type(m);
+                    let variant_name = union_variant_name(&rust_ty);
+                    (variant_name, rust_ty)
+                })
+                .collect();
+            let name = union_enum_name(&variants);
+            RustType::GeneratedUnion { name, variants }
+        }
         Type::Unit | Type::Error => RustType::Unit,
     }
+}
+
+/// Generate the `PascalCase` variant name for a union member type.
+///
+/// Maps `RustType::String` → `"String"`, `RustType::I32` → `"I32"`, etc.
+fn union_variant_name(ty: &RustType) -> String {
+    match ty {
+        RustType::I8 => "I8".to_owned(),
+        RustType::I16 => "I16".to_owned(),
+        RustType::I32 => "I32".to_owned(),
+        RustType::I64 => "I64".to_owned(),
+        RustType::U8 => "U8".to_owned(),
+        RustType::U16 => "U16".to_owned(),
+        RustType::U32 => "U32".to_owned(),
+        RustType::U64 => "U64".to_owned(),
+        RustType::F32 => "F32".to_owned(),
+        RustType::F64 => "F64".to_owned(),
+        RustType::Bool => "Bool".to_owned(),
+        RustType::String => "String".to_owned(),
+        RustType::Unit => "Unit".to_owned(),
+        RustType::Named(name)
+        | RustType::TypeParam(name)
+        | RustType::GeneratedUnion { name, .. } => name.clone(),
+        RustType::Option(inner) => format!("Option{}", union_variant_name(inner)),
+        RustType::Generic(base, _) => union_variant_name(base),
+        RustType::Tuple(types) => {
+            let parts: Vec<String> = types.iter().map(union_variant_name).collect();
+            format!("Tuple{}", parts.join(""))
+        }
+        RustType::Result(ok, err) => {
+            format!(
+                "Result{}{}",
+                union_variant_name(ok),
+                union_variant_name(err)
+            )
+        }
+        RustType::ImplFn(_, _) => "Fn".to_owned(),
+        RustType::SelfType => "Self_".to_owned(),
+        RustType::Infer => "Infer".to_owned(),
+        RustType::ArcMutex(inner) => format!("Shared{}", union_variant_name(inner)),
+    }
+}
+
+/// Generate the deterministic enum name for a union type.
+///
+/// Sorts variant names alphabetically and joins with `"Or"`.
+/// E.g., variants `[("String", _), ("I32", _)]` → `"I32OrString"`.
+fn union_enum_name(variants: &[(String, RustType)]) -> String {
+    let mut names: Vec<&str> = variants.iter().map(|(name, _)| name.as_str()).collect();
+    names.sort_unstable();
+    names.join("Or")
 }
 
 /// Convert a primitive type to the corresponding `RustType`.
@@ -225,5 +288,78 @@ mod tests {
                 RustType::Tuple(vec![RustType::I32, RustType::Bool])
             ])
         );
+    }
+
+    // ---- Task 065: General union types ----
+
+    #[test]
+    fn test_bridge_union_two_types_produces_generated_union() {
+        let ty = Type::Union(vec![Type::String, Type::Primitive(PrimitiveType::I32)]);
+        let result = type_to_rust_type(&ty);
+        match &result {
+            RustType::GeneratedUnion { name, variants } => {
+                // Name is sorted alphabetically: I32OrString
+                assert_eq!(name, "I32OrString");
+                assert_eq!(variants.len(), 2);
+                assert_eq!(variants[0].0, "String");
+                assert_eq!(variants[0].1, RustType::String);
+                assert_eq!(variants[1].0, "I32");
+                assert_eq!(variants[1].1, RustType::I32);
+            }
+            other => panic!("expected GeneratedUnion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bridge_union_three_types_produces_generated_union() {
+        let ty = Type::Union(vec![
+            Type::String,
+            Type::Primitive(PrimitiveType::I32),
+            Type::Primitive(PrimitiveType::Bool),
+        ]);
+        let result = type_to_rust_type(&ty);
+        match &result {
+            RustType::GeneratedUnion { name, variants } => {
+                // Name sorted: BoolOrI32OrString
+                assert_eq!(name, "BoolOrI32OrString");
+                assert_eq!(variants.len(), 3);
+            }
+            other => panic!("expected GeneratedUnion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bridge_union_name_is_deterministic_regardless_of_input_order() {
+        let ty1 = Type::Union(vec![Type::String, Type::Primitive(PrimitiveType::I32)]);
+        let ty2 = Type::Union(vec![Type::Primitive(PrimitiveType::I32), Type::String]);
+        let r1 = type_to_rust_type(&ty1);
+        let r2 = type_to_rust_type(&ty2);
+        match (&r1, &r2) {
+            (
+                RustType::GeneratedUnion { name: n1, .. },
+                RustType::GeneratedUnion { name: n2, .. },
+            ) => {
+                assert_eq!(
+                    n1, n2,
+                    "same union in different order should produce same name"
+                );
+            }
+            _ => panic!("expected GeneratedUnion"),
+        }
+    }
+
+    #[test]
+    fn test_bridge_union_display_shows_enum_name() {
+        let ty = Type::Union(vec![Type::String, Type::Primitive(PrimitiveType::I32)]);
+        let result = type_to_rust_type(&ty);
+        assert_eq!(result.to_string(), "I32OrString");
+    }
+
+    #[test]
+    fn test_union_variant_name_primitives() {
+        assert_eq!(union_variant_name(&RustType::String), "String");
+        assert_eq!(union_variant_name(&RustType::I32), "I32");
+        assert_eq!(union_variant_name(&RustType::Bool), "Bool");
+        assert_eq!(union_variant_name(&RustType::F64), "F64");
     }
 }

@@ -595,6 +595,20 @@ impl Transform {
                 a.span,
             );
         }
+        // When the parameter is a union type, wrap the argument with `.into()`
+        // so the From impl converts it to the generated union enum.
+        if let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
+            && matches!(param_ty, RustType::GeneratedUnion { .. })
+        {
+            let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+            return RustExpr::synthetic(RustExprKind::MethodCall {
+                receiver: Box::new(lowered),
+                method: "into".to_owned(),
+                type_args: vec![],
+                args: vec![],
+            });
+        }
+
         let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
 
         // Tier 2: apply callsite borrow transform

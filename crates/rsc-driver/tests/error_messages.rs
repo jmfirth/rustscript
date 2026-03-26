@@ -218,3 +218,31 @@ fn test_error_translation_box_dyn_becomes_trait_name() {
         "should not contain Box<dyn wrapper, got: {translated}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 065: Union enum name translation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_error_translation_union_enum_name_two_types() {
+    let rustc_stderr = "error[E0308]: mismatched types\n  expected I32OrString, found bool\n";
+
+    let translated = translate_rustc_errors(rustc_stderr, None, None, None);
+
+    assert!(
+        translated.contains("i32 | string"),
+        "should translate I32OrString to i32 | string, got: {translated}"
+    );
+}
+
+#[test]
+fn test_error_translation_union_enum_name_three_types() {
+    let rustc_stderr = "error: expected BoolOrI32OrString\n";
+
+    let translated = translate_rustc_errors(rustc_stderr, None, None, None);
+
+    assert!(
+        translated.contains("bool | i32 | string"),
+        "should translate BoolOrI32OrString to bool | i32 | string, got: {translated}"
+    );
+}

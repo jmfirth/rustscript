@@ -59,11 +59,21 @@ fn resolve_union_type(
     }
 
     if has_null {
-        let inner = non_null_types.into_iter().next().unwrap_or(Type::Unit);
+        let inner = if non_null_types.len() == 1 {
+            non_null_types.into_iter().next().unwrap_or(Type::Unit)
+        } else if non_null_types.is_empty() {
+            Type::Unit
+        } else {
+            // T1 | T2 | null → Option<Union(T1, T2)>
+            Type::Union(non_null_types)
+        };
         Type::Option(Box::new(inner))
-    } else {
-        // No null member — just return the first type (unsupported union)
+    } else if non_null_types.len() <= 1 {
+        // Single type — just return it
         non_null_types.into_iter().next().unwrap_or(Type::Unit)
+    } else {
+        // General union: string | i32, etc.
+        Type::Union(non_null_types)
     }
 }
 
@@ -651,5 +661,89 @@ mod tests {
         assert_eq!(map_collection_type_name("Map"), "HashMap");
         assert_eq!(map_collection_type_name("Set"), "HashSet");
         assert_eq!(map_collection_type_name("Container"), "Container");
+    }
+
+    // ---- Task 065: General union types ----
+
+    // Test T065-1: string | i32 (no null) produces Type::Union, not Option
+    #[test]
+    fn test_resolve_general_union_produces_union_type() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Union(vec![
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 9, 12)),
+                    span: span(9, 12),
+                },
+            ]),
+            span: span(0, 12),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert!(diags.is_empty());
+        match &ty {
+            Type::Union(members) => {
+                assert_eq!(members.len(), 2);
+                assert_eq!(members[0], Type::String);
+                assert_eq!(members[1], Type::Primitive(PrimitiveType::I32));
+            }
+            other => panic!("expected Union, got {other:?}"),
+        }
+    }
+
+    // Test T065-2: string | null still produces Option<String>
+    #[test]
+    fn test_resolve_union_with_null_still_produces_option() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Union(vec![
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("null", 9, 13)),
+                    span: span(9, 13),
+                },
+            ]),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert!(diags.is_empty());
+        assert_eq!(ty, Type::Option(Box::new(Type::String)));
+    }
+
+    // Test T065-3: string | i32 | bool produces three-member Union
+    #[test]
+    fn test_resolve_three_type_union() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Union(vec![
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 9, 12)),
+                    span: span(9, 12),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("bool", 15, 19)),
+                    span: span(15, 19),
+                },
+            ]),
+            span: span(0, 19),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert!(diags.is_empty());
+        match &ty {
+            Type::Union(members) => {
+                assert_eq!(members.len(), 3);
+            }
+            other => panic!("expected Union, got {other:?}"),
+        }
     }
 }
