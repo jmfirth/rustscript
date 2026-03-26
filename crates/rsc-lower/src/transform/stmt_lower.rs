@@ -25,16 +25,21 @@ use super::{
 
 /// Check whether a lowered expression already returns `Option<T>`.
 ///
-/// Detects `IteratorChain` with `Find` terminal (which emits `.find().cloned()`
-/// returning `Option<T>`) to prevent double-wrapping in `Some()`.
-fn returns_option(expr: &RustExpr) -> bool {
-    matches!(
-        &expr.kind,
+/// Detects expressions that already produce `Option<T>`, preventing
+/// double-wrapping in `Some()`. Covers:
+/// - `IteratorChain` with `Find` terminal (`.find().cloned()`)
+/// - Variables whose type in context is `Option<T>` (e.g., result of `.find()`)
+fn returns_option(expr: &RustExpr, ctx: &LoweringContext) -> bool {
+    match &expr.kind {
         RustExprKind::IteratorChain {
             terminal: IteratorTerminal::Find(..),
             ..
-        }
-    )
+        } => true,
+        RustExprKind::Ident(name) => ctx
+            .lookup_variable(name)
+            .is_some_and(|info| matches!(info.ty, RustType::Option(_))),
+        _ => false,
+    }
 }
 
 /// If the expression is an identifier that is a reference variable
@@ -245,8 +250,12 @@ impl Transform {
         } else if has_explicit_annotation {
             // User wrote an explicit type annotation — always include it
             Some(ty)
-        } else if is_default_literal_type(&decl.init, &ty) {
-            // Type matches the literal's default — omit for cleaner output
+        } else if is_default_literal_type(&decl.init, &ty)
+            && !matches!(ty, RustType::F32 | RustType::F64)
+        {
+            // Type matches the literal's default — omit for cleaner output.
+            // Exception: float types must keep the annotation because Rust's
+            // `{float}` is ambiguous and can't call methods like .floor().
             None
         } else if !type_inferred_from_literal {
             // Init is not a literal (e.g., a function call) — let Rust infer the type
@@ -315,7 +324,7 @@ impl Transform {
                 // Bug 3: If the lowered expression is an IteratorChain with a
                 // Find terminal, it already returns Option<T> (via .find().cloned()).
                 // Don't double-wrap in Some().
-                if returns_option(&lowered) {
+                if returns_option(&lowered, ctx) {
                     return lowered;
                 }
 

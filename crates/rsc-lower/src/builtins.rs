@@ -541,8 +541,20 @@ fn lower_split(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr 
 /// `str` methods take `&str` patterns, and Rust can auto-deref `&String`
 /// to `&str`. Stripping the wrapper produces cleaner output (e.g.,
 /// `starts_with("A")` instead of `starts_with("A".to_string())`).
+/// For non-literal String args (variables), adds `&` to borrow as `&str`.
 fn strip_to_string_args(args: Vec<RustExpr>) -> Vec<RustExpr> {
-    args.into_iter().map(strip_to_string).collect()
+    args.into_iter()
+        .map(|arg| {
+            let stripped = strip_to_string(arg);
+            // If the arg is still a String variable (not a literal), borrow it
+            // so Rust's str methods get &str via auto-deref
+            if matches!(stripped.kind, RustExprKind::Ident(_)) {
+                RustExpr::synthetic(RustExprKind::Borrow(Box::new(stripped)))
+            } else {
+                stripped
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
