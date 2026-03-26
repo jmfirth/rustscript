@@ -10,6 +10,7 @@
 //! `.rs` code in `.rsc-build/`, translating positions and names between
 //! `RustScript` and Rust.
 
+pub mod builtin_hover;
 pub mod diagnostics;
 pub mod error;
 pub mod name_map;

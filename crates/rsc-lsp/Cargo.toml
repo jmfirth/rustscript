@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 rsc-syntax = { path = "../rsc-syntax" }
 rsc-parser = { path = "../rsc-parser" }
+rsc-lower = { path = "../rsc-lower" }
 rsc-driver = { path = "../rsc-driver" }
 rsc-fmt = { path = "../rsc-fmt" }
 tower-lsp = "0.20"

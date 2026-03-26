@@ -1,0 +1,82 @@
+// RustScript Showcase — demonstrates core language features
+
+type User = {
+  name: string,
+  age: u32,
+  email: string,
+}
+
+type Role = "admin" | "user" | "guest";
+
+interface Greetable {
+  greet(): string;
+}
+
+class UserService {
+  private prefix: string;
+
+  constructor(prefix: string) {
+    this.prefix = prefix;
+  }
+
+  formatUser(user: User): string {
+    return `${this.prefix}: ${user.name} (${user.age})`;
+  }
+}
+
+function findUser(name: string): User | null {
+  if (name == "Alice") {
+    return { name: "Alice", age: 30, email: "alice@example.com" };
+  }
+  return null;
+}
+
+function getUser(name: string): User throws string {
+  const user = findUser(name);
+  if (user === null) {
+    throw `user not found: ${name}`;
+  }
+  return user;
+}
+
+function describeRole(role: Role): string {
+  switch (role) {
+    case "admin": return "Administrator";
+    case "user": return "Regular User";
+    case "guest": return "Guest Access";
+  }
+}
+
+function main() {
+  // Type-safe error handling
+  try {
+    const user = getUser("Alice");
+    console.log(`Found: ${user.name}, age ${user.age}`);
+  } catch (err: string) {
+    console.log(err);
+  }
+
+  // Null safety
+  const maybeUser = findUser("Bob");
+  const name = maybeUser?.name ?? "Anonymous";
+  console.log(`Name: ${name}`);
+
+  // Enums and pattern matching
+  console.log(describeRole("admin"));
+
+  // String methods
+  const greeting = "hello world";
+  console.log(greeting.toUpperCase());
+  console.log(greeting.includes("world"));
+
+  // Collections and iterators
+  const numbers: Array<i64> = [1, 2, 3, 4, 5];
+  const doubled = numbers.map(n => n * 2);
+  const sum = numbers.reduce((acc, n) => acc + n, 0);
+  console.log(`Sum: ${sum}`);
+
+  // For-of loops
+  for (const n of doubled) {
+    console.log(n);
+  }
+}

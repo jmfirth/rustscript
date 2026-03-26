@@ -5,6 +5,7 @@
 //! When available, proxies definition and completion requests through
 //! rust-analyzer running on the generated `.rs` code.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer};
 
+use crate::builtin_hover;
 use crate::diagnostics;
 use crate::name_map;
 use crate::position_map::PositionMap;
@@ -29,6 +31,19 @@ use crate::ra_proxy::RustAnalyzerProxy;
 
 /// Debounce delay for recompilation after document changes.
 const DEBOUNCE_MS: u64 = 300;
+
+/// Cached type information from a successful compilation.
+///
+/// Stores variable type information extracted during lowering, keyed by
+/// variable name. Used to provide type-aware hover information without
+/// re-compiling on every hover request.
+#[derive(Debug, Clone)]
+pub struct CachedCompileInfo {
+    /// Map of variable name to its inferred `RustScript` type string.
+    pub variable_types: HashMap<String, String>,
+    /// Map of function name to its formatted signature.
+    pub function_signatures: HashMap<String, String>,
+}
 
 /// The `RustScript` language server.
 ///
@@ -44,7 +59,9 @@ pub struct RscLanguageServer {
     /// Per-document notification channels for debouncing.
     debounce_notifiers: DashMap<Url, Arc<Notify>>,
     /// Position maps per document (built after compilation).
-    position_maps: DashMap<Url, PositionMap>,
+    position_maps: Arc<DashMap<Url, PositionMap>>,
+    /// Cached compile information per document for hover type lookups.
+    compile_cache: DashMap<Url, CachedCompileInfo>,
     /// Rust-analyzer proxy (initialized on first successful compilation).
     ra_proxy: RwLock<Option<RustAnalyzerProxy>>,
     /// Project build directory (`.rsc-build/`).
@@ -59,7 +76,8 @@ impl RscLanguageServer {
             client,
             documents: DashMap::new(),
             debounce_notifiers: DashMap::new(),
-            position_maps: DashMap::new(),
+            position_maps: Arc::new(DashMap::new()),
+            compile_cache: DashMap::new(),
             ra_proxy: RwLock::new(None),
             build_dir: RwLock::new(None),
         }
@@ -74,7 +92,19 @@ impl RscLanguageServer {
     async fn publish_diagnostics(&self, uri: &Url, source: &str) {
         let lsp_diagnostics = diagnostics::collect_diagnostics(source);
 
-        // Also run the full compilation to build the position map.
+        // Build type cache from a parse + lowering pass (extracts variable types).
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, parse_diags) = rsc_parser::parse(source, file_id);
+        let has_parse_errors = parse_diags
+            .iter()
+            .any(|d| matches!(d.severity, rsc_syntax::diagnostic::Severity::Error));
+
+        if !has_parse_errors {
+            let cache_info = build_compile_cache(&module);
+            self.compile_cache.insert(uri.clone(), cache_info);
+        }
+
+        // Run the full compilation to build the position map.
         let compile_result = rsc_driver::compile_source(source, "lsp_input.rts");
         if !compile_result.has_errors {
             // Build a position map from the source map.
@@ -169,6 +199,8 @@ impl RscLanguageServer {
 
         let client = self.client.clone();
         let documents = self.documents.clone();
+        let compile_cache = self.compile_cache.clone();
+        let position_maps = Arc::clone(&self.position_maps);
         let debounce_notify = notify;
 
         tokio::spawn(async move {
@@ -183,7 +215,34 @@ impl RscLanguageServer {
 
             // Compile and publish diagnostics.
             if let Some(source) = documents.get(&uri) {
-                let lsp_diagnostics = diagnostics::collect_diagnostics(&source);
+                let source_text = source.clone();
+                drop(source);
+
+                let lsp_diagnostics = diagnostics::collect_diagnostics(&source_text);
+
+                // Update the compile cache with type information.
+                let file_id = rsc_syntax::source::FileId(0);
+                let (module, parse_diags) = rsc_parser::parse(&source_text, file_id);
+                let has_parse_errors = parse_diags
+                    .iter()
+                    .any(|d| matches!(d.severity, rsc_syntax::diagnostic::Severity::Error));
+
+                if !has_parse_errors {
+                    let cache_info = build_compile_cache(&module);
+                    compile_cache.insert(uri.clone(), cache_info);
+                }
+
+                // Also update position maps from compilation.
+                let compile_result = rsc_driver::compile_source(&source_text, "lsp_input.rts");
+                if !compile_result.has_errors {
+                    let position_map = PositionMap::new(
+                        compile_result.source_map_lines,
+                        source_text,
+                        compile_result.rust_source.clone(),
+                    );
+                    position_maps.insert(uri.clone(), position_map);
+                }
+
                 client.publish_diagnostics(uri, lsp_diagnostics, None).await;
             }
         });
@@ -340,7 +399,10 @@ impl LanguageServer for RscLanguageServer {
             let file_id = rsc_syntax::source::FileId(0);
             let (module, _) = rsc_parser::parse(&source_text, file_id);
 
-            if let Some(info) = find_hover_info(&module, offset) {
+            // Get the cached compile info for type-aware hover.
+            let cache = self.compile_cache.get(uri).map(|c| c.clone());
+
+            if let Some(info) = find_hover_info(&module, offset, cache.as_ref()) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -512,7 +574,11 @@ fn translate_completion_response(response: &serde_json::Value) -> Option<Complet
 /// - Variable declarations (const/let): shows `const name: Type` or `let name: Type`
 /// - Parameters: shows `param: Type`
 #[must_use]
-fn find_hover_info(module: &rsc_syntax::ast::Module, offset: u32) -> Option<String> {
+fn find_hover_info(
+    module: &rsc_syntax::ast::Module,
+    offset: u32,
+    cache: Option<&CachedCompileInfo>,
+) -> Option<String> {
     use rsc_syntax::ast::ItemKind;
     use rsc_syntax::span::BytePos;
 
@@ -527,39 +593,45 @@ fn find_hover_info(module: &rsc_syntax::ast::Module, offset: u32) -> Option<Stri
             ItemKind::Function(func) => {
                 // Check if cursor is on the function name
                 if func.name.span.contains(pos) {
-                    return Some(format_function_signature(func));
+                    let sig = format_function_signature(func);
+                    return Some(format!("```rustscript\n{sig}\n```"));
                 }
 
                 // Check if cursor is on a parameter
                 for param in &func.params {
                     if param.span.contains(pos) {
-                        return Some(format_param(param));
+                        let p = format_param(param);
+                        return Some(format!("```rustscript\n(parameter) {p}\n```"));
                     }
                 }
 
                 // Check statements in the body for variable declarations
-                if let Some(info) = find_hover_in_stmts(&func.body.stmts, pos) {
+                if let Some(info) = find_hover_in_stmts(&func.body.stmts, pos, cache) {
                     return Some(info);
                 }
             }
             ItemKind::TypeDef(td) => {
                 if td.name.span.contains(pos) {
-                    return Some(format!("type {}", td.name.name));
+                    let hover = format_typedef_hover(td);
+                    return Some(format!("```rustscript\n{hover}\n```"));
                 }
             }
             ItemKind::EnumDef(ed) => {
                 if ed.name.span.contains(pos) {
-                    return Some(format!("enum {}", ed.name.name));
+                    let hover = format_enum_hover(ed);
+                    return Some(format!("```rustscript\n{hover}\n```"));
                 }
             }
             ItemKind::Interface(iface) => {
                 if iface.name.span.contains(pos) {
-                    return Some(format!("interface {}", iface.name.name));
+                    let hover = format_interface_hover(iface);
+                    return Some(format!("```rustscript\n{hover}\n```"));
                 }
             }
             ItemKind::Class(class) => {
                 if class.name.span.contains(pos) {
-                    return Some(format!("class {}", class.name.name));
+                    let hover = format_class_hover(class);
+                    return Some(format!("```rustscript\n{hover}\n```"));
                 }
             }
             _ => {}
@@ -593,6 +665,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
 fn find_hover_in_stmts(
     stmts: &[rsc_syntax::ast::Stmt],
     pos: rsc_syntax::span::BytePos,
+    cache: Option<&CachedCompileInfo>,
 ) -> Option<String> {
     use rsc_syntax::ast::{ElseClause, Stmt, VarBinding};
 
@@ -603,31 +676,49 @@ fn find_hover_in_stmts(
 
         match stmt {
             Stmt::VarDecl(decl) => {
-                if decl.name.span.contains(pos) || decl.span.contains(pos) {
+                if decl.name.span.contains(pos) {
                     let binding = match decl.binding {
                         VarBinding::Const => "const",
                         VarBinding::Let => "let",
                     };
-                    let type_str = decl
-                        .type_ann
-                        .as_ref()
-                        .map_or_else(|| "(inferred)".to_owned(), format_type);
-                    return Some(format!("{binding} {}: {type_str}", decl.name.name));
+                    let type_str = if let Some(type_ann) = &decl.type_ann {
+                        format_type(type_ann)
+                    } else if let Some(ci) = cache
+                        && let Some(t) = ci.variable_types.get(&decl.name.name)
+                    {
+                        t.clone()
+                    } else {
+                        "(inferred)".to_owned()
+                    };
+                    return Some(format!(
+                        "```rustscript\n{binding} {}: {type_str}\n```",
+                        decl.name.name
+                    ));
+                }
+                // Walk into the init expression for identifier/method hover.
+                if let Some(info) = find_hover_in_expr(&decl.init, pos, cache) {
+                    return Some(info);
+                }
+            }
+            Stmt::Expr(expr) => {
+                if let Some(info) = find_hover_in_expr(expr, pos, cache) {
+                    return Some(info);
                 }
             }
             Stmt::If(if_stmt) => {
-                if let Some(info) = find_hover_in_stmts(&if_stmt.then_block.stmts, pos) {
+                if let Some(info) = find_hover_in_stmts(&if_stmt.then_block.stmts, pos, cache) {
                     return Some(info);
                 }
                 if let Some(else_clause) = &if_stmt.else_clause {
                     match else_clause {
                         ElseClause::Block(block) => {
-                            if let Some(info) = find_hover_in_stmts(&block.stmts, pos) {
+                            if let Some(info) = find_hover_in_stmts(&block.stmts, pos, cache) {
                                 return Some(info);
                             }
                         }
                         ElseClause::ElseIf(else_if) => {
-                            if let Some(info) = find_hover_in_stmts(&else_if.then_block.stmts, pos)
+                            if let Some(info) =
+                                find_hover_in_stmts(&else_if.then_block.stmts, pos, cache)
                             {
                                 return Some(info);
                             }
@@ -636,12 +727,12 @@ fn find_hover_in_stmts(
                 }
             }
             Stmt::While(while_stmt) => {
-                if let Some(info) = find_hover_in_stmts(&while_stmt.body.stmts, pos) {
+                if let Some(info) = find_hover_in_stmts(&while_stmt.body.stmts, pos, cache) {
                     return Some(info);
                 }
             }
             Stmt::For(for_stmt) => {
-                if let Some(info) = find_hover_in_stmts(&for_stmt.body.stmts, pos) {
+                if let Some(info) = find_hover_in_stmts(&for_stmt.body.stmts, pos, cache) {
                     return Some(info);
                 }
             }
@@ -691,6 +782,84 @@ fn format_param(param: &rsc_syntax::ast::Param) -> String {
     format!("{}: {}", param.name.name, format_type(&param.type_ann))
 }
 
+/// Format optional type parameters for display: `<T, U extends Comparable>`.
+fn format_type_params(type_params: Option<&rsc_syntax::ast::TypeParams>) -> String {
+    match type_params {
+        Some(tp) if !tp.params.is_empty() => {
+            let params: Vec<String> = tp
+                .params
+                .iter()
+                .map(|p| {
+                    if let Some(constraint) = &p.constraint {
+                        format!("{} extends {}", p.name.name, format_type(constraint))
+                    } else {
+                        p.name.name.clone()
+                    }
+                })
+                .collect();
+            format!("<{}>", params.join(", "))
+        }
+        _ => String::new(),
+    }
+}
+
+/// Format a type definition for hover: `type User = { name: string, age: u32 }`.
+fn format_typedef_hover(td: &rsc_syntax::ast::TypeDef) -> String {
+    let tp = format_type_params(td.type_params.as_ref());
+    let fields: Vec<String> = td
+        .fields
+        .iter()
+        .map(|f| format!("{}: {}", f.name.name, format_type(&f.type_ann)))
+        .collect();
+    if fields.is_empty() {
+        format!("type {}{tp}", td.name.name)
+    } else {
+        format!("type {}{tp} = {{ {} }}", td.name.name, fields.join(", "))
+    }
+}
+
+/// Format an enum definition for hover.
+fn format_enum_hover(ed: &rsc_syntax::ast::EnumDef) -> String {
+    use rsc_syntax::ast::EnumVariant;
+    let variants: Vec<String> = ed
+        .variants
+        .iter()
+        .map(|v| match v {
+            EnumVariant::Simple(ident, _) => format!("\"{}\"", ident.name),
+            EnumVariant::Data { name, fields, .. } => {
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.name.name, format_type(&f.type_ann)))
+                    .collect();
+                format!("{{ kind: \"{}\", {} }}", name.name, field_strs.join(", "))
+            }
+        })
+        .collect();
+    if variants.is_empty() {
+        format!("enum {}", ed.name.name)
+    } else {
+        format!("type {} = {}", ed.name.name, variants.join(" | "))
+    }
+}
+
+/// Format an interface for hover: `interface Printable<T>`.
+fn format_interface_hover(iface: &rsc_syntax::ast::InterfaceDef) -> String {
+    let tp = format_type_params(iface.type_params.as_ref());
+    format!("interface {}{tp}", iface.name.name)
+}
+
+/// Format a class for hover: `class MyClass implements Trait`.
+fn format_class_hover(class: &rsc_syntax::ast::ClassDef) -> String {
+    let tp = format_type_params(class.type_params.as_ref());
+    let implements = if class.implements.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = class.implements.iter().map(|i| i.name.as_str()).collect();
+        format!(" implements {}", names.join(", "))
+    };
+    format!("class {}{tp}{implements}", class.name.name)
+}
+
 /// Format a type annotation to a display string.
 fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
     use rsc_syntax::ast::TypeKind;
@@ -715,6 +884,292 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         }
         TypeKind::Inferred => "(inferred)".to_owned(),
         TypeKind::Shared(inner) => format!("shared<{}>", format_type(inner)),
+    }
+}
+
+/// Walk an expression tree to find hover-relevant nodes at the given position.
+#[allow(clippy::too_many_lines)]
+fn find_hover_in_expr(
+    expr: &rsc_syntax::ast::Expr,
+    pos: rsc_syntax::span::BytePos,
+    cache: Option<&CachedCompileInfo>,
+) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+
+    if !expr.span.contains(pos) {
+        return None;
+    }
+
+    match &expr.kind {
+        ExprKind::Ident(ident) if ident.span.contains(pos) => {
+            if let Some(hover) = builtin_hover::lookup_identifier(&ident.name) {
+                return Some(hover.to_owned());
+            }
+            if let Some(ci) = cache
+                && let Some(type_str) = ci.variable_types.get(&ident.name)
+            {
+                return Some(format!("```rustscript\n{}: {type_str}\n```", ident.name));
+            }
+            None
+        }
+        ExprKind::MethodCall(mc) => {
+            if mc.method.span.contains(pos) {
+                let receiver_type = match &mc.object.kind {
+                    ExprKind::Ident(ident) => builtin_hover::classify_receiver(&ident.name)
+                        .map(String::from)
+                        .or_else(|| {
+                            cache
+                                .and_then(|ci| ci.variable_types.get(&ident.name))
+                                .and_then(|ty| rust_type_to_builtin_category(ty))
+                        }),
+                    _ => None,
+                };
+                if let Some(recv) = &receiver_type
+                    && let Some(hover) = builtin_hover::lookup_method(recv, &mc.method.name)
+                {
+                    return Some(hover.to_owned());
+                }
+                return Some(format!("```rustscript\n.{}()\n```", mc.method.name));
+            }
+            if let Some(info) = find_hover_in_expr(&mc.object, pos, cache) {
+                return Some(info);
+            }
+            for arg in &mc.args {
+                if let Some(info) = find_hover_in_expr(arg, pos, cache) {
+                    return Some(info);
+                }
+            }
+            None
+        }
+        ExprKind::Call(call) => {
+            if call.callee.span.contains(pos) {
+                if let Some(hover) = builtin_hover::lookup_identifier(&call.callee.name) {
+                    return Some(hover.to_owned());
+                }
+                if let Some(ci) = cache
+                    && let Some(sig) = ci.function_signatures.get(&call.callee.name)
+                {
+                    return Some(format!("```rustscript\n{sig}\n```"));
+                }
+            }
+            for arg in &call.args {
+                if let Some(info) = find_hover_in_expr(arg, pos, cache) {
+                    return Some(info);
+                }
+            }
+            None
+        }
+        ExprKind::NullLit => Some(
+            builtin_hover::lookup_identifier("null")
+                .unwrap_or("null")
+                .to_owned(),
+        ),
+        ExprKind::BoolLit(true) => Some(
+            builtin_hover::lookup_identifier("true")
+                .unwrap_or("true")
+                .to_owned(),
+        ),
+        ExprKind::BoolLit(false) => Some(
+            builtin_hover::lookup_identifier("false")
+                .unwrap_or("false")
+                .to_owned(),
+        ),
+        ExprKind::This => Some(
+            builtin_hover::lookup_identifier("this")
+                .unwrap_or("this")
+                .to_owned(),
+        ),
+        ExprKind::IntLit(v) => Some(format!("```rustscript\n{v}: i64\n```")),
+        ExprKind::FloatLit(v) => Some(format!("```rustscript\n{v}: f64\n```")),
+        ExprKind::StringLit(_) => Some("```rustscript\nstring\n```".to_owned()),
+        ExprKind::Binary(bin) => {
+            if let Some(info) = find_hover_in_expr(&bin.left, pos, cache) {
+                return Some(info);
+            }
+            find_hover_in_expr(&bin.right, pos, cache)
+        }
+        ExprKind::Unary(un) => find_hover_in_expr(&un.operand, pos, cache),
+        ExprKind::Paren(inner) => find_hover_in_expr(inner, pos, cache),
+        ExprKind::FieldAccess(fa) => {
+            if fa.field.span.contains(pos) {
+                return Some(format!("```rustscript\n.{}\n```", fa.field.name));
+            }
+            find_hover_in_expr(&fa.object, pos, cache)
+        }
+        ExprKind::Assign(assign) => find_hover_in_expr(&assign.value, pos, cache),
+        ExprKind::Index(idx) => {
+            if let Some(info) = find_hover_in_expr(&idx.object, pos, cache) {
+                return Some(info);
+            }
+            find_hover_in_expr(&idx.index, pos, cache)
+        }
+        ExprKind::ArrayLit(elems) => {
+            for elem in elems {
+                if let Some(info) = find_hover_in_expr(elem, pos, cache) {
+                    return Some(info);
+                }
+            }
+            None
+        }
+        ExprKind::Await(inner) | ExprKind::Throw(inner) | ExprKind::Shared(inner) => {
+            find_hover_in_expr(inner, pos, cache)
+        }
+        ExprKind::TemplateLit(tl) => {
+            for part in &tl.parts {
+                if let rsc_syntax::ast::TemplatePart::Expr(expr) = part
+                    && let Some(info) = find_hover_in_expr(expr, pos, cache)
+                {
+                    return Some(info);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Map a Rust type string from the compile cache to a builtin category for method lookup.
+fn rust_type_to_builtin_category(rust_type: &str) -> Option<String> {
+    if rust_type == "String" || rust_type == "string" {
+        Some("string".to_owned())
+    } else if rust_type.starts_with("Vec<") || rust_type.starts_with("Array<") {
+        Some("array".to_owned())
+    } else {
+        None
+    }
+}
+
+/// Build a [`CachedCompileInfo`] by lowering the parsed AST.
+fn build_compile_cache(module: &rsc_syntax::ast::Module) -> CachedCompileInfo {
+    let lower_result = rsc_lower::lower(module);
+    let mut variable_types = HashMap::new();
+    let mut function_signatures = HashMap::new();
+
+    for item in &lower_result.ir.items {
+        match item {
+            rsc_syntax::rust_ir::RustItem::Function(func) => {
+                let sig = format_rust_function_sig(func);
+                function_signatures.insert(func.name.clone(), sig);
+                extract_var_types_from_stmts(&func.body.stmts, &mut variable_types);
+            }
+            rsc_syntax::rust_ir::RustItem::Struct(s) => {
+                let fields: Vec<String> = s
+                    .fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.name, rust_type_to_rts_type(&f.ty)))
+                    .collect();
+                let info = format!("type {} = {{ {} }}", s.name, fields.join(", "));
+                variable_types.insert(s.name.clone(), info);
+            }
+            _ => {}
+        }
+    }
+
+    // Infer literal types for variables without annotations.
+    for item in &module.items {
+        if let rsc_syntax::ast::ItemKind::Function(func) = &item.kind {
+            extract_inferred_var_types(&func.body.stmts, &mut variable_types);
+        }
+    }
+
+    CachedCompileInfo {
+        variable_types,
+        function_signatures,
+    }
+}
+
+/// Extract inferred types from AST statements.
+fn extract_inferred_var_types(
+    stmts: &[rsc_syntax::ast::Stmt],
+    types: &mut HashMap<String, String>,
+) {
+    use rsc_syntax::ast::Stmt;
+    for stmt in stmts {
+        if let Stmt::VarDecl(decl) = stmt
+            && decl.type_ann.is_none()
+            && !types.contains_key(&decl.name.name)
+            && let Some(type_str) = infer_literal_type_string(&decl.init.kind)
+        {
+            types.insert(decl.name.name.clone(), type_str);
+        }
+    }
+}
+
+/// Infer a `RustScript` type string from a literal expression kind.
+fn infer_literal_type_string(kind: &rsc_syntax::ast::ExprKind) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+    match kind {
+        ExprKind::IntLit(_) => Some("i64".to_owned()),
+        ExprKind::FloatLit(_) => Some("f64".to_owned()),
+        ExprKind::StringLit(_) | ExprKind::TemplateLit(_) => Some("string".to_owned()),
+        ExprKind::BoolLit(_) => Some("boolean".to_owned()),
+        ExprKind::NullLit => Some("null".to_owned()),
+        ExprKind::ArrayLit(_) => Some("Array<_>".to_owned()),
+        _ => None,
+    }
+}
+
+/// Format a Rust IR function signature as a `RustScript` signature string.
+fn format_rust_function_sig(func: &rsc_syntax::rust_ir::RustFnDecl) -> String {
+    let mut sig = String::new();
+    if func.is_async {
+        sig.push_str("async ");
+    }
+    sig.push_str("function ");
+    sig.push_str(&func.name);
+    sig.push('(');
+    for (i, param) in func.params.iter().enumerate() {
+        if i > 0 {
+            sig.push_str(", ");
+        }
+        sig.push_str(&param.name);
+        sig.push_str(": ");
+        sig.push_str(&rust_type_to_rts_type(&param.ty));
+    }
+    sig.push(')');
+    if let Some(ret_type) = &func.return_type {
+        sig.push_str(": ");
+        sig.push_str(&rust_type_to_rts_type(ret_type));
+    }
+    sig
+}
+
+/// Convert a Rust IR type to a `RustScript` display string.
+///
+/// Delegates to [`name_map::rust_type_to_rts_display`] — the single authoritative
+/// translation from Rust IR types to `RustScript` display syntax.
+fn rust_type_to_rts_type(ty: &rsc_syntax::rust_ir::RustType) -> String {
+    name_map::rust_type_to_rts_display(ty)
+}
+
+/// Extract variable types from Rust IR statements into the type map.
+fn extract_var_types_from_stmts(
+    stmts: &[rsc_syntax::rust_ir::RustStmt],
+    types: &mut HashMap<String, String>,
+) {
+    use rsc_syntax::rust_ir::{RustElse, RustStmt};
+    for stmt in stmts {
+        match stmt {
+            RustStmt::Let(let_stmt) => {
+                if let Some(ty) = &let_stmt.ty {
+                    types.insert(let_stmt.name.clone(), rust_type_to_rts_type(ty));
+                }
+            }
+            RustStmt::If(if_stmt) => {
+                extract_var_types_from_stmts(&if_stmt.then_block.stmts, types);
+                if let Some(else_clause) = &if_stmt.else_clause {
+                    match else_clause {
+                        RustElse::Block(block) => extract_var_types_from_stmts(&block.stmts, types),
+                        RustElse::ElseIf(else_if) => {
+                            extract_var_types_from_stmts(&else_if.then_block.stmts, types);
+                        }
+                    }
+                }
+            }
+            RustStmt::While(w) => extract_var_types_from_stmts(&w.body.stmts, types),
+            RustStmt::ForIn(f) => extract_var_types_from_stmts(&f.body.stmts, types),
+            _ => {}
+        }
     }
 }
 
@@ -765,7 +1220,7 @@ mod tests {
         let (module, _) = rsc_parser::parse(source, file_id);
 
         // "add" starts at offset 9
-        let info = find_hover_info(&module, 9);
+        let info = find_hover_info(&module, 9, None);
         assert!(info.is_some(), "should find hover info for function name");
         let text = info.unwrap();
         assert!(
@@ -785,7 +1240,7 @@ mod tests {
         let (module, _) = rsc_parser::parse(source, file_id);
 
         // "x" is around offset 13
-        let info = find_hover_info(&module, 13);
+        let info = find_hover_info(&module, 13, None);
         assert!(info.is_some(), "should find hover info for parameter");
         let text = info.unwrap();
         assert!(text.contains("x: i32"), "should show param type: {text}");
@@ -799,7 +1254,7 @@ mod tests {
         let (module, _) = rsc_parser::parse(source, file_id);
 
         // Offset way beyond the source
-        let info = find_hover_info(&module, 1000);
+        let info = find_hover_info(&module, 1000, None);
         assert!(
             info.is_none(),
             "should return None for offset beyond source"
@@ -987,5 +1442,341 @@ mod tests {
     fn test_server_parse_position_missing_field() {
         let val = serde_json::json!({ "line": 10 });
         assert!(parse_position(&val).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Hover: type definitions show RustScript syntax
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_server_hover_type_def_shows_fields() {
+        let source = "type User = { name: string, age: u32 }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "User" starts at offset 5
+        let info = find_hover_info(&module, 5, None);
+        assert!(info.is_some(), "should find hover info for type name");
+        let text = info.unwrap();
+        assert!(
+            text.contains("type User"),
+            "should show 'type User': {text}"
+        );
+        assert!(
+            text.contains("name: string"),
+            "should show field types: {text}"
+        );
+        assert!(text.contains("age: u32"), "should show field types: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_interface_shows_name() {
+        let source = "interface Printable { print(): void; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "Printable" starts at offset 10
+        let info = find_hover_info(&module, 10, None);
+        assert!(info.is_some(), "should find hover info for interface name");
+        let text = info.unwrap();
+        assert!(
+            text.contains("interface Printable"),
+            "should show 'interface Printable': {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_enum_shows_variants() {
+        let source = r#"type Direction = "north" | "south" | "east" | "west""#;
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "Direction" starts at offset 5
+        let info = find_hover_info(&module, 5, None);
+        assert!(info.is_some(), "should find hover info for enum name");
+        let text = info.unwrap();
+        assert!(text.contains("Direction"), "should show enum name: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_class_shows_name() {
+        let source = "class MyClass { x: i32; constructor(x: i32) { this.x = x; } }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "MyClass" starts at offset 6
+        let info = find_hover_info(&module, 6, None);
+        assert!(info.is_some(), "should find hover info for class name");
+        let text = info.unwrap();
+        assert!(
+            text.contains("class MyClass"),
+            "should show 'class MyClass': {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_variable_const_with_type_annotation() {
+        let source = "function foo() { const x: i32 = 42; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "x" is at offset 23
+        let info = find_hover_info(&module, 23, None);
+        assert!(info.is_some(), "should find hover for const variable");
+        let text = info.unwrap();
+        assert!(
+            text.contains("const x: i32"),
+            "should show 'const x: i32': {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_variable_let_with_type_annotation() {
+        let source = "function foo() { let y: string = \"hello\"; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "y" is at offset 21
+        let info = find_hover_info(&module, 21, None);
+        assert!(info.is_some(), "should find hover for let variable");
+        let text = info.unwrap();
+        assert!(
+            text.contains("let y: string"),
+            "should show 'let y: string': {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_int_literal() {
+        let source = "function foo() { const x = 42; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "42" starts at offset 27
+        let info = find_hover_info(&module, 27, None);
+        assert!(info.is_some(), "should find hover for int literal");
+        let text = info.unwrap();
+        assert!(text.contains("i64"), "should show i64 type: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_string_literal() {
+        let source = "function foo() { const x = \"hello\"; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // The string literal starts at offset 27
+        let info = find_hover_info(&module, 28, None);
+        assert!(info.is_some(), "should find hover for string literal");
+        let text = info.unwrap();
+        assert!(text.contains("string"), "should show string type: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_null_literal() {
+        let source = "function foo() { const x = null; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "null" starts at offset 27
+        let info = find_hover_info(&module, 27, None);
+        assert!(info.is_some(), "should find hover for null literal");
+        let text = info.unwrap();
+        assert!(text.contains("null"), "should show null info: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_bool_literal() {
+        let source = "function foo() { const x = true; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "true" starts at offset 27
+        let info = find_hover_info(&module, 27, None);
+        assert!(info.is_some(), "should find hover for bool literal");
+        let text = info.unwrap();
+        assert!(text.contains("boolean"), "should show boolean type: {text}");
+    }
+
+    #[test]
+    fn test_server_hover_function_signature_uses_rts_syntax() {
+        let source = "function greet(name: string): void {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "greet" starts at offset 9
+        let info = find_hover_info(&module, 9, None);
+        assert!(info.is_some());
+        let text = info.unwrap();
+        // Must use RustScript syntax, not Rust syntax
+        assert!(
+            text.contains("function greet"),
+            "should use 'function', not 'fn': {text}"
+        );
+        assert!(
+            !text.contains("fn greet"),
+            "must NOT show Rust 'fn' syntax: {text}"
+        );
+        assert!(
+            text.contains("name: string"),
+            "should show param with string type: {text}"
+        );
+        assert!(
+            text.contains(": void"),
+            "should show void return type: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_async_function_shows_async() {
+        let source = "async function fetchData(): string {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "fetchData" starts at offset 15
+        let info = find_hover_info(&module, 15, None);
+        assert!(info.is_some());
+        let text = info.unwrap();
+        assert!(
+            text.contains("async function fetchData"),
+            "should show async: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_uses_rustscript_code_block() {
+        let source = "function foo() {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        // "foo" starts at offset 9
+        let info = find_hover_info(&module, 9, None);
+        assert!(info.is_some());
+        let text = info.unwrap();
+        assert!(
+            text.contains("```rustscript"),
+            "should use rustscript code block: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_format_type_params_single() {
+        use rsc_syntax::ast::{Ident, TypeParam, TypeParams};
+        use rsc_syntax::span::Span;
+
+        let tp = Some(TypeParams {
+            params: vec![TypeParam {
+                name: Ident {
+                    name: "T".to_owned(),
+                    span: Span::dummy(),
+                },
+                constraint: None,
+                span: Span::dummy(),
+            }],
+            span: Span::dummy(),
+        });
+        assert_eq!(format_type_params(tp.as_ref()), "<T>");
+    }
+
+    #[test]
+    fn test_server_format_type_params_with_constraint() {
+        use rsc_syntax::ast::{Ident, TypeAnnotation, TypeKind, TypeParam, TypeParams};
+        use rsc_syntax::span::Span;
+
+        let tp = Some(TypeParams {
+            params: vec![TypeParam {
+                name: Ident {
+                    name: "T".to_owned(),
+                    span: Span::dummy(),
+                },
+                constraint: Some(TypeAnnotation {
+                    kind: TypeKind::Named(Ident {
+                        name: "Comparable".to_owned(),
+                        span: Span::dummy(),
+                    }),
+                    span: Span::dummy(),
+                }),
+                span: Span::dummy(),
+            }],
+            span: Span::dummy(),
+        });
+        assert_eq!(format_type_params(tp.as_ref()), "<T extends Comparable>");
+    }
+
+    #[test]
+    fn test_server_format_type_params_none() {
+        assert_eq!(format_type_params(None), "");
+    }
+
+    #[test]
+    fn test_server_hover_variable_with_cache_inferred_type() {
+        let source = "function foo() { const x = 42; }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        let mut variable_types = HashMap::new();
+        variable_types.insert("x".to_owned(), "i64".to_owned());
+        let cache = CachedCompileInfo {
+            variable_types,
+            function_signatures: HashMap::new(),
+        };
+
+        // "x" is at offset 23
+        let info = find_hover_info(&module, 23, Some(&cache));
+        assert!(info.is_some(), "should find hover with cached type");
+        let text = info.unwrap();
+        assert!(
+            text.contains("const x: i64"),
+            "should show inferred type from cache: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_function_call_with_cached_signature() {
+        let source = "function foo() { bar(); }";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        let mut function_signatures = HashMap::new();
+        function_signatures.insert("bar".to_owned(), "function bar(): void".to_owned());
+        let cache = CachedCompileInfo {
+            variable_types: HashMap::new(),
+            function_signatures,
+        };
+
+        // "bar" is at offset 17
+        let info = find_hover_info(&module, 17, Some(&cache));
+        assert!(info.is_some(), "should find hover for function call");
+        let text = info.unwrap();
+        assert!(
+            text.contains("function bar(): void"),
+            "should show cached signature: {text}"
+        );
+    }
+
+    #[test]
+    fn test_server_hover_no_rust_syntax_leaks() {
+        // Verify that hover output never contains Rust-specific syntax
+        let source = "function greet(name: string): string {}";
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, _) = rsc_parser::parse(source, file_id);
+
+        let info = find_hover_info(&module, 9, None);
+        assert!(info.is_some());
+        let text = info.unwrap();
+
+        // Must not contain Rust syntax
+        assert!(
+            !text.contains("fn "),
+            "hover must not contain 'fn ': {text}"
+        );
+        assert!(
+            !text.contains("-> "),
+            "hover must not contain '-> ': {text}"
+        );
+        assert!(
+            !text.contains("String"),
+            "hover must not contain 'String' (should be 'string'): {text}"
+        );
     }
 }
