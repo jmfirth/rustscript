@@ -76,12 +76,18 @@ pub enum ItemKind {
 /// An import declaration: `import { User, Post } from "./models"`.
 ///
 /// Lowers to `use crate::models::{User, Post};` in Rust.
+/// When `is_type_only` is true, the import was written as `import type { ... }`.
+/// In `RustScript`, type-only imports are identical to regular imports (all types
+/// are structural), but the flag is preserved for formatter round-tripping.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     /// The names being imported.
     pub names: Vec<Ident>,
     /// The module path as a string literal (e.g., `"./models"`).
     pub source: StringLiteral,
+    /// Whether this is a `import type { ... }` declaration.
+    /// Preserved for formatter round-tripping; ignored during lowering.
+    pub is_type_only: bool,
     /// The span covering the entire import declaration.
     pub span: Span,
 }
@@ -266,12 +272,17 @@ pub struct InterfaceMethod {
 ///
 /// Lowers to a Rust `struct` + `impl` block. If `implements` is present,
 /// trait methods are separated into `impl TraitName for ClassName` blocks.
+/// Abstract classes lower to a trait definition instead.
 #[derive(Debug, Clone)]
 pub struct ClassDef {
+    /// Whether this is an `abstract class`. Abstract classes lower to traits.
+    pub is_abstract: bool,
     /// The class name.
     pub name: Ident,
     /// Optional generic type parameters: `<T>`.
     pub type_params: Option<TypeParams>,
+    /// The base class this class extends (single inheritance).
+    pub extends: Option<Ident>,
     /// Interfaces this class implements.
     pub implements: Vec<Ident>,
     /// The class members (fields, constructor, methods).
@@ -304,11 +315,14 @@ pub enum ClassMember {
 /// Lowers to a struct field, with visibility controlling `pub`.
 /// Static fields lower to associated constants in the impl block.
 /// Readonly fields are enforced at `RustScript` compile time.
+/// Fields with `#` prefix (`#field`) are truly private (no `pub` modifier).
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
+// Multiple orthogonal boolean flags: readonly, is_static, is_hash_private are independent modifiers
 pub struct ClassField {
     /// The visibility modifier (`public` or `private`).
     pub visibility: Visibility,
-    /// The field name.
+    /// The field name (without `#` prefix if hash-private).
     pub name: Ident,
     /// The field type annotation.
     pub type_ann: TypeAnnotation,
@@ -318,6 +332,9 @@ pub struct ClassField {
     pub readonly: bool,
     /// Whether this field is static.
     pub is_static: bool,
+    /// Whether this field uses `#field` syntax for true privacy.
+    /// Hash-private fields always emit without `pub`, regardless of visibility.
+    pub is_hash_private: bool,
     /// `JSDoc` comment attached to this field, if any.
     pub doc_comment: Option<String>,
     /// The span covering the field declaration.
@@ -371,12 +388,20 @@ pub struct ConstructorParam {
 /// Lowers to a method in an `impl` block with `&self` or `&mut self`.
 /// Static methods lower to associated functions (no `self` parameter).
 /// `async` methods lower to `async fn` in Rust.
+/// `abstract` methods (in abstract classes) have no body and lower to trait methods.
+/// `override` methods explicitly override a base class method (documentation only).
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
+// Multiple orthogonal boolean flags: is_async, is_static, is_abstract, is_override are independent modifiers
 pub struct ClassMethod {
     /// Whether this is an `async` method.
     pub is_async: bool,
     /// Whether this is a static method (no `&self`).
     pub is_static: bool,
+    /// Whether this method is abstract (no body, only in abstract classes).
+    pub is_abstract: bool,
+    /// Whether this method is marked with `override` (documentation annotation).
+    pub is_override: bool,
     /// The visibility modifier (`public` or `private`).
     pub visibility: Visibility,
     /// The method name.
@@ -387,7 +412,7 @@ pub struct ClassMethod {
     pub params: Vec<Param>,
     /// The return type annotation, if present. Absent means `void`.
     pub return_type: Option<ReturnTypeAnnotation>,
-    /// The method body.
+    /// The method body. Empty for abstract methods.
     pub body: Block,
     /// `JSDoc` comment attached to this method, if any.
     pub doc_comment: Option<String>,
@@ -869,6 +894,10 @@ pub enum ExprKind {
     /// typeof operator: `typeof expr`.
     /// Lowers to a string literal for known types at compile time.
     TypeOf(Box<Expr>),
+    /// Type satisfaction check: `expr satisfies Type`.
+    /// Compile-time only — produces no runtime code.
+    /// The expression passes through unchanged during lowering.
+    Satisfies(Box<Expr>, TypeAnnotation),
 }
 
 /// A binary expression with an operator and two operands.

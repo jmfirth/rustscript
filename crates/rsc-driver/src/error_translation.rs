@@ -200,6 +200,9 @@ fn translate_type_names(input: &str) -> String {
     // 5. impl Trait (after Fn translations to avoid double-matching)
     output = translate_impl_trait(&output);
 
+    // 6. Abstract class / trait error messages
+    output = translate_trait_errors(&output);
+
     output
 }
 
@@ -599,6 +602,22 @@ fn find_top_level_comma(input: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Translate trait-related rustc errors into abstract class terminology.
+///
+/// Maps "trait `X` is not implemented for" → "abstract class `X` is not implemented for",
+/// and "required method" → "abstract method".
+fn translate_trait_errors(input: &str) -> String {
+    let output = input
+        .replace("the trait `", "the abstract class `")
+        .replace("trait `", "abstract class `")
+        .replace("required method", "abstract method");
+    // Only translate "field `X` of struct `Y` is private" to mention #field
+    output.replace(
+        "is private",
+        "is private (use `#field` syntax for private fields)",
+    )
 }
 
 #[cfg(test)]

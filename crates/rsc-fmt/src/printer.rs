@@ -173,7 +173,11 @@ impl Printer {
 
     /// Print an import declaration.
     fn print_import(&mut self, imp: &ImportDecl) {
-        self.write("import { ");
+        if imp.is_type_only {
+            self.write("import type { ");
+        } else {
+            self.write("import { ");
+        }
         for (i, name) in imp.names.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
@@ -437,9 +441,16 @@ impl Printer {
 
     /// Print a class definition.
     fn print_class_def(&mut self, class: &ClassDef) {
+        if class.is_abstract {
+            self.write("abstract ");
+        }
         self.write("class ");
         self.write(&class.name.name);
         self.print_optional_type_params(class.type_params.as_ref());
+        if let Some(base) = &class.extends {
+            self.write(" extends ");
+            self.write(&base.name);
+        }
         if !class.implements.is_empty() {
             self.write(" implements ");
             for (i, iface) in class.implements.iter().enumerate() {
@@ -472,15 +483,20 @@ impl Printer {
         if let Some(ref doc) = field.doc_comment {
             self.print_jsdoc(doc);
         }
-        match field.visibility {
-            Visibility::Private => self.write("private "),
-            Visibility::Public => {}
+        if !field.is_hash_private {
+            match field.visibility {
+                Visibility::Private => self.write("private "),
+                Visibility::Public => {}
+            }
         }
         if field.is_static {
             self.write("static ");
         }
         if field.readonly {
             self.write("readonly ");
+        }
+        if field.is_hash_private {
+            self.write("#");
         }
         self.write(&field.name.name);
         self.write(": ");
@@ -531,6 +547,12 @@ impl Printer {
             Visibility::Private => self.write("private "),
             Visibility::Public => {}
         }
+        if method.is_abstract {
+            self.write("abstract ");
+        }
+        if method.is_override {
+            self.write("override ");
+        }
         if method.is_static {
             self.write("static ");
         }
@@ -545,9 +567,14 @@ impl Printer {
         if let Some(ret) = &method.return_type {
             self.print_return_type(ret);
         }
-        self.write(" ");
-        self.print_block(&method.body);
-        self.newline();
+        if method.is_abstract {
+            // Abstract methods have no body — end with semicolon
+            self.writeln(";");
+        } else {
+            self.write(" ");
+            self.print_block(&method.body);
+            self.newline();
+        }
     }
 
     /// Print a getter accessor.
@@ -862,6 +889,11 @@ impl Printer {
             ExprKind::TypeOf(inner) => {
                 self.write("typeof ");
                 self.print_expr(inner);
+            }
+            ExprKind::Satisfies(inner, ty) => {
+                self.print_expr(inner);
+                self.write(" satisfies ");
+                self.print_type_annotation(ty);
             }
         }
     }
@@ -1373,6 +1405,7 @@ mod tests {
                             value: "./mod".to_owned(),
                             span: Span::dummy(),
                         },
+                        is_type_only: false,
                         span: Span::dummy(),
                     }),
                     exported: false,
@@ -1385,6 +1418,7 @@ mod tests {
                             value: "./alpha".to_owned(),
                             span: Span::dummy(),
                         },
+                        is_type_only: false,
                         span: Span::dummy(),
                     }),
                     exported: false,

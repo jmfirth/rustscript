@@ -7,7 +7,8 @@
 use rsc_syntax::ast;
 use rsc_syntax::rust_ir::{
     ParamMode, RustBlock, RustConstItem, RustExpr, RustExprKind, RustFieldDef, RustImplBlock,
-    RustItem, RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitImplBlock, RustType,
+    RustItem, RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitDef,
+    RustTraitImplBlock, RustTraitMethod, RustType,
 };
 
 use crate::context::LoweringContext;
@@ -99,6 +100,7 @@ impl Transform {
     ///
     /// Returns multiple `RustItem`s: one struct, one inherent impl, and
     /// optionally trait impl blocks for each interface the class implements.
+    /// Abstract classes lower to trait definitions instead.
     #[allow(clippy::too_many_lines)]
     // Class lowering coordinates struct, constructor, methods, getters, setters,
     // static fields, and trait impls; splitting would fragment the coherent pipeline.
@@ -108,6 +110,11 @@ impl Transform {
         exported: bool,
         ctx: &mut LoweringContext,
     ) -> Vec<RustItem> {
+        // Abstract classes lower to trait definitions
+        if cls.is_abstract {
+            return self.lower_abstract_class_def(cls, exported, ctx);
+        }
+
         let mut items = Vec::new();
         let mut diags = Vec::new();
         let generic_names = collect_generic_param_names(cls.type_params.as_ref());
@@ -151,8 +158,10 @@ impl Transform {
                         &mut diags,
                     );
                     let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                    // Hash-private fields are always private (no pub)
+                    let public = !f.is_hash_private && f.visibility == ast::Visibility::Public;
                     Some(RustFieldDef {
-                        public: f.visibility == ast::Visibility::Public,
+                        public,
                         name: f.name.name.clone(),
                         ty: rust_ty,
                         doc_comment: f.doc_comment.clone(),
@@ -210,9 +219,12 @@ impl Transform {
             })
             .collect();
 
-        // Collect interface method names for trait impl separation
-        let trait_method_names: std::collections::HashSet<String> = cls
-            .implements
+        // Collect interface and extends method names for trait impl separation
+        let mut all_trait_sources: Vec<&ast::Ident> = cls.implements.iter().collect();
+        if let Some(ref base) = cls.extends {
+            all_trait_sources.push(base);
+        }
+        let trait_method_names: std::collections::HashSet<String> = all_trait_sources
             .iter()
             .filter_map(|iface_name| self.type_registry.get_interface_methods(&iface_name.name))
             .flatten()
@@ -227,6 +239,9 @@ impl Transform {
         // Initialize trait method buckets
         for iface in &cls.implements {
             trait_methods.entry(iface.name.clone()).or_default();
+        }
+        if let Some(ref base) = cls.extends {
+            trait_methods.entry(base.name.clone()).or_default();
         }
 
         // Lower the constructor
@@ -253,8 +268,8 @@ impl Transform {
 
                 // Check if this method belongs to a trait impl
                 if is_trait_impl {
-                    // Find which interface this method belongs to
-                    for iface in &cls.implements {
+                    // Find which interface/base this method belongs to
+                    for iface in &all_trait_sources {
                         if let Some(iface_methods) =
                             self.type_registry.get_interface_methods(&iface.name)
                             && iface_methods.iter().any(|sig| sig.name == method.name.name)
@@ -330,8 +345,8 @@ impl Transform {
             span: Some(cls.span),
         }));
 
-        // 6. Emit trait impl blocks
-        for iface in &cls.implements {
+        // 6. Emit trait impl blocks (for both implements and extends)
+        for iface in &all_trait_sources {
             if let Some(methods) = trait_methods.remove(&iface.name) {
                 items.push(RustItem::TraitImpl(RustTraitImplBlock {
                     trait_name: iface.name.clone(),
@@ -348,6 +363,114 @@ impl Transform {
         }
 
         items
+    }
+
+    /// Lower an abstract class definition to a trait.
+    ///
+    /// Abstract methods become required trait methods (no body).
+    /// Concrete methods become default trait methods (with body).
+    fn lower_abstract_class_def(
+        &self,
+        cls: &ast::ClassDef,
+        exported: bool,
+        ctx: &mut LoweringContext,
+    ) -> Vec<RustItem> {
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+
+        let mut methods = Vec::new();
+
+        for member in &cls.members {
+            if let ast::ClassMember::Method(method) = member {
+                let mut params = Vec::new();
+                for p in &method.params {
+                    let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                        &p.type_ann,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                    params.push(RustParam {
+                        name: p.name.name.clone(),
+                        ty: rust_ty,
+                        mode: ParamMode::Owned,
+                        span: Some(p.span),
+                    });
+                }
+
+                let return_type = method.return_type.as_ref().and_then(|rt| {
+                    rt.type_ann.as_ref().map(|t| {
+                        let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                            t,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        rsc_typeck::bridge::type_to_rust_type(&ty)
+                    })
+                });
+
+                if method.is_abstract {
+                    // Abstract method → required trait method (no default body)
+                    methods.push(RustTraitMethod {
+                        name: method.name.name.clone(),
+                        params,
+                        return_type,
+                        has_self: !method.is_static,
+                        default_body: None,
+                        doc_comment: method.doc_comment.clone(),
+                        span: Some(method.span),
+                    });
+                } else {
+                    // Concrete method → default trait method (with body)
+                    ctx.push_scope();
+                    for p in &params {
+                        ctx.declare_variable(p.name.clone(), p.ty.clone());
+                    }
+                    let use_map = UseMap::analyze(
+                        &method.body,
+                        |obj, m| self.builtins.is_ref_args(obj, m),
+                        |name| {
+                            self.fn_signatures
+                                .get(name)
+                                .and_then(|sig| sig.param_modes.as_deref())
+                        },
+                    );
+                    let body = self.lower_block(
+                        &method.body,
+                        ctx,
+                        &use_map,
+                        0,
+                        &std::collections::HashSet::new(),
+                    );
+                    ctx.pop_scope();
+
+                    methods.push(RustTraitMethod {
+                        name: method.name.name.clone(),
+                        params,
+                        return_type,
+                        has_self: !method.is_static,
+                        default_body: Some(body),
+                        doc_comment: method.doc_comment.clone(),
+                        span: Some(method.span),
+                    });
+                }
+            }
+        }
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        vec![RustItem::Trait(RustTraitDef {
+            public: exported,
+            name: cls.name.name.clone(),
+            type_params: vec![],
+            methods,
+            doc_comment: cls.doc_comment.clone(),
+            span: Some(cls.span),
+        })]
     }
 
     /// Lower a class constructor to a `fn new(params) -> Self { Self { fields } }`.

@@ -92,6 +92,8 @@ impl Transform {
     /// Performs a pre-pass to register all type definitions, then lowers
     /// each item. Returns the Rust IR, diagnostics, and any external crate
     /// dependencies discovered from import statements.
+    #[allow(clippy::too_many_lines)]
+    // Module lowering coordinates pre-pass registration and per-item lowering
     pub fn lower_module(
         &mut self,
         module: &ast::Module,
@@ -105,7 +107,14 @@ impl Transform {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
                 ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
                 ast::ItemKind::Interface(iface) => self.register_interface_def(iface, &mut ctx),
-                ast::ItemKind::Class(cls) => self.register_class_def(cls, &mut ctx),
+                ast::ItemKind::Class(cls) => {
+                    if cls.is_abstract {
+                        // Register abstract class as an interface (trait)
+                        self.register_abstract_class_as_interface(cls);
+                    } else {
+                        self.register_class_def(cls, &mut ctx);
+                    }
+                }
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
@@ -370,6 +379,56 @@ impl Transform {
             .register_interface(iface.name.name.clone(), methods);
     }
 
+    /// Register an abstract class as an interface in the type registry.
+    ///
+    /// This enables concrete classes to `extends` the abstract class, which is
+    /// resolved to a trait impl during lowering.
+    fn register_abstract_class_as_interface(&mut self, cls: &ast::ClassDef) {
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+        let mut diags = Vec::new();
+
+        let methods: Vec<rsc_typeck::registry::InterfaceMethodSig> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ast::ClassMember::Method(method) => {
+                    let param_types: Vec<(String, rsc_typeck::types::Type)> = method
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let ty = resolve::resolve_type_annotation_with_generics(
+                                &p.type_ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            );
+                            (p.name.name.clone(), ty)
+                        })
+                        .collect();
+                    let return_type = method.return_type.as_ref().and_then(|rt| {
+                        rt.type_ann.as_ref().map(|ann| {
+                            resolve::resolve_type_annotation_with_generics(
+                                ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            )
+                        })
+                    });
+                    Some(rsc_typeck::registry::InterfaceMethodSig {
+                        name: method.name.name.clone(),
+                        param_types,
+                        return_type,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        self.type_registry
+            .register_interface(cls.name.name.clone(), methods);
+    }
+
     /// Lower an interface definition to a Rust trait.
     fn lower_interface_def(
         &self,
@@ -427,6 +486,8 @@ impl Transform {
                     params,
                     return_type,
                     has_self: true, // All interface methods take &self
+                    default_body: None,
+                    doc_comment: None,
                     span: Some(m.span),
                 }
             })

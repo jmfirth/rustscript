@@ -1829,3 +1829,243 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "3\n4");
 }
+
+// ===========================================================================
+// ===========================================================================
+//
+// TASK 067: Minor Syntax Completions
+//
+// ===========================================================================
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 1. import type — type-only imports lower identically to regular imports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_import_type_generates_same_as_import() {
+    let source = "\
+import type { User } from \"./models\";
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("use crate::models::User;"),
+        "import type should generate use declaration:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_import_type_mixed_with_regular() {
+    let source = "\
+import { Post } from \"./models\";
+import type { User } from \"./models\";
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("use crate::models::Post;"),
+        "regular import should work:\n{actual}"
+    );
+    assert!(
+        actual.contains("use crate::models::User;"),
+        "import type should generate use:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2. satisfies operator — compile-time only, stripped in output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_satisfies_is_stripped() {
+    let source = "\
+function main() {
+  const x: i64 = 42 satisfies i64;
+  console.log(x);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.contains("satisfies"),
+        "satisfies should be stripped from output:\n{actual}"
+    );
+    assert!(
+        actual.contains("let x: i64 = 42;"),
+        "expression should pass through:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 3. abstract classes — lower to traits
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_abstract_class_generates_trait() {
+    let source = "\
+abstract class Shape {
+  abstract area(): f64;
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("trait Shape"),
+        "abstract class should generate trait:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn area(&self) -> f64;"),
+        "abstract method should be a trait method:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_abstract_class_with_default_method() {
+    let source = "\
+abstract class Shape {
+  abstract area(): f64;
+
+  describe(): string {
+    return \"a shape\";
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("trait Shape"),
+        "abstract class should generate trait:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn area(&self) -> f64;"),
+        "abstract method should be signature-only:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn describe(&self)"),
+        "concrete method should have a body:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_class_extends_abstract() {
+    let source = "\
+abstract class Shape {
+  abstract area(): f64;
+}
+
+class Circle extends Shape {
+  radius: f64;
+
+  constructor(radius: f64) {
+    this.radius = radius;
+  }
+
+  area(): f64 {
+    return 3.14 * this.radius;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("trait Shape"),
+        "abstract class should generate trait:\n{actual}"
+    );
+    assert!(
+        actual.contains("struct Circle"),
+        "concrete class should generate struct:\n{actual}"
+    );
+    assert!(
+        actual.contains("impl Shape for Circle"),
+        "concrete class should implement trait:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4. override keyword — documentation only, stripped in output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_override_keyword_stripped() {
+    let source = "\
+abstract class Base {
+  abstract greet(): string;
+}
+
+class Impl extends Base {
+  override greet(): string {
+    return \"hello\";
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.contains("override"),
+        "override keyword should not appear in Rust output:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn greet(&self) -> String"),
+        "method should still be generated:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. #private fields — truly private (no pub)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_hash_private_field_no_pub() {
+    let source = "\
+class User {
+  name: string;
+  #password: string;
+
+  constructor(name: string, password: string) {
+    this.name = name;
+    this.#password = password;
+  }
+
+  checkPassword(input: string): bool {
+    return input === this.#password;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("pub name: String"),
+        "regular field should be pub:\n{actual}"
+    );
+    // The password field should not have `pub`
+    assert!(
+        actual.contains("password: String") && !actual.contains("pub password"),
+        "hash-private field should not have pub:\n{actual}"
+    );
+    // self.password access (not self.#password) in method
+    assert!(
+        actual.contains("self.password"),
+        "hash-private access should strip #:\n{actual}"
+    );
+}

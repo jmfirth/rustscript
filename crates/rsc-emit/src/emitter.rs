@@ -347,6 +347,9 @@ impl Emitter {
 
         for method in &t.methods {
             self.set_span(method.span);
+            if let Some(ref doc) = method.doc_comment {
+                self.emit_doc_comment(doc);
+            }
             self.write_indent();
             self.write("fn ");
             self.write(&method.name);
@@ -378,7 +381,16 @@ impl Emitter {
                 self.write(&ret.to_string());
             }
 
-            self.writeln(";");
+            if let Some(ref body) = method.default_body {
+                self.writeln(" {");
+                self.push_indent();
+                self.emit_block(body);
+                self.pop_indent();
+                self.write_indent();
+                self.writeln("}");
+            } else {
+                self.writeln(";");
+            }
         }
 
         self.pop_indent();
@@ -3616,6 +3628,8 @@ fn main() {
                     params: vec![],
                     return_type: Some(RustType::String),
                     has_self: true,
+                    default_body: None,
+                    doc_comment: None,
                     span: None,
                 }],
                 doc_comment: None,
@@ -3683,6 +3697,8 @@ fn main() {
                     params: vec![],
                     return_type: Some(RustType::SelfType),
                     has_self: true,
+                    default_body: None,
+                    doc_comment: None,
                     span: None,
                 }],
                 doc_comment: None,
