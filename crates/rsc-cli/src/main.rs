@@ -4,6 +4,7 @@
 //! compilation, build, and project management logic.
 #![warn(clippy::pedantic)]
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +15,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use notify::{RecursiveMode, Watcher};
 
+use rsc_driver::ColorMode;
 use rsc_driver::error::DriverError;
 use rsc_driver::{Project, compile_source, init_project};
 
@@ -22,9 +24,25 @@ const EXIT_USER_ERROR: i32 = 1;
 /// Exit code for internal errors (compiler bugs, I/O failures, missing project).
 const EXIT_INTERNAL_ERROR: i32 = 2;
 
+/// Color output mode for CLI diagnostics.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
+enum CliColorMode {
+    /// Detect whether stderr is a terminal and enable colors if so.
+    #[default]
+    Auto,
+    /// Always emit ANSI color codes.
+    Always,
+    /// Never emit ANSI color codes (plain text).
+    Never,
+}
+
 #[derive(Parser)]
 #[command(name = "rsc", about = "The RustScript compiler", version)]
 struct Cli {
+    /// Color output mode
+    #[arg(long, global = true, default_value = "auto")]
+    color: CliColorMode,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -125,25 +143,42 @@ fn main() {
     }
 }
 
+/// Resolve `CliColorMode` into a concrete `ColorMode` by checking terminal state.
+fn resolve_color_mode(cli_mode: CliColorMode) -> ColorMode {
+    match cli_mode {
+        CliColorMode::Always => ColorMode::Always,
+        CliColorMode::Never => ColorMode::Never,
+        CliColorMode::Auto => {
+            if std::io::stderr().is_terminal() {
+                ColorMode::Always
+            } else {
+                ColorMode::Never
+            }
+        }
+    }
+}
+
 /// Run the CLI command, returning the appropriate exit code.
 ///
 /// User-facing errors (compilation/build failures) are handled inline and return
 /// an exit code directly. Internal errors propagate as `anyhow::Error`.
 fn run(cli: Cli) -> Result<i32> {
+    let color = resolve_color_mode(cli.color);
+
     match cli.command {
         Command::Init { name, template } => cmd_init(&name, template.as_deref()),
         Command::Build {
             release,
             target,
             no_borrow_inference,
-        } => cmd_build(release, target.as_deref(), no_borrow_inference),
+        } => cmd_build(release, target.as_deref(), no_borrow_inference, color),
         Command::Run {
             args,
             target,
             no_borrow_inference,
-        } => cmd_run(&args, target.as_deref(), no_borrow_inference),
-        Command::Test { release, args } => cmd_test(release, &args),
-        Command::Check => cmd_check(),
+        } => cmd_run(&args, target.as_deref(), no_borrow_inference, color),
+        Command::Test { release, args } => cmd_test(release, &args, color),
+        Command::Check => cmd_check(color),
         Command::Fmt { check, files } => cmd_fmt(check, &files),
         Command::Add {
             crate_name,
@@ -185,9 +220,15 @@ fn cmd_init(name: &str, template: Option<&str>) -> Result<i32> {
 }
 
 /// Compile the project to a native binary (or WASM module with `--target`).
-fn cmd_build(release: bool, target: Option<&str>, no_borrow_inference: bool) -> Result<i32> {
+fn cmd_build(
+    release: bool,
+    target: Option<&str>,
+    no_borrow_inference: bool,
+    color: ColorMode,
+) -> Result<i32> {
     let mut project = open_project()?;
     project.compile_options.no_borrow_inference = no_borrow_inference;
+    project.color_mode = color;
     match project.build(release, target) {
         Ok(()) => {
             println!("Build complete");
@@ -201,9 +242,15 @@ fn cmd_build(release: bool, target: Option<&str>, no_borrow_inference: bool) -> 
 }
 
 /// Compile and run the project.
-fn cmd_run(args: &[String], target: Option<&str>, no_borrow_inference: bool) -> Result<i32> {
+fn cmd_run(
+    args: &[String],
+    target: Option<&str>,
+    no_borrow_inference: bool,
+    color: ColorMode,
+) -> Result<i32> {
     let mut project = open_project()?;
     project.compile_options.no_borrow_inference = no_borrow_inference;
+    project.color_mode = color;
     match project.run(args, target) {
         Ok(status) => Ok(status.code().unwrap_or(EXIT_INTERNAL_ERROR)),
         Err(DriverError::CompilationFailed(_)) => Ok(EXIT_USER_ERROR),
@@ -216,8 +263,9 @@ fn cmd_run(args: &[String], target: Option<&str>, no_borrow_inference: bool) -> 
 }
 
 /// Compile and run tests for the project.
-fn cmd_test(release: bool, args: &[String]) -> Result<i32> {
-    let project = open_project()?;
+fn cmd_test(release: bool, args: &[String], color: ColorMode) -> Result<i32> {
+    let mut project = open_project()?;
+    project.color_mode = color;
     match project.test(release, args) {
         Ok(status) => Ok(status.code().unwrap_or(EXIT_INTERNAL_ERROR)),
         Err(DriverError::CompilationFailed(_) | DriverError::CargoBuildFailed) => {
@@ -228,7 +276,7 @@ fn cmd_test(release: bool, args: &[String]) -> Result<i32> {
 }
 
 /// Check the project for errors without building.
-fn cmd_check() -> Result<i32> {
+fn cmd_check(color: ColorMode) -> Result<i32> {
     let project = open_project()?;
     let source_path = project
         .main_source()
@@ -244,10 +292,11 @@ fn cmd_check() -> Result<i32> {
 
     if result.has_errors {
         let mut stderr = std::io::stderr();
-        let _ = rsc_syntax::diagnostic::render_diagnostics(
+        let _ = rsc_syntax::diagnostic::render_diagnostics_colored(
             &result.diagnostics,
             &result.source_map,
             &mut stderr,
+            color,
         );
         return Ok(EXIT_USER_ERROR);
     }

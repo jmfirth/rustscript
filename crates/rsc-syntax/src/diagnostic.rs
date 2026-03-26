@@ -10,6 +10,20 @@
 use crate::source::{FileId, SourceMap};
 use crate::span::Span;
 
+/// Controls whether diagnostic output uses ANSI colors.
+///
+/// Passed through the pipeline from the CLI `--color` flag. The `Auto` variant
+/// defers to terminal detection (performed at the CLI layer before passing to
+/// lower crates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorMode {
+    /// Always emit ANSI color codes.
+    Always,
+    /// Never emit ANSI color codes (plain text).
+    #[default]
+    Never,
+}
+
 /// The severity level of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -102,11 +116,11 @@ impl Diagnostic {
     }
 }
 
-/// Render diagnostics to a writer with source context.
+/// Render diagnostics to a writer with source context (no colors).
 ///
-/// Converts our internal diagnostic types to `codespan-reporting` types
-/// and renders them. The `codespan-reporting` dependency does not leak
-/// into the public API.
+/// Convenience wrapper around [`render_diagnostics_colored`] with
+/// [`ColorMode::Never`]. Use this when the caller does not have color
+/// configuration (e.g., in tests or plain-text contexts).
 ///
 /// # Errors
 ///
@@ -116,57 +130,22 @@ pub fn render_diagnostics(
     source_map: &SourceMap,
     writer: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
+    render_diagnostics_colored(diagnostics, source_map, writer, ColorMode::Never)
+}
+
+/// Emit all diagnostics through a `WriteColor` implementor.
+///
+/// Internal helper shared by [`render_diagnostics_colored`]. Converts
+/// our diagnostic types to `codespan-reporting` equivalents and renders
+/// them with the given writer.
+fn emit_all_diagnostics<W: codespan_reporting::term::termcolor::WriteColor>(
+    writer: &mut W,
+    config: &codespan_reporting::term::Config,
+    files: &codespan_reporting::files::SimpleFiles<&str, &str>,
+    diagnostics: &[Diagnostic],
+    id_map: &[usize],
+) -> std::io::Result<()> {
     use codespan_reporting::diagnostic as cs_diag;
-    use codespan_reporting::files::SimpleFiles;
-    use codespan_reporting::term;
-    use codespan_reporting::term::termcolor::{ColorSpec, WriteColor};
-
-    // Wrap the writer in a NoColor adapter so codespan-reporting can use it.
-    struct WriterAdapter<'a>(&'a mut dyn std::io::Write);
-
-    impl std::io::Write for WriterAdapter<'_> {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.write(buf)
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.0.flush()
-        }
-    }
-
-    impl WriteColor for WriterAdapter<'_> {
-        fn supports_color(&self) -> bool {
-            false
-        }
-
-        fn set_color(&mut self, _spec: &ColorSpec) -> std::io::Result<()> {
-            Ok(())
-        }
-
-        fn reset(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    // Build a SimpleFiles store from our SourceMap.
-    let mut files = SimpleFiles::new();
-
-    // Map from our FileId to codespan's file id.
-    // We iterate through file ids 0..N and add each one.
-    let mut id_map = Vec::new();
-    let mut file_idx = 0u32;
-    loop {
-        let our_id = crate::source::FileId(file_idx);
-        let Some(sf) = source_map.get_file(our_id) else {
-            break;
-        };
-        let cs_id = files.add(sf.name(), sf.source());
-        id_map.push(cs_id);
-        file_idx += 1;
-    }
-
-    let config = term::Config::default();
-    let mut adapter = WriterAdapter(writer);
 
     for diag in diagnostics {
         let severity = match diag.severity {
@@ -195,7 +174,67 @@ pub fn render_diagnostics(
             .with_labels(labels)
             .with_notes(diag.notes.clone());
 
-        term::emit(&mut adapter, &config, &files, &cs_diag).map_err(std::io::Error::other)?;
+        codespan_reporting::term::emit(writer, config, files, &cs_diag)
+            .map_err(std::io::Error::other)?;
+    }
+    Ok(())
+}
+
+/// Render diagnostics to a writer with source context and optional ANSI colors.
+///
+/// Converts our internal diagnostic types to `codespan-reporting` types
+/// and renders them. When `color` is [`ColorMode::Always`], the output
+/// includes ANSI color codes for error/warning/note labels, source line
+/// numbers, caret underlines, and file paths. When [`ColorMode::Never`],
+/// the output is plain text.
+///
+/// The `codespan-reporting` dependency does not leak into the public API.
+///
+/// # Errors
+///
+/// Returns an I/O error if writing to the provided writer fails.
+pub fn render_diagnostics_colored(
+    diagnostics: &[Diagnostic],
+    source_map: &SourceMap,
+    writer: &mut dyn std::io::Write,
+    color: ColorMode,
+) -> std::io::Result<()> {
+    use codespan_reporting::files::SimpleFiles;
+    use codespan_reporting::term;
+    use codespan_reporting::term::termcolor::{Ansi, ColorSpec, NoColor, WriteColor};
+
+    // Build a SimpleFiles store from our SourceMap.
+    let mut files = SimpleFiles::new();
+
+    // Map from our FileId to codespan's file id.
+    // We iterate through file ids 0..N and add each one.
+    let mut id_map = Vec::new();
+    let mut file_idx = 0u32;
+    loop {
+        let our_id = crate::source::FileId(file_idx);
+        let Some(sf) = source_map.get_file(our_id) else {
+            break;
+        };
+        let cs_id = files.add(sf.name(), sf.source());
+        id_map.push(cs_id);
+        file_idx += 1;
+    }
+
+    let config = term::Config::default();
+
+    match color {
+        ColorMode::Always => {
+            // Ansi<W> from termcolor wraps any io::Write with ANSI escape codes.
+            let mut ansi_writer = Ansi::new(writer);
+            emit_all_diagnostics(&mut ansi_writer, &config, &files, diagnostics, &id_map)?;
+            // Ensure the color is reset after all diagnostics.
+            ansi_writer.set_color(&ColorSpec::new())?;
+            ansi_writer.reset()?;
+        }
+        ColorMode::Never => {
+            let mut no_color = NoColor::new(writer);
+            emit_all_diagnostics(&mut no_color, &config, &files, diagnostics, &id_map)?;
+        }
     }
 
     Ok(())
@@ -269,5 +308,76 @@ mod tests {
         let mut output = Vec::new();
         render_diagnostics(&[], &sm, &mut output).expect("render should not fail");
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_render_diagnostics_colored_always_emits_ansi_codes() {
+        let mut sm = SourceMap::new();
+        let file_id = sm.add_file("test.rts".into(), "let x = 42;\n".into());
+
+        let d = Diagnostic::error("unexpected token").with_label(Span::new(4, 5), file_id, "here");
+
+        let mut output = Vec::new();
+        render_diagnostics_colored(&[d], &sm, &mut output, ColorMode::Always)
+            .expect("render should not fail");
+        let text = String::from_utf8(output).expect("output should be utf-8");
+
+        // ANSI escape codes start with ESC (0x1b) followed by '['.
+        assert!(
+            text.contains("\x1b["),
+            "colored output should contain ANSI escape codes, got:\n{text}"
+        );
+        assert!(
+            text.contains("unexpected token"),
+            "output should still contain the error message, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn test_render_diagnostics_colored_never_omits_ansi_codes() {
+        let mut sm = SourceMap::new();
+        let file_id = sm.add_file("test.rts".into(), "let x = 42;\n".into());
+
+        let d = Diagnostic::error("unexpected token").with_label(Span::new(4, 5), file_id, "here");
+
+        let mut output = Vec::new();
+        render_diagnostics_colored(&[d], &sm, &mut output, ColorMode::Never)
+            .expect("render should not fail");
+        let text = String::from_utf8(output).expect("output should be utf-8");
+
+        assert!(
+            !text.contains("\x1b["),
+            "plain output should NOT contain ANSI escape codes, got:\n{text}"
+        );
+        assert!(
+            text.contains("unexpected token"),
+            "output should contain the error message, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn test_render_diagnostics_colored_warning_produces_output() {
+        let mut sm = SourceMap::new();
+        let file_id = sm.add_file("test.rts".into(), "let x = 42;\n".into());
+
+        let d = Diagnostic::warning("unused variable").with_label(
+            Span::new(4, 5),
+            file_id,
+            "this variable",
+        );
+
+        let mut output = Vec::new();
+        render_diagnostics_colored(&[d], &sm, &mut output, ColorMode::Always)
+            .expect("render should not fail");
+        let text = String::from_utf8(output).expect("output should be utf-8");
+
+        assert!(
+            text.contains("unused variable"),
+            "output should contain the warning message, got:\n{text}"
+        );
+        assert!(
+            text.contains("\x1b["),
+            "colored output should contain ANSI escape codes, got:\n{text}"
+        );
     }
 }
