@@ -509,6 +509,9 @@ pub enum RustStmt {
     /// A `try {} finally {}` block (no catch). The try body is followed by
     /// finally cleanup statements, all emitted within a single block.
     TryFinally(RustTryFinallyStmt),
+    /// A `while let Some(binding) = expr.next().await { body }` loop.
+    /// Produced by lowering `for await (const item of stream) { ... }`.
+    WhileLet(RustWhileLetStmt),
 }
 
 /// A `try {} finally {}` block without catch.
@@ -521,6 +524,22 @@ pub struct RustTryFinallyStmt {
     pub try_block: RustBlock,
     /// The finally statements — emitted after the try block.
     pub finally_stmts: Vec<RustStmt>,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A `while let Some(binding) = expr.next().await { body }` loop.
+///
+/// Produced by lowering `for await (const item of stream) { body }`.
+/// Iterates over an async `Stream`, consuming items until the stream is exhausted.
+#[derive(Debug, Clone)]
+pub struct RustWhileLetStmt {
+    /// The pattern binding name (the `item` in `Some(item)`).
+    pub binding: String,
+    /// The stream expression (the `stream` in `stream.next().await`).
+    pub stream: RustExpr,
+    /// The loop body.
+    pub body: RustBlock,
     /// The source span, if derived from source.
     pub span: Option<Span>,
 }
@@ -962,6 +981,12 @@ pub enum RustExprKind {
     /// `tokio::join!(expr1, expr2, ...)` — concurrent execution of futures.
     /// Produced by lowering `await Promise.all([...])`.
     TokioJoin(Vec<RustExpr>),
+    /// `tokio::select! { result = expr1 => result, ... }` — first-to-complete.
+    /// Produced by lowering `await Promise.race([...])`.
+    TokioSelect(Vec<RustExpr>),
+    /// `futures::future::select_ok(vec![...]).await` — first-to-succeed.
+    /// Produced by lowering `await Promise.any([...])`.
+    FuturesSelectOk(Vec<RustExpr>),
     /// A borrow expression: `&expr`.
     ///
     /// Inserted by Tier 2 ownership when a function takes a borrowed parameter.

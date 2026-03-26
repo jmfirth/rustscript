@@ -20,6 +20,8 @@ pub struct CompileResult {
     /// Whether the compiled code uses async/await and needs a tokio runtime.
     /// When true, the driver adds tokio to `Cargo.toml` and wraps main in `#[tokio::main]`.
     pub needs_async_runtime: bool,
+    /// Whether the compiled code uses `for await` or `Promise.any` and needs the `futures` crate.
+    pub needs_futures_crate: bool,
     /// External crate dependencies discovered from import statements.
     /// The driver adds these to the generated Cargo.toml.
     pub crate_dependencies: Vec<rsc_lower::CrateDependency>,
@@ -73,6 +75,7 @@ pub fn compile_source_with_options(
             source_map,
             has_errors: true,
             needs_async_runtime: false,
+            needs_futures_crate: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -93,6 +96,7 @@ pub fn compile_source_with_options(
             source_map,
             has_errors: true,
             needs_async_runtime: false,
+            needs_futures_crate: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -109,6 +113,7 @@ pub fn compile_source_with_options(
         source_map,
         has_errors,
         needs_async_runtime: lower_result.needs_async_runtime,
+        needs_futures_crate: lower_result.needs_futures_crate,
         crate_dependencies: lower_result.crate_dependencies,
         source_map_lines: emit_result.source_map,
     }
@@ -152,6 +157,7 @@ pub fn compile_source_with_mods_and_options(
             source_map,
             has_errors: true,
             needs_async_runtime: false,
+            needs_futures_crate: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -172,6 +178,7 @@ pub fn compile_source_with_mods_and_options(
             source_map,
             has_errors: true,
             needs_async_runtime: false,
+            needs_futures_crate: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -192,6 +199,7 @@ pub fn compile_source_with_mods_and_options(
         source_map,
         has_errors,
         needs_async_runtime: lower_result.needs_async_runtime,
+        needs_futures_crate: lower_result.needs_futures_crate,
         crate_dependencies: lower_result.crate_dependencies,
         source_map_lines: emit_result.source_map,
     }

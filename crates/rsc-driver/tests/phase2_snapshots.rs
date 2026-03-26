@@ -726,3 +726,151 @@ async fn fetchAge() -> Result<i32, String> {
     let actual = compile_to_rust(source);
     assert_snapshot("async_throws_composition", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Task 066: Async iteration and Promise methods
+// ---------------------------------------------------------------------------
+
+// T066-1: for await → while let Some(item) = stream.next().await
+#[test]
+fn test_snapshot_t066_for_await_generates_while_let_next_await() {
+    let source = r#"async function main() {
+  for await (const msg of channel) {
+    console.log(msg);
+  }
+}"#;
+
+    let expected = r#"use futures::StreamExt;
+
+#[tokio::main]
+async fn main() {
+    while let Some(msg) = channel.next().await {
+        println!("{}", msg);
+    }
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("for_await", &actual, expected);
+}
+
+// T066-2: Promise.race → tokio::select!
+#[test]
+fn test_snapshot_t066_promise_race_generates_tokio_select() {
+    let source = r#"async function main() {
+  const first = await Promise.race([fetch1(), fetch2()]);
+  console.log(first);
+}"#;
+
+    let expected = r#"#[tokio::main]
+async fn main() {
+    let first = tokio::select! { result = fetch1() => result, result = fetch2() => result };
+    println!("{}", first);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("promise_race", &actual, expected);
+}
+
+// T066-3: Promise.any → futures::future::select_ok
+#[test]
+fn test_snapshot_t066_promise_any_generates_futures_select_ok() {
+    let source = r#"async function main() {
+  const first = await Promise.any([tryA(), tryB()]);
+  console.log(first);
+}"#;
+
+    let expected = r#"#[tokio::main]
+async fn main() {
+    let first = futures::future::select_ok(vec![tryA(), tryB()]).await.expect("all promises rejected").0;
+    println!("{}", first);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("promise_any", &actual, expected);
+}
+
+// T066-4: for await with let binding
+#[test]
+fn test_snapshot_t066_for_await_let_binding() {
+    let source = r#"async function process() {
+  for await (let item of stream) {
+    console.log(item);
+  }
+}"#;
+
+    let expected = r#"use futures::StreamExt;
+
+async fn process() {
+    while let Some(item) = stream.next().await {
+        println!("{}", item);
+    }
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("for_await_let", &actual, expected);
+}
+
+// T066-5: Promise.race with three branches
+#[test]
+fn test_snapshot_t066_promise_race_three_branches() {
+    let source = r#"async function main() {
+  const result = await Promise.race([a(), b(), c()]);
+}"#;
+
+    let expected = r#"#[tokio::main]
+async fn main() {
+    let result = tokio::select! { result = a() => result, result = b() => result, result = c() => result };
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("promise_race_three", &actual, expected);
+}
+
+// T066-6: needs_futures_crate flag is set for for-await
+#[test]
+fn test_t066_for_await_sets_needs_futures_crate() {
+    let source = r#"async function main() {
+  for await (const msg of channel) {
+    console.log(msg);
+  }
+}"#;
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        result.needs_futures_crate,
+        "for await should set needs_futures_crate"
+    );
+}
+
+// T066-7: needs_futures_crate flag is set for Promise.any
+#[test]
+fn test_t066_promise_any_sets_needs_futures_crate() {
+    let source = r#"async function main() {
+  const first = await Promise.any([tryA(), tryB()]);
+}"#;
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        result.needs_futures_crate,
+        "Promise.any should set needs_futures_crate"
+    );
+}
+
+// T066-8: needs_async_runtime is set for Promise.race
+#[test]
+fn test_t066_promise_race_sets_needs_async_runtime() {
+    let source = r#"async function main() {
+  const first = await Promise.race([a(), b()]);
+}"#;
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        result.needs_async_runtime,
+        "Promise.race should set needs_async_runtime"
+    );
+}

@@ -41,7 +41,7 @@ pub struct LowerOptions {
 /// Result of lowering a single module.
 ///
 /// Groups the Rust IR, diagnostics, external crate dependencies, and
-/// whether the module needs an async runtime.
+/// whether the module needs an async runtime or futures crate.
 pub struct LowerResult {
     /// The generated Rust IR.
     pub ir: RustFile,
@@ -52,6 +52,8 @@ pub struct LowerResult {
     pub crate_dependencies: Vec<CrateDependency>,
     /// Whether the source contains async functions that need a tokio runtime.
     pub needs_async_runtime: bool,
+    /// Whether the source uses `for await` or `Promise.any` and needs the `futures` crate.
+    pub needs_futures_crate: bool,
 }
 
 /// Lower a `RustScript` AST to Rust IR.
@@ -70,12 +72,14 @@ pub fn lower(module: &ast::Module) -> LowerResult {
 #[must_use]
 pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> LowerResult {
     let mut transform = Transform::new(options.no_borrow_inference);
-    let (ir, diagnostics, crate_deps, needs_async_runtime) = transform.lower_module(module);
+    let (ir, diagnostics, crate_deps, needs_async_runtime, needs_futures_crate) =
+        transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {
         ir,
         diagnostics,
         crate_dependencies,
         needs_async_runtime,
+        needs_futures_crate,
     }
 }

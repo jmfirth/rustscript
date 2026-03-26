@@ -10,7 +10,7 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBlock, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt, RustIfLetStmt,
     RustIfStmt, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt, RustStmt,
-    RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileStmt,
+    RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileLetStmt, RustWhileStmt,
 };
 
 use crate::context::LoweringContext;
@@ -84,7 +84,13 @@ impl Transform {
                 self.lower_try_catch(tc, ctx, use_map, stmt_index, reassigned)
             }
             ast::Stmt::For(for_of) => {
-                RustStmt::ForIn(self.lower_for_of(for_of, ctx, use_map, stmt_index, reassigned))
+                if for_of.is_await {
+                    RustStmt::WhileLet(
+                        self.lower_for_await(for_of, ctx, use_map, stmt_index, reassigned),
+                    )
+                } else {
+                    RustStmt::ForIn(self.lower_for_of(for_of, ctx, use_map, stmt_index, reassigned))
+                }
             }
             ast::Stmt::ArrayDestructure(adestr) => {
                 self.lower_array_destructure(adestr, ctx, use_map, stmt_index)
@@ -473,6 +479,29 @@ impl Transform {
             iterable,
             body,
             deref_pattern,
+            span: Some(for_of.span),
+        }
+    }
+
+    /// Lower a `for await` statement to a `while let Some(item) = stream.next().await`.
+    ///
+    /// `for await (const item of stream) { body }` →
+    /// `while let Some(item) = stream.next().await { body }`
+    fn lower_for_await(
+        &self,
+        for_of: &ast::ForOfStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustWhileLetStmt {
+        let stream = self.lower_expr(&for_of.iterable, ctx, use_map, stmt_index);
+        let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
+
+        RustWhileLetStmt {
+            binding: for_of.variable.name.clone(),
+            stream,
+            body,
             span: Some(for_of.span),
         }
     }

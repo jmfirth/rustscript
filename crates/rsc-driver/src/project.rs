@@ -316,6 +316,8 @@ impl Project {
         let mut all_crate_deps: Vec<CrateDependency> = Vec::new();
         // Track whether any module uses async (OR across all modules)
         let mut any_needs_async_runtime = false;
+        // Track whether any module needs the futures crate
+        let mut any_needs_futures_crate = false;
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -336,6 +338,7 @@ impl Project {
             // Collect dependencies even from modules with errors (the imports are still valid)
             all_crate_deps.extend(module_result.crate_dependencies.iter().cloned());
             any_needs_async_runtime |= module_result.needs_async_runtime;
+            any_needs_futures_crate |= module_result.needs_futures_crate;
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -382,6 +385,7 @@ impl Project {
         // Collect main file dependencies
         all_crate_deps.extend(result.crate_dependencies.iter().cloned());
         any_needs_async_runtime |= result.needs_async_runtime;
+        any_needs_futures_crate |= result.needs_futures_crate;
 
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
@@ -389,6 +393,11 @@ impl Project {
         // Add tokio if async runtime is needed (from any module) — but NOT for WASM targets
         if any_needs_async_runtime {
             cargo_builder.add_tokio_runtime();
+        }
+
+        // Add futures crate if for-await or Promise.any is used
+        if any_needs_futures_crate {
+            cargo_builder.add_dependency("futures", DependencySpec::Simple("0.3".to_owned()));
         }
 
         // Add all external crate dependencies (deduplicated by BTreeMap)

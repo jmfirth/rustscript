@@ -238,12 +238,10 @@ impl Transform {
                 self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Await(inner) => {
-                // Check for `await Promise.all([...])` pattern.
-                // Lowers to `tokio::join!(expr1, expr2, ...)` without a separate `.await`.
+                // Check for `await Promise.XXX([...])` patterns.
                 if let ast::ExprKind::MethodCall(mc) = &inner.kind
                     && let ast::ExprKind::Ident(obj) = &mc.object.kind
                     && obj.name == "Promise"
-                    && mc.method.name == "all"
                     && mc.args.len() == 1
                     && let ast::ExprKind::ArrayLit(elements) = &mc.args[0].kind
                 {
@@ -256,7 +254,31 @@ impl Transform {
                             ast::ArrayElement::Spread(_) => None,
                         })
                         .collect();
-                    return RustExpr::new(RustExprKind::TokioJoin(lowered_elements), expr.span);
+
+                    match mc.method.name.as_str() {
+                        // `await Promise.all([...])` → `tokio::join!(...)`
+                        "all" => {
+                            return RustExpr::new(
+                                RustExprKind::TokioJoin(lowered_elements),
+                                expr.span,
+                            );
+                        }
+                        // `await Promise.race([...])` → `tokio::select! { ... }`
+                        "race" => {
+                            return RustExpr::new(
+                                RustExprKind::TokioSelect(lowered_elements),
+                                expr.span,
+                            );
+                        }
+                        // `await Promise.any([...])` → `futures::future::select_ok(...)`
+                        "any" => {
+                            return RustExpr::new(
+                                RustExprKind::FuturesSelectOk(lowered_elements),
+                                expr.span,
+                            );
+                        }
+                        _ => {}
+                    }
                 }
 
                 let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);

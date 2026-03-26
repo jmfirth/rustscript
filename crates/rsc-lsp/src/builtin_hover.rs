@@ -443,6 +443,18 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         },
     );
     m.insert(
+        "Promise.race",
+        BuiltinHover {
+            markdown: "```rustscript\nPromise.race(promises: Array<Promise<T>>): Promise<T>\n```\n\nRuns all promises concurrently, returns the first to complete.\n\n**Rust:** `tokio::select! { ... }`",
+        },
+    );
+    m.insert(
+        "Promise.any",
+        BuiltinHover {
+            markdown: "```rustscript\nPromise.any(promises: Array<Promise<T>>): Promise<T>\n```\n\nRuns all promises concurrently, returns the first to succeed.\n\n**Rust:** `futures::future::select_ok(...)`",
+        },
+    );
+    m.insert(
         "spawn",
         BuiltinHover {
             markdown: "```rustscript\nspawn(fn: () => void): void\n```\n\nSpawns a concurrent task.\n\n**Rust:** `tokio::spawn(async { ... })`",
@@ -532,6 +544,12 @@ static KEYWORD_HOVERS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock:
         "finally",
         BuiltinHover {
             markdown: "```\nfinally\n```\n\nExecutes after try/catch regardless of outcome. Cleanup block.",
+        },
+    );
+    m.insert(
+        "for await",
+        BuiltinHover {
+            markdown: "```\nfor await\n```\n\nAsync iteration --- iterates over an async stream.\n\n**Rust:** `while let Some(item) = stream.next().await { ... }`",
         },
     );
 
@@ -775,5 +793,42 @@ mod tests {
         let hover = lookup_keyword("finally");
         assert!(hover.is_some(), "finally should have hover info");
         assert!(hover.unwrap().contains("regardless"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 066: Async iteration and Promise methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_promise_race() {
+        let hover = lookup_method("Promise", "race");
+        assert!(hover.is_some(), "Promise.race should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("tokio::select!"),
+            "should mention tokio::select!: {text}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_hover_promise_any() {
+        let hover = lookup_method("Promise", "any");
+        assert!(hover.is_some(), "Promise.any should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("select_ok"),
+            "should mention select_ok: {text}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_hover_keyword_for_await() {
+        let hover = lookup_keyword("for await");
+        assert!(hover.is_some(), "for await should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("stream.next().await"),
+            "should mention stream.next().await: {text}"
+        );
     }
 }

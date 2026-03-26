@@ -49,7 +49,9 @@ fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
             expr_needs_async_runtime(&w.condition) || block_needs_async_runtime(&w.body)
         }
         ast::Stmt::For(f) => {
-            expr_needs_async_runtime(&f.iterable) || block_needs_async_runtime(&f.body)
+            f.is_await
+                || expr_needs_async_runtime(&f.iterable)
+                || block_needs_async_runtime(&f.body)
         }
         ast::Stmt::TryCatch(tc) => {
             block_needs_async_runtime(&tc.try_block)
@@ -71,11 +73,11 @@ fn expr_needs_async_runtime(expr: &ast::Expr) -> bool {
     match &expr.kind {
         ast::ExprKind::Call(call) if call.callee.name == "spawn" => true,
         ast::ExprKind::Await(inner) => {
-            // Check for Promise.all pattern
+            // Check for Promise.all/race/any patterns
             if let ast::ExprKind::MethodCall(mc) = &inner.kind
                 && let ast::ExprKind::Ident(obj) = &mc.object.kind
                 && obj.name == "Promise"
-                && mc.method.name == "all"
+                && matches!(mc.method.name.as_str(), "all" | "race" | "any")
             {
                 return true;
             }
@@ -90,6 +92,75 @@ fn expr_needs_async_runtime(expr: &ast::Expr) -> bool {
         }
         ast::ExprKind::Unary(un) => expr_needs_async_runtime(&un.operand),
         ast::ExprKind::Paren(inner) => expr_needs_async_runtime(inner),
+        _ => false,
+    }
+}
+
+/// Check if a module uses `for await` or `Promise.any` patterns that require
+/// the `futures` crate dependency.
+pub(super) fn module_needs_futures_crate(module: &ast::Module) -> bool {
+    for item in &module.items {
+        if let ast::ItemKind::Function(f) = &item.kind
+            && block_needs_futures(&f.body)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Recursively scan a block for patterns requiring the futures crate.
+fn block_needs_futures(block: &ast::Block) -> bool {
+    block.stmts.iter().any(stmt_needs_futures)
+}
+
+/// Check if a statement contains `for await` or `Promise.any` usage.
+fn stmt_needs_futures(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::For(f) => f.is_await || block_needs_futures(&f.body),
+        ast::Stmt::Expr(expr)
+        | ast::Stmt::Return(ast::ReturnStmt {
+            value: Some(expr), ..
+        }) => expr_needs_futures(expr),
+        ast::Stmt::VarDecl(decl) => expr_needs_futures(&decl.init),
+        ast::Stmt::ArrayDestructure(adestr) => expr_needs_futures(&adestr.init),
+        ast::Stmt::If(if_stmt) => {
+            expr_needs_futures(&if_stmt.condition)
+                || block_needs_futures(&if_stmt.then_block)
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::Block(b)) if block_needs_futures(b))
+        }
+        ast::Stmt::While(w) => expr_needs_futures(&w.condition) || block_needs_futures(&w.body),
+        ast::Stmt::TryCatch(tc) => {
+            block_needs_futures(&tc.try_block)
+                || tc.catch_block.as_ref().is_some_and(block_needs_futures)
+                || tc.finally_block.as_ref().is_some_and(block_needs_futures)
+        }
+        _ => false,
+    }
+}
+
+/// Check if an expression contains `Promise.any(...)`.
+fn expr_needs_futures(expr: &ast::Expr) -> bool {
+    match &expr.kind {
+        ast::ExprKind::Await(inner) => {
+            if let ast::ExprKind::MethodCall(mc) = &inner.kind
+                && let ast::ExprKind::Ident(obj) = &mc.object.kind
+                && obj.name == "Promise"
+                && mc.method.name == "any"
+            {
+                return true;
+            }
+            expr_needs_futures(inner)
+        }
+        ast::ExprKind::Call(call) => call.args.iter().any(expr_needs_futures),
+        ast::ExprKind::MethodCall(mc) => {
+            expr_needs_futures(&mc.object) || mc.args.iter().any(expr_needs_futures)
+        }
+        ast::ExprKind::Binary(bin) => {
+            expr_needs_futures(&bin.left) || expr_needs_futures(&bin.right)
+        }
+        ast::ExprKind::Unary(un) => expr_needs_futures(&un.operand),
+        ast::ExprKind::Paren(inner) => expr_needs_futures(inner),
         _ => false,
     }
 }
@@ -117,7 +188,9 @@ fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
                 || matches!(&if_stmt.else_clause, Some(ast::ElseClause::ElseIf(elif)) if stmt_contains_await(&ast::Stmt::If(*elif.clone())))
         }
         ast::Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
-        ast::Stmt::For(f) => expr_contains_await(&f.iterable) || block_contains_await(&f.body),
+        ast::Stmt::For(f) => {
+            f.is_await || expr_contains_await(&f.iterable) || block_contains_await(&f.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_contains_await(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_contains_await)

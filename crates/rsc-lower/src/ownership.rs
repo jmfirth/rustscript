@@ -1705,6 +1705,7 @@ mod tests {
                         stmts: vec![],
                         span: span(12, 14),
                     },
+                    is_await: false,
                     span: span(0, 14),
                 }),
                 Stmt::Expr(Expr {
@@ -1746,6 +1747,7 @@ mod tests {
                     })],
                     span: span(11, 23),
                 },
+                is_await: false,
                 span: span(0, 23),
             })],
             span: span(0, 23),
@@ -2122,6 +2124,7 @@ mod tests {
                     stmts: vec![],
                     span: span(12, 14),
                 },
+                is_await: false,
                 span: span(0, 14),
             })],
             span: span(0, 14),
