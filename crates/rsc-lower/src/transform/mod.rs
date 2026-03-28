@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
+use rsc_syntax::external_fn::ExternalFnInfo;
 use rsc_syntax::rust_ir::{
     ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
     RustEnumVariant, RustExpr, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam,
@@ -153,6 +154,9 @@ pub(crate) struct Transform {
     /// Names imported from other modules/crates.
     /// Used to distinguish `Type.method()` (static call) from `variable.method()`.
     imported_types: HashSet<String>,
+    /// External function signatures from rustdoc JSON, keyed by
+    /// `"crate::function"` or `"crate::Type::method"`.
+    external_signatures: HashMap<String, ExternalFnInfo>,
 }
 
 impl Transform {
@@ -166,7 +170,16 @@ impl Transform {
             no_borrow_inference,
             union_registry: UnionRegistry::new(),
             imported_types: HashSet::new(),
+            external_signatures: HashMap::new(),
         }
+    }
+
+    /// Set external function signatures from rustdoc data.
+    ///
+    /// Called by the driver after loading rustdoc JSON for imported crates.
+    /// The keys are qualified names like `"axum::Router::route"` or `"serde_json::to_string"`.
+    pub fn set_external_signatures(&mut self, sigs: HashMap<String, ExternalFnInfo>) {
+        self.external_signatures = sigs;
     }
 
     /// Check whether an identifier refers to a type rather than a variable.

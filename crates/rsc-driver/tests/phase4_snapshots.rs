@@ -394,6 +394,7 @@ function main(): void {
     // Without borrow inference: s → String, clones at call site
     let options = CompileOptions {
         no_borrow_inference: true,
+        ..CompileOptions::default()
     };
     let result_without = compile_source_with_options(source, "test.rts", &options);
     assert!(!result_without.has_errors);
@@ -448,6 +449,7 @@ function main(): void {
 
     let options = CompileOptions {
         no_borrow_inference: true,
+        ..CompileOptions::default()
     };
     let result_without = compile_source_with_options(source, "test.rts", &options);
     assert!(
@@ -757,6 +759,7 @@ function main(): void {
     // Without borrow inference: String
     let options = CompileOptions {
         no_borrow_inference: true,
+        ..CompileOptions::default()
     };
     let result_without = compile_source_with_options(source, "test.rts", &options);
     assert!(!result_without.has_errors);

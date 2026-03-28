@@ -1040,6 +1040,7 @@ function main() {
 
     let options = rsc_driver::CompileOptions {
         no_borrow_inference: true,
+        ..rsc_driver::CompileOptions::default()
     };
     let result = rsc_driver::compile_source_with_options(source, "test.rts", &options);
     assert!(

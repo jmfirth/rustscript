@@ -2795,6 +2795,7 @@ function main(): void {
     // Without borrow inference: name → String
     let options = CompileOptions {
         no_borrow_inference: true,
+        ..CompileOptions::default()
     };
     let result_without = compile_source_with_options(source, "test.rts", &options);
     assert!(!result_without.has_errors);

@@ -3,7 +3,10 @@
 //! Wires the compiler stages together: parse, lower, emit. Collects diagnostics
 //! from all passes and returns them alongside the generated Rust source.
 
+use std::collections::HashMap;
+
 use rsc_syntax::diagnostic::{Diagnostic, Severity};
+use rsc_syntax::external_fn::ExternalFnInfo;
 use rsc_syntax::source::SourceMap;
 use rsc_syntax::span::Span;
 
@@ -44,6 +47,9 @@ pub struct CompileOptions {
     /// When true, disables Tier 2 borrow inference and forces all function
     /// parameters to `Owned` mode (Tier 1 behavior).
     pub no_borrow_inference: bool,
+    /// External function signatures from rustdoc JSON, keyed by qualified name.
+    /// Threaded through to the lowering pass for call-site analysis.
+    pub external_signatures: HashMap<String, ExternalFnInfo>,
 }
 
 /// Compile a single `RustScript` source string to Rust source code.
@@ -92,6 +98,7 @@ pub fn compile_source_with_options(
     // Stage 2: Lower
     let lower_options = rsc_lower::LowerOptions {
         no_borrow_inference: options.no_borrow_inference,
+        external_signatures: options.external_signatures.clone(),
     };
     let lower_result = rsc_lower::lower_with_options(&module, &lower_options);
 
@@ -180,6 +187,7 @@ pub fn compile_source_with_mods_and_options(
     // Stage 2: Lower
     let lower_options = rsc_lower::LowerOptions {
         no_borrow_inference: options.no_borrow_inference,
+        external_signatures: options.external_signatures.clone(),
     };
     let lower_result = rsc_lower::lower_with_options(&module, &lower_options);
 
@@ -1178,5 +1186,48 @@ async function getData(): string {
             "expected at least some source_map_lines entries to have spans, got: {:?}",
             result.source_map_lines
         );
+    }
+
+    // Test: external signatures are threaded through CompileOptions to lowering
+    #[test]
+    fn test_compile_source_with_external_signatures() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalParamInfo, ExternalReturnType};
+
+        let mut sigs = HashMap::new();
+        sigs.insert(
+            "axum::Router::route".to_owned(),
+            ExternalFnInfo {
+                name: "route".to_owned(),
+                crate_name: "axum".to_owned(),
+                params: vec![ExternalParamInfo {
+                    name: "path".to_owned(),
+                    is_ref: true,
+                    is_str_ref: true,
+                    is_mut_ref: false,
+                }],
+                return_type: ExternalReturnType::Value,
+                is_async: false,
+                is_method: true,
+                parent_type: Some("Router".to_owned()),
+            },
+        );
+
+        let options = CompileOptions {
+            no_borrow_inference: false,
+            external_signatures: sigs,
+        };
+
+        // The external signatures don't affect a simple hello-world program,
+        // but the pipeline should accept and thread them through without error.
+        let source = r#"function main() {
+  console.log("hello");
+}"#;
+        let result = compile_source_with_options(source, "test.rts", &options);
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+        assert!(result.rust_source.contains("fn main()"));
     }
 }

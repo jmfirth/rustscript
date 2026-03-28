@@ -12,8 +12,11 @@ pub mod error;
 mod ownership;
 mod transform;
 
+use std::collections::HashMap;
+
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
+use rsc_syntax::external_fn::ExternalFnInfo;
 use rsc_syntax::rust_ir::RustFile;
 
 use transform::Transform;
@@ -36,6 +39,9 @@ pub struct LowerOptions {
     /// parameters to `Owned` mode (Tier 1 behavior). Useful for debugging
     /// when generated Rust has borrow-related compilation issues.
     pub no_borrow_inference: bool,
+    /// External function signatures from rustdoc JSON, keyed by qualified name
+    /// (e.g., `"axum::Router::route"` or `"serde_json::to_string"`).
+    pub external_signatures: HashMap<String, ExternalFnInfo>,
 }
 
 /// Result of lowering a single module.
@@ -78,6 +84,9 @@ pub fn lower(module: &ast::Module) -> LowerResult {
 #[must_use]
 pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> LowerResult {
     let mut transform = Transform::new(options.no_borrow_inference);
+    if !options.external_signatures.is_empty() {
+        transform.set_external_signatures(options.external_signatures.clone());
+    }
     let (
         ir,
         diagnostics,

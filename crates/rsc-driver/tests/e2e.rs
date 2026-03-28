@@ -777,6 +777,7 @@ function main(): void {
     // Without borrow inference — should also compile and produce same output
     let options = CompileOptions {
         no_borrow_inference: true,
+        ..CompileOptions::default()
     };
     let result = compile_source_with_options(source, "test.rts", &options);
     assert!(!result.has_errors);

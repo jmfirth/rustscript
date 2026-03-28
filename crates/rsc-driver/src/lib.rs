@@ -11,6 +11,7 @@ pub mod error_translation;
 mod pipeline;
 mod project;
 pub mod rustdoc_cache;
+pub mod rustdoc_convert;
 pub mod rustdoc_parser;
 mod templates;
 

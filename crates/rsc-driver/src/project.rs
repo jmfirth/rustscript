@@ -16,6 +16,8 @@ use rsc_syntax::rust_ir::RustModDecl;
 use crate::error::{DriverError, Result};
 use crate::error_translation::translate_rustc_errors_colored;
 use crate::pipeline::CompileResult;
+use crate::rustdoc_cache;
+use crate::rustdoc_convert;
 
 /// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
 const PROJECT_MANIFEST: &str = "cargo.toml";
@@ -324,6 +326,11 @@ impl Project {
         let src_dir = build_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
+        // Load cached external function signatures from previous rustdoc runs.
+        // On the first compilation there won't be any cached data; the rustdoc
+        // JSON will be generated after this compilation for use in future runs.
+        let compile_options = self.load_compile_options_with_rustdoc(&build_dir);
+
         // Collect all crate dependencies from all compiled modules
         let mut all_crate_deps: Vec<CrateDependency> = Vec::new();
         // Track whether any module uses async (OR across all modules)
@@ -348,7 +355,7 @@ impl Project {
             let module_result = crate::pipeline::compile_source_with_options(
                 &module_source,
                 module_file_name,
-                &self.compile_options,
+                &compile_options,
             );
 
             // Collect dependencies even from modules with errors (the imports are still valid)
@@ -390,13 +397,13 @@ impl Project {
             .map_or("unknown.rts", |n| n.to_str().unwrap_or("unknown.rts"));
 
         let result = if mod_decls.is_empty() {
-            crate::pipeline::compile_source_with_options(&source, file_name, &self.compile_options)
+            crate::pipeline::compile_source_with_options(&source, file_name, &compile_options)
         } else {
             crate::pipeline::compile_source_with_mods_and_options(
                 &source,
                 file_name,
                 mod_decls,
-                &self.compile_options,
+                &compile_options,
             )
         };
 
@@ -462,6 +469,12 @@ impl Project {
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
 
+        // Generate rustdoc JSON for dependencies (non-fatal).
+        // Only runs if there are external deps and no cached docs exist yet.
+        if !all_crate_deps.is_empty() {
+            Self::maybe_generate_rustdoc(&build_dir);
+        }
+
         // If any module had errors, propagate that
         let result = if has_module_errors && !result.has_errors {
             CompileResult {
@@ -474,6 +487,76 @@ impl Project {
 
         let rts_filename = format!("src/{file_name}");
         Ok((result, build_dir, source, rts_filename))
+    }
+
+    /// Build `CompileOptions` with external function signatures loaded from
+    /// cached rustdoc JSON (if available from a previous compilation).
+    fn load_compile_options_with_rustdoc(
+        &self,
+        build_dir: &Path,
+    ) -> crate::pipeline::CompileOptions {
+        let mut options = crate::pipeline::CompileOptions {
+            no_borrow_inference: self.compile_options.no_borrow_inference,
+            ..crate::pipeline::CompileOptions::default()
+        };
+
+        // Check if any cached rustdoc JSON exists from a prior build.
+        let doc_dir = build_dir.join("target").join("doc");
+        if !doc_dir.is_dir() {
+            return options;
+        }
+
+        // Scan for .json files in the doc directory.
+        let json_files: Vec<_> = fs::read_dir(&doc_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+
+        if json_files.is_empty() {
+            return options;
+        }
+
+        // Load and convert each cached crate's rustdoc data.
+        let mut cache = crate::rustdoc_cache::RustdocCache::new();
+        for entry in &json_files {
+            let crate_name = entry
+                .path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(std::borrow::ToOwned::to_owned);
+            if let Some(name) = crate_name
+                && let Some(crate_data) = cache.get_crate_docs(&name, build_dir)
+            {
+                let fns = rustdoc_convert::convert_crate_to_external_fns(&name, &crate_data);
+                options.external_signatures.extend(fns);
+            }
+        }
+
+        options
+    }
+
+    /// Generate rustdoc JSON for dependencies if not already cached.
+    ///
+    /// This is non-fatal: if rustdoc generation fails (e.g., nightly not
+    /// installed), compilation continues without external signature info.
+    fn maybe_generate_rustdoc(build_dir: &Path) {
+        // Simple caching: skip if the doc directory already has .json files.
+        let doc_dir = build_dir.join("target").join("doc");
+        if doc_dir.is_dir() {
+            let has_json = fs::read_dir(&doc_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(std::result::Result::ok)
+                .any(|e| e.path().extension().is_some_and(|ext| ext == "json"));
+            if has_json {
+                return;
+            }
+        }
+
+        eprintln!("Generating dependency docs...");
+        let _ = rustdoc_cache::generate_rustdoc_json(build_dir);
     }
 
     /// Compile the project with WASM-specific adjustments.
@@ -2224,5 +2307,63 @@ async function fetchData(): string {
             ColorMode::Never,
             "default should be Never"
         );
+    }
+
+    #[test]
+    fn test_load_compile_options_with_rustdoc_no_docs_returns_empty_sigs() {
+        let tmp = TempDir::new().unwrap();
+        let build_dir = tmp.path().join(".rsc-build");
+        fs::create_dir_all(&build_dir).unwrap();
+
+        let project = Project {
+            root: tmp.path().to_path_buf(),
+            name: "test".to_owned(),
+            compile_options: crate::pipeline::CompileOptions::default(),
+            color_mode: ColorMode::Never,
+        };
+
+        let options = project.load_compile_options_with_rustdoc(&build_dir);
+        assert!(
+            options.external_signatures.is_empty(),
+            "no doc dir should yield empty external signatures"
+        );
+    }
+
+    #[test]
+    fn test_load_compile_options_with_rustdoc_empty_doc_dir_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let build_dir = tmp.path().join(".rsc-build");
+        let doc_dir = build_dir.join("target").join("doc");
+        fs::create_dir_all(&doc_dir).unwrap();
+
+        let project = Project {
+            root: tmp.path().to_path_buf(),
+            name: "test".to_owned(),
+            compile_options: crate::pipeline::CompileOptions::default(),
+            color_mode: ColorMode::Never,
+        };
+
+        let options = project.load_compile_options_with_rustdoc(&build_dir);
+        assert!(
+            options.external_signatures.is_empty(),
+            "empty doc dir should yield empty external signatures"
+        );
+    }
+
+    #[test]
+    fn test_maybe_generate_rustdoc_skips_when_json_exists() {
+        let tmp = TempDir::new().unwrap();
+        let build_dir = tmp.path().join(".rsc-build");
+        let doc_dir = build_dir.join("target").join("doc");
+        fs::create_dir_all(&doc_dir).unwrap();
+
+        // Write a dummy .json file to simulate cached docs
+        fs::write(doc_dir.join("serde.json"), "{}").unwrap();
+
+        // This should return early without calling cargo doc.
+        // If it didn't skip, it would try to run cargo doc and potentially
+        // do something noisy, but since we just check the caching logic
+        // we verify it doesn't panic and returns cleanly.
+        Project::maybe_generate_rustdoc(&build_dir);
     }
 }
