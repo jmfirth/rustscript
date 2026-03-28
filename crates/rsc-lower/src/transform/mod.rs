@@ -4525,6 +4525,106 @@ class Foo {
         }
     }
 
+    // Await on external (unknown) async call in throws function → `.await?`
+    #[test]
+    fn test_lower_await_external_call_in_throws_fn_adds_question_mark() {
+        let source = r#"async function startServer(): void throws string {
+            const listener = await externalAsyncFn();
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                // First statement should be a let binding
+                match &f.body.stmts[0] {
+                    RustStmt::Let(let_stmt) => {
+                        // The init should be QuestionMark(Await(Call))
+                        match &let_stmt.init.kind {
+                            RustExprKind::QuestionMark(inner) => {
+                                assert!(
+                                    matches!(&inner.kind, RustExprKind::Await(_)),
+                                    "expected Await inside QuestionMark, got {:?}",
+                                    inner.kind
+                                );
+                            }
+                            other => panic!("expected QuestionMark(Await(...)), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Await on known throws async call in throws function → `.await` (no double `?`)
+    #[test]
+    fn test_lower_await_known_throws_call_no_double_question_mark() {
+        let source = r#"
+            async function inner(): i32 throws string {
+                return 42;
+            }
+            async function outer(): i32 throws string {
+                const x = await inner();
+                return x;
+            }
+        "#;
+        let file = lower_source(source);
+        // outer is the second function (index 1)
+        match &file.items[1] {
+            RustItem::Function(f) => {
+                match &f.body.stmts[0] {
+                    RustStmt::Let(let_stmt) => {
+                        // The init should be Await(QuestionMark(Call)) — the `?` is on
+                        // the inner call, NOT on the await. No double wrapping.
+                        match &let_stmt.init.kind {
+                            RustExprKind::Await(inner) => {
+                                assert!(
+                                    matches!(&inner.kind, RustExprKind::QuestionMark(_)),
+                                    "expected QuestionMark inside Await, got {:?}",
+                                    inner.kind
+                                );
+                            }
+                            other => panic!("expected Await(QuestionMark(...)), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    // Await on external async call in NON-throws function → `.await` (no `?`)
+    #[test]
+    fn test_lower_await_external_call_in_non_throws_fn_no_question_mark() {
+        let source = r#"async function doStuff(): string {
+            const result = await externalAsyncFn();
+            return result;
+        }"#;
+        let file = lower_source(source);
+        match &file.items[0] {
+            RustItem::Function(f) => {
+                match &f.body.stmts[0] {
+                    RustStmt::Let(let_stmt) => {
+                        // The init should be Await(Call) — no QuestionMark
+                        match &let_stmt.init.kind {
+                            RustExprKind::Await(inner) => {
+                                assert!(
+                                    matches!(&inner.kind, RustExprKind::Call { .. }),
+                                    "expected Call inside Await, got {:?}",
+                                    inner.kind
+                                );
+                            }
+                            other => panic!("expected Await(Call(...)), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
     // Async closure lowering: is_async passthrough
     #[test]
     fn test_lower_async_closure_produces_async_rust_closure() {

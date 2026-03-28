@@ -336,7 +336,20 @@ impl Transform {
                 }
 
                 let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
-                RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span)
+                // If the inner expression already has `?` (known throws function),
+                // the call is already unwrapped — just await it without extra `?`.
+                let inner_already_has_question_mark =
+                    matches!(&lowered.kind, RustExprKind::QuestionMark(_));
+                let await_expr = RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span);
+                // When inside a `throws` function and the awaited call is to an
+                // unknown (external) function, add `?` after `.await` to propagate
+                // the Result. Most Rust async APIs return Result, so this is the
+                // correct default for external calls.
+                if ctx.is_fn_throws() && !inner_already_has_question_mark {
+                    RustExpr::new(RustExprKind::QuestionMark(Box::new(await_expr)), expr.span)
+                } else {
+                    await_expr
+                }
             }
             ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),
             ast::ExprKind::FieldAssign(fa) => {
