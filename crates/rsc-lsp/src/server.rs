@@ -30,7 +30,8 @@ use crate::diagnostics;
 use crate::name_map;
 use crate::position_map::PositionMap;
 use crate::ra_proxy::RustAnalyzerProxy;
-use crate::rustdoc_cache::RustdocCache;
+use rsc_driver::rustdoc_cache::RustdocCache;
+use rsc_driver::rustdoc_parser;
 
 /// Debounce delay for recompilation after document changes.
 const DEBOUNCE_MS: u64 = 300;
@@ -428,8 +429,10 @@ impl LanguageServer for RscLanguageServer {
                 && let Some(build_dir) = self.build_dir.read().await.as_ref()
             {
                 let mut rustdoc = self.rustdoc_cache.write().await;
-                if let Some(hover_text) = rustdoc.lookup_hover(&crate_name, &symbol_name, build_dir)
+                if let Some(crate_data) = rustdoc.get_crate_docs(&crate_name, build_dir)
+                    && let Some(item) = rustdoc_parser::lookup_item(&crate_data, &symbol_name)
                 {
+                    let hover_text = crate::rustdoc_translator::translate_item_to_hover(item);
                     return Ok(Some(Hover {
                         contents: HoverContents::Markup(MarkupContent {
                             kind: MarkupKind::Markdown,

@@ -12,6 +12,7 @@ rsc-emit = { path = "../rsc-emit" }
 thiserror = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

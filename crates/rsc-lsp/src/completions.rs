@@ -11,9 +11,9 @@ use tower_lsp::lsp_types::{
     SignatureInformation,
 };
 
-use crate::rustdoc_cache::RustdocCache;
-use crate::rustdoc_parser::RustdocItemKind;
 use crate::server::CachedCompileInfo;
+use rsc_driver::rustdoc_cache::RustdocCache;
+use rsc_driver::rustdoc_parser::RustdocItemKind;
 
 // ---------------------------------------------------------------------------
 // 1. Keyword completions
@@ -1436,7 +1436,9 @@ mod tests {
 
     #[test]
     fn test_import_completions_from_rustdoc_cache() {
-        use crate::rustdoc_parser::{RustdocCrate, RustdocFunction, RustdocItem, RustdocItemKind};
+        use rsc_driver::rustdoc_parser::{
+            RustdocCrate, RustdocFunction, RustdocItem, RustdocItemKind,
+        };
 
         let mut crate_data = RustdocCrate::default();
 
@@ -1444,7 +1446,7 @@ mod tests {
             id: "0:1".to_owned(),
             name: "Router".to_owned(),
             docs: Some("An HTTP router.".to_owned()),
-            kind: RustdocItemKind::Struct(crate::rustdoc_parser::RustdocStruct {
+            kind: RustdocItemKind::Struct(rsc_driver::rustdoc_parser::RustdocStruct {
                 generics: vec![],
                 fields: vec![],
                 is_tuple: false,

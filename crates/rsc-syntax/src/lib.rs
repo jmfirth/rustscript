@@ -7,6 +7,7 @@
 pub mod ast;
 pub mod diagnostic;
 pub mod error;
+pub mod external_fn;
 pub mod rust_ir;
 pub mod source;
 pub mod span;

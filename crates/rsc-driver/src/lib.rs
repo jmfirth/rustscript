@@ -10,6 +10,8 @@ pub mod error;
 pub mod error_translation;
 mod pipeline;
 mod project;
+pub mod rustdoc_cache;
+pub mod rustdoc_parser;
 mod templates;
 
 pub use error_translation::{translate_rustc_errors, translate_rustc_errors_colored};

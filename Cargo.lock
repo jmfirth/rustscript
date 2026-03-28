@@ -1017,6 +1017,7 @@ dependencies = [
  "rsc-lower",
  "rsc-parser",
  "rsc-syntax",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",
