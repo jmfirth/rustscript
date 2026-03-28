@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
-use rsc_syntax::external_fn::ExternalFnInfo;
+use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
 use rsc_syntax::rust_ir::{
     ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
     RustEnumVariant, RustExpr, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam,
@@ -366,6 +366,11 @@ impl Transform {
                 self.register_fn_signature(f, &mut ctx);
             }
         }
+
+        // Register external function signatures from rustdoc data.
+        // Converts ExternalFnInfo into FnSignature entries so call-site lowering
+        // can use param modes and throws detection for external crate functions.
+        self.register_external_signatures();
 
         // Pre-pass: scan all type annotations and register any general union types
         // so their enum definitions will be generated.
@@ -936,6 +941,52 @@ impl Transform {
                 param_count,
             },
         );
+    }
+
+    /// Convert external function signatures into `FnSignature` entries.
+    ///
+    /// Iterates over `self.external_signatures` and inserts corresponding
+    /// `FnSignature` entries into `self.fn_signatures`. Free functions are
+    /// keyed by their bare name; methods are keyed by `"TypeName::method_name"`.
+    /// Does not overwrite locally-defined signatures.
+    fn register_external_signatures(&mut self) {
+        for ext_info in self.external_signatures.values() {
+            let param_modes: Vec<ParamMode> = ext_info
+                .params
+                .iter()
+                .map(|p| {
+                    if p.is_str_ref {
+                        ParamMode::BorrowedStr
+                    } else if p.is_ref {
+                        ParamMode::Borrowed
+                    } else {
+                        ParamMode::Owned
+                    }
+                })
+                .collect();
+
+            let throws = matches!(ext_info.return_type, ExternalReturnType::Result);
+
+            let sig = FnSignature {
+                throws,
+                param_types: vec![],
+                param_modes: Some(param_modes),
+                optional_params: vec![false; ext_info.params.len()],
+                default_values: vec![None; ext_info.params.len()],
+                has_rest_param: false,
+                param_count: ext_info.params.len(),
+            };
+
+            // Key by "TypeName::method_name" for methods, bare name for free functions.
+            let key = if let Some(parent) = &ext_info.parent_type {
+                format!("{}::{}", parent, ext_info.name)
+            } else {
+                ext_info.name.clone()
+            };
+
+            // Don't overwrite locally-defined signatures.
+            self.fn_signatures.entry(key).or_insert(sig);
+        }
     }
 
     /// Lower a top-level `const`/`let` declaration to a Rust `const` item.
@@ -5798,5 +5849,339 @@ async function main() {
             output.contains("to_string"),
             "string literal in let binding should keep .to_string(): {output}"
         );
+    }
+
+    // External free function with &str param → string literal arg uses BorrowedStr mode
+    #[test]
+    fn test_lower_external_fn_str_ref_param_strips_to_string() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalParamInfo, ExternalReturnType};
+
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::Call(CallExpr {
+                    callee: ident("greet", 0, 5),
+                    args: vec![string_expr("hello", 6, 13)],
+                }),
+                span: span(0, 14),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+
+        let mut ext_sigs = HashMap::new();
+        ext_sigs.insert(
+            "some_crate::greet".to_owned(),
+            ExternalFnInfo {
+                name: "greet".to_owned(),
+                crate_name: "some_crate".to_owned(),
+                params: vec![ExternalParamInfo {
+                    name: "msg".to_owned(),
+                    is_ref: true,
+                    is_str_ref: true,
+                    is_mut_ref: false,
+                }],
+                return_type: ExternalReturnType::Unit,
+                is_async: false,
+                is_method: false,
+                parent_type: None,
+            },
+        );
+        transform.set_external_signatures(ext_sigs);
+
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::Call { args, .. } => {
+                    // With BorrowedStr mode, the string literal should be a bare StringLit
+                    // (the .to_string() wrapper is stripped)
+                    assert!(
+                        matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "hello"),
+                        "external fn with &str param should strip .to_string(), got {:?}",
+                        args[0].kind
+                    );
+                }
+                other => panic!("expected Call, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // External throws function → `?` added at call site in throws context
+    #[test]
+    fn test_lower_external_fn_throws_adds_question_mark() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
+
+        // Create a throws wrapper function that calls an external throws function
+        let inner_call = Expr {
+            kind: ExprKind::Call(CallExpr {
+                callee: ident("connect", 0, 7),
+                args: vec![],
+            }),
+            span: span(0, 9),
+        };
+        let throws_fn = FnDecl {
+            is_async: false,
+            name: ident("main_throws", 0, 11),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("void", 0, 4)),
+                    span: span(0, 4),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 4),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Expr(inner_call)],
+                span: span(0, 100),
+            },
+            doc_comment: None,
+            span: span(0, 100),
+        };
+        let module = make_module(vec![fn_item(throws_fn)]);
+        let mut transform = Transform::new(false);
+
+        let mut ext_sigs = HashMap::new();
+        ext_sigs.insert(
+            "db::connect".to_owned(),
+            ExternalFnInfo {
+                name: "connect".to_owned(),
+                crate_name: "db".to_owned(),
+                params: vec![],
+                return_type: ExternalReturnType::Result,
+                is_async: false,
+                is_method: false,
+                parent_type: None,
+            },
+        );
+        transform.set_external_signatures(ext_sigs);
+
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => {
+                // The call should be wrapped in QuestionMark
+                assert!(
+                    matches!(&expr.kind, RustExprKind::QuestionMark(inner)
+                        if matches!(&inner.kind, RustExprKind::Call { func, .. } if func == "connect")
+                    ),
+                    "external throws fn should add `?` at call site, got {:?}",
+                    expr.kind
+                );
+            }
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // External static method with &str param → correct borrow at call site
+    #[test]
+    fn test_lower_external_static_method_str_ref_param() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalParamInfo, ExternalReturnType};
+
+        // TcpListener.bind("addr") → TcpListener::bind("addr") with &str param mode
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::MethodCall(MethodCallExpr {
+                    object: Box::new(ident_expr("TcpListener", 0, 11)),
+                    method: ident("bind", 12, 16),
+                    args: vec![string_expr("0.0.0.0:3000", 17, 31)],
+                }),
+                span: span(0, 32),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+
+        // Mark TcpListener as an imported type so it's recognized as a type name
+        transform.imported_types.insert("TcpListener".to_owned());
+
+        let mut ext_sigs = HashMap::new();
+        ext_sigs.insert(
+            "tokio::net::TcpListener::bind".to_owned(),
+            ExternalFnInfo {
+                name: "bind".to_owned(),
+                crate_name: "tokio".to_owned(),
+                params: vec![ExternalParamInfo {
+                    name: "addr".to_owned(),
+                    is_ref: true,
+                    is_str_ref: true,
+                    is_mut_ref: false,
+                }],
+                return_type: ExternalReturnType::Result,
+                is_async: false,
+                is_method: false,
+                parent_type: Some("TcpListener".to_owned()),
+            },
+        );
+        transform.set_external_signatures(ext_sigs);
+
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::StaticCall { args, .. } => {
+                    // With BorrowedStr mode from external sig, the string literal
+                    // should be a bare StringLit (not wrapped in .to_string())
+                    assert!(
+                        matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "0.0.0.0:3000"),
+                        "external static method with &str param should produce bare StringLit, got {:?}",
+                        args[0].kind
+                    );
+                }
+                other => panic!("expected StaticCall, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // External static method that throws + in throws context → `?` added
+    #[test]
+    fn test_lower_external_static_method_throws_adds_question_mark() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
+
+        let inner_call = Expr {
+            kind: ExprKind::MethodCall(MethodCallExpr {
+                object: Box::new(ident_expr("TcpListener", 0, 11)),
+                method: ident("bind", 12, 16),
+                args: vec![string_expr("0.0.0.0:3000", 17, 31)],
+            }),
+            span: span(0, 32),
+        };
+        let throws_fn = FnDecl {
+            is_async: false,
+            name: ident("start_server", 0, 12),
+            type_params: None,
+            params: vec![],
+            return_type: Some(ReturnTypeAnnotation {
+                type_ann: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("void", 0, 4)),
+                    span: span(0, 4),
+                }),
+                throws: Some(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                span: span(0, 4),
+            }),
+            body: Block {
+                stmts: vec![Stmt::Expr(inner_call)],
+                span: span(0, 100),
+            },
+            doc_comment: None,
+            span: span(0, 100),
+        };
+        let module = make_module(vec![fn_item(throws_fn)]);
+        let mut transform = Transform::new(false);
+
+        transform.imported_types.insert("TcpListener".to_owned());
+
+        let mut ext_sigs = HashMap::new();
+        ext_sigs.insert(
+            "tokio::net::TcpListener::bind".to_owned(),
+            ExternalFnInfo {
+                name: "bind".to_owned(),
+                crate_name: "tokio".to_owned(),
+                params: vec![],
+                return_type: ExternalReturnType::Result,
+                is_async: false,
+                is_method: false,
+                parent_type: Some("TcpListener".to_owned()),
+            },
+        );
+        transform.set_external_signatures(ext_sigs);
+
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => {
+                assert!(
+                    matches!(&expr.kind, RustExprKind::QuestionMark(inner)
+                        if matches!(&inner.kind, RustExprKind::StaticCall { type_name, method, .. }
+                            if type_name == "TcpListener" && method == "bind")
+                    ),
+                    "external static throws method should add `?`, got {:?}",
+                    expr.kind
+                );
+            }
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // Internal function signatures still work correctly (no regression)
+    #[test]
+    fn test_lower_internal_fn_signature_not_overwritten_by_external() {
+        use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
+
+        // Define an internal function `greet` with a string param, then call it.
+        // Also register an external signature for "greet" — the internal one should win.
+        let greet_fn = make_fn("greet", vec![make_param("name", "string")], None, vec![]);
+        let main_fn = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::Call(CallExpr {
+                    callee: ident("greet", 0, 5),
+                    args: vec![string_expr("Alice", 6, 13)],
+                }),
+                span: span(0, 14),
+            })],
+        );
+        let module = make_module(vec![fn_item(greet_fn), fn_item(main_fn)]);
+        let mut transform = Transform::new(false);
+
+        // Register external signature that would make greet "throws" — but
+        // the internal one should take priority.
+        let mut ext_sigs = HashMap::new();
+        ext_sigs.insert(
+            "other_crate::greet".to_owned(),
+            ExternalFnInfo {
+                name: "greet".to_owned(),
+                crate_name: "other_crate".to_owned(),
+                params: vec![],
+                return_type: ExternalReturnType::Result,
+                is_async: false,
+                is_method: false,
+                parent_type: None,
+            },
+        );
+        transform.set_external_signatures(ext_sigs);
+
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+        // Find the main function (second item)
+        let RustItem::Function(main_func) = &file.items[1] else {
+            panic!("expected function item");
+        };
+        assert_eq!(main_func.name, "main");
+        match &main_func.body.stmts[0] {
+            RustStmt::Semi(expr) => {
+                // Should NOT be wrapped in QuestionMark since internal greet doesn't throw
+                assert!(
+                    matches!(&expr.kind, RustExprKind::Call { func, .. } if func == "greet"),
+                    "internal fn sig should not be overwritten by external, got {:?}",
+                    expr.kind
+                );
+            }
+            other => panic!("expected Semi, got {other:?}"),
+        }
     }
 }

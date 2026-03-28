@@ -1057,21 +1057,32 @@ impl Transform {
         if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
             && self.is_type_name(&obj_ident.name, ctx)
         {
+            // Look up external signature by "TypeName::method_name"
+            let sig_key = format!("{}::{}", obj_ident.name, mc.method.name);
+            let sig = self.fn_signatures.get(&sig_key);
+            let callee_modes = sig.and_then(|s| s.param_modes.as_ref());
+
             let args: Vec<RustExpr> = mc
                 .args
                 .iter()
-                .map(|a| {
-                    let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
-                    // Strip .to_string() from string literal args for external calls
-                    if let RustExprKind::ToString(inner) = &lowered.kind
-                        && matches!(inner.kind, RustExprKind::StringLit(_))
-                    {
-                        return *inner.clone();
+                .enumerate()
+                .map(|(i, a)| {
+                    if sig.is_some() {
+                        self.lower_single_arg(a, i, sig, callee_modes, ctx, use_map, stmt_index)
+                    } else {
+                        let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+                        // Strip .to_string() from string literal args for external calls
+                        if let RustExprKind::ToString(inner) = &lowered.kind
+                            && matches!(inner.kind, RustExprKind::StringLit(_))
+                        {
+                            return *inner.clone();
+                        }
+                        lowered
                     }
-                    lowered
                 })
                 .collect();
-            return RustExpr::new(
+
+            let call_expr = RustExpr::new(
                 RustExprKind::StaticCall {
                     type_name: obj_ident.name.clone(),
                     method: mc.method.name.clone(),
@@ -1079,27 +1090,52 @@ impl Transform {
                 },
                 span,
             );
+
+            // Wrap with `?` if the external method throws and we're in a throws context
+            if sig.is_some_and(|s| s.throws) && ctx.is_fn_throws() {
+                return RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), span);
+            }
+            return call_expr;
         }
 
         // Not a builtin — lower as a regular method call.
-        // For external method calls (no known signature), strip .to_string()
-        // from string literal args since most Rust APIs expect &str.
+        // Try to look up an external method signature by "TypeName::method_name"
+        // using the receiver's type from context.
+        let method_sig = if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind {
+            ctx.lookup_variable(&obj_ident.name)
+                .and_then(|var_info| extract_named_type(&var_info.ty))
+                .and_then(|type_name| {
+                    let key = format!("{}::{}", type_name, mc.method.name);
+                    self.fn_signatures.get(&key)
+                })
+        } else {
+            None
+        };
+        let callee_modes = method_sig.and_then(|s| s.param_modes.as_ref());
+
         let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
         let args: Vec<RustExpr> = mc
             .args
             .iter()
-            .map(|a| {
-                let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
-                if let RustExprKind::ToString(inner) = &lowered.kind
-                    && matches!(inner.kind, RustExprKind::StringLit(_))
-                {
-                    return *inner.clone();
+            .enumerate()
+            .map(|(i, a)| {
+                if method_sig.is_some() {
+                    self.lower_single_arg(a, i, method_sig, callee_modes, ctx, use_map, stmt_index)
+                } else {
+                    // No known signature — strip .to_string() from string literal args
+                    // since most Rust APIs expect &str.
+                    let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+                    if let RustExprKind::ToString(inner) = &lowered.kind
+                        && matches!(inner.kind, RustExprKind::StringLit(_))
+                    {
+                        return *inner.clone();
+                    }
+                    lowered
                 }
-                lowered
             })
             .collect();
 
-        RustExpr::new(
+        let call_expr = RustExpr::new(
             RustExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: mc.method.name.clone(),
@@ -1107,7 +1143,13 @@ impl Transform {
                 args,
             },
             span,
-        )
+        );
+
+        // Wrap with `?` if the external method throws and we're in a throws context
+        if method_sig.is_some_and(|s| s.throws) && ctx.is_fn_throws() {
+            return RustExpr::new(RustExprKind::QuestionMark(Box::new(call_expr)), span);
+        }
+        call_expr
     }
 
     /// Lower a struct literal expression.
