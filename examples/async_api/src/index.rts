@@ -1,4 +1,4 @@
-// Async API example — shows async/await with error handling
+// Async API example — shows async/await, Promise.all, error handling, spawn
 
 type ApiResponse = {
   status: u32,
@@ -14,8 +14,11 @@ async function fetchData(url: string): ApiResponse throws string {
 }
 
 async function fetchMultiple(): void throws string {
-  const resp1 = await fetchData("/users");
-  const resp2 = await fetchData("/posts");
+  // Promise.all runs both concurrently and auto-unwraps Results
+  const [resp1, resp2] = await Promise.all([
+    fetchData("/users"),
+    fetchData("/posts"),
+  ]);
   console.log(`Users: ${resp1.body}`);
   console.log(`Posts: ${resp2.body}`);
 }

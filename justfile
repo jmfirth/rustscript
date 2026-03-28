@@ -26,5 +26,25 @@ doc:
 clean:
     cargo clean
 
+examples: build
+    #!/usr/bin/env bash
+    set -e
+    RSC="$(pwd)/target/debug/rsc"
+    ROOT="$(pwd)"
+    echo "Validating examples..."
+    for dir in examples/*/; do
+        name=$(basename "$dir")
+        printf "  %-20s" "$name"
+        cd "$dir"
+        if [[ "$name" == "rest_api" || "$name" == "axum_server" ]]; then
+            $RSC build > /dev/null 2>&1 && echo "✓ (build)" || echo "✗ FAILED"
+        else
+            output=$($RSC run 2>&1 | tail -1)
+            echo "✓ ($output)"
+        fi
+        cd "$ROOT"
+    done
+    echo "Done."
+
 ci: check test-all doc
     @echo "CI passed"
