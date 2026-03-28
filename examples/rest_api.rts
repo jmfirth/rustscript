@@ -8,28 +8,41 @@ type Todo = {
   id: u32,
   title: string,
   completed: bool,
+} derives Serialize
+
+/** In-memory store */
+function getTodos(): Array<Todo> {
+  const t1: Todo = { id: 1, title: "Learn RustScript", completed: true };
+  const t2: Todo = { id: 2, title: "Build an API", completed: false };
+  const t3: Todo = { id: 3, title: "Deploy to production", completed: false };
+  return [t1, t2, t3];
 }
 
-/** GET / — hello world */
-async function handleRoot(): string {
-  return "Todo API v1";
-}
-
-/** GET /todos — list all todos as JSON */
+/** GET /todos — list all todos */
 async function handleList(): string {
-  return `[{"id":1,"title":"Learn RustScript","completed":true},{"id":2,"title":"Build an API","completed":false}]`;
+  return JSON.stringify(getTodos());
 }
 
-/** GET /health — health check */
-async function handleHealth(): string {
-  return `{"status":"ok"}`;
+/** GET /todos/pending — list incomplete todos */
+async function handlePending(): string {
+  const todos = getTodos();
+  const pending = todos.filter(t => !t.completed);
+  return JSON.stringify(pending);
+}
+
+/** GET /stats — summary statistics */
+async function handleStats(): string {
+  const todos = getTodos();
+  const total = todos.length;
+  const done = todos.filter(t => t.completed).length;
+  return `{"total": ${total}, "completed": ${done}, "pending": ${total - done}}`;
 }
 
 async function main() {
   const app = new Router()
-    .route("/", get(handleRoot))
     .route("/todos", get(handleList))
-    .route("/health", get(handleHealth));
+    .route("/todos/pending", get(handlePending))
+    .route("/stats", get(handleStats));
 
   const listener = await TcpListener.bind("0.0.0.0:3000");
   console.log("Todo API listening on http://0.0.0.0:3000");

@@ -4415,6 +4415,9 @@ fn test_snapshot_type_def_with_derives_serialize_deserialize() {
     let source = "type Foo = { x: i32, name: string } derives Serialize, Deserialize";
 
     let expected = "\
+use serde::Deserialize;
+use serde::Serialize;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Foo {
     pub x: i32,
@@ -4431,6 +4434,8 @@ fn test_snapshot_simple_enum_with_derives() {
     let source = r#"type Dir = "north" | "south" derives Serialize"#;
 
     let expected = "\
+use serde::Serialize;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 enum Dir {
     North,

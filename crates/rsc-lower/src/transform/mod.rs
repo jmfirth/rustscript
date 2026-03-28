@@ -474,7 +474,7 @@ impl Transform {
         // (e.g., when an import and new X() both generate a use for the same type)
         let mut seen_paths = std::collections::HashSet::new();
         import_uses.retain(|u| seen_paths.insert(u.path.clone()));
-        let uses = import_uses;
+        let mut uses = import_uses;
 
         // Detect whether the futures crate is needed (for await, Promise.any).
         // Check if any use declaration references futures::.
@@ -490,8 +490,18 @@ impl Transform {
         let needs_rand = stdlib_deps::module_needs_rand(module);
 
         // Detect whether serde derive crate is needed by scanning explicit derives
-        // for Serialize or Deserialize.
+        // for Serialize or Deserialize. If so, add use declarations.
         let needs_serde = module_needs_serde_derives(module);
+        if needs_serde {
+            let serde_derives = collect_serde_derive_names(module);
+            for name in serde_derives {
+                uses.push(RustUseDecl {
+                    path: format!("serde::{name}"),
+                    public: false,
+                    span: None,
+                });
+            }
+        }
 
         let diagnostics = ctx.into_diagnostics();
         (
@@ -1443,6 +1453,25 @@ fn module_needs_serde_derives(module: &ast::Module) -> bool {
         ast::ItemKind::Class(cls) => has_serde_derive(&cls.derives),
         _ => false,
     })
+}
+
+/// Collect unique serde derive names (Serialize, Deserialize) from the module.
+fn collect_serde_derive_names(module: &ast::Module) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for item in &module.items {
+        let derives: &[ast::Ident] = match &item.kind {
+            ast::ItemKind::TypeDef(td) => &td.derives,
+            ast::ItemKind::EnumDef(ed) => &ed.derives,
+            ast::ItemKind::Class(cls) => &cls.derives,
+            _ => continue,
+        };
+        for d in derives {
+            if d.name == "Serialize" || d.name == "Deserialize" {
+                names.insert(d.name.clone());
+            }
+        }
+    }
+    names.into_iter().collect()
 }
 
 fn capitalize_first(s: &str) -> String {

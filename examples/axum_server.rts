@@ -4,18 +4,26 @@ import { TcpListener } from "tokio/net";
 
 /** A simple REST API server using axum */
 
+type User = {
+  id: u32,
+  name: string,
+} derives Serialize
+
 async function hello(): string {
   return "Hello from RustScript!";
 }
 
-async function health(): string {
-  return `{"status": "ok"}`;
+async function listUsers(): string {
+  const alice: User = { id: 1, name: "Alice" };
+  const bob: User = { id: 2, name: "Bob" };
+  const users: Array<User> = [alice, bob];
+  return JSON.stringify(users);
 }
 
 async function main() {
   const app = new Router()
     .route("/", get(hello))
-    .route("/health", get(health));
+    .route("/users", get(listUsers));
 
   const listener = await TcpListener.bind("0.0.0.0:3000");
   console.log("Listening on http://0.0.0.0:3000");
