@@ -1030,6 +1030,26 @@ impl Transform {
             );
         }
 
+        // Check for static method call on an imported or otherwise known type:
+        // `TypeName.method()` → `TypeName::method()` when the receiver is not a variable.
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && self.is_type_name(&obj_ident.name, ctx)
+        {
+            let args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: obj_ident.name.clone(),
+                    method: mc.method.name.clone(),
+                    args,
+                },
+                span,
+            );
+        }
+
         // Not a builtin — lower as a regular method call
         let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
         let args: Vec<RustExpr> = mc

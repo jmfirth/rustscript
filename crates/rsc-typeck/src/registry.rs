@@ -201,6 +201,12 @@ impl TypeRegistry {
         })
     }
 
+    /// Check whether a type with the given name is registered.
+    #[must_use]
+    pub fn has_type(&self, name: &str) -> bool {
+        self.types.contains_key(name)
+    }
+
     /// Check whether a registered type has a static method with the given name.
     #[must_use]
     pub fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
@@ -422,5 +428,18 @@ mod tests {
         assert!(reg.has_static_method("Factory", "default"));
         assert!(!reg.has_static_method("Factory", "instance_method"));
         assert!(!reg.has_static_method("Missing", "create"));
+    }
+
+    #[test]
+    fn test_registry_has_type_returns_true_for_registered() {
+        let mut reg = TypeRegistry::new();
+        reg.register("User".to_owned(), vec![]);
+        assert!(reg.has_type("User"));
+    }
+
+    #[test]
+    fn test_registry_has_type_returns_false_for_missing() {
+        let reg = TypeRegistry::new();
+        assert!(!reg.has_type("Missing"));
     }
 }

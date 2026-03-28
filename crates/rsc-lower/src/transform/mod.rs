@@ -150,6 +150,9 @@ pub(crate) struct Transform {
     no_borrow_inference: bool,
     /// Registry of auto-generated union enum types encountered during lowering.
     union_registry: UnionRegistry,
+    /// Names imported from other modules/crates.
+    /// Used to distinguish `Type.method()` (static call) from `variable.method()`.
+    imported_types: HashSet<String>,
 }
 
 impl Transform {
@@ -162,7 +165,29 @@ impl Transform {
             fn_signatures: FunctionSignatureMap::new(),
             no_borrow_inference,
             union_registry: UnionRegistry::new(),
+            imported_types: HashSet::new(),
         }
+    }
+
+    /// Check whether an identifier refers to a type rather than a variable.
+    ///
+    /// Returns `true` if the name was imported, registered in the type registry,
+    /// or starts with an uppercase letter (`PascalCase` convention for Rust types)
+    /// and is not declared as a variable in the current scope.
+    fn is_type_name(&self, name: &str, ctx: &LoweringContext) -> bool {
+        // If it's a known variable, it's not a type
+        if ctx.lookup_variable(name).is_some() {
+            return false;
+        }
+        // Check imported names and type registry
+        if self.imported_types.contains(name) {
+            return true;
+        }
+        if self.type_registry.has_type(name) {
+            return true;
+        }
+        // PascalCase heuristic: starts with uppercase letter
+        name.starts_with(|c: char| c.is_ascii_uppercase())
     }
 
     /// Recursively register any generated union types found within a `RustType`.
@@ -377,6 +402,11 @@ impl Transform {
                         &mut import_uses,
                         &mut crate_deps,
                     );
+                    // Track imported names so method calls on types can be
+                    // recognized as static calls (`Type.method()` → `Type::method()`).
+                    for name in &import.names {
+                        self.imported_types.insert(name.name.clone());
+                    }
                 }
                 ast::ItemKind::ReExport(reexport) => {
                     import_lower::classify_import(
@@ -387,6 +417,10 @@ impl Transform {
                         &mut import_uses,
                         &mut crate_deps,
                     );
+                    // Track re-exported names for static call recognition.
+                    for name in &reexport.names {
+                        self.imported_types.insert(name.name.clone());
+                    }
                 }
                 ast::ItemKind::RustBlock(rb) => {
                     items.push(RustItem::RawRust(rb.code.clone()));
@@ -5475,6 +5509,63 @@ async function main() {
         assert!(
             output.contains("use futures::StreamExt;"),
             "for await should generate StreamExt use declaration: {output}"
+        );
+    }
+
+    // ---- Static method call on imported types ----
+
+    #[test]
+    fn test_lower_imported_type_static_method_call() {
+        let output = compile_and_emit(
+            r#"
+            import { TcpListener } from "tokio/net";
+            function main() {
+                const listener = TcpListener.bind("0.0.0.0:3000");
+            }
+            "#,
+        );
+        assert!(
+            output.contains("TcpListener::bind("),
+            "imported type method call should use :: notation: {output}"
+        );
+        assert!(
+            !output.contains("TcpListener.bind("),
+            "imported type method call should not use . notation: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_variable_method_call_not_affected() {
+        let output = compile_and_emit(
+            r#"
+            function main() {
+                const listener: string = "hello";
+                const result = listener.len();
+            }
+            "#,
+        );
+        // Variable method calls should still use dot notation
+        assert!(
+            !output.contains("listener::len("),
+            "variable method call should not use :: notation: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_pascal_case_identifier_static_method_call() {
+        // Even without an explicit import, PascalCase identifiers not in scope
+        // as variables should be treated as type names (static call)
+        let output = compile_and_emit(
+            r#"
+            import { MyService } from "my_crate";
+            function main() {
+                const svc = MyService.create();
+            }
+            "#,
+        );
+        assert!(
+            output.contains("MyService::create("),
+            "PascalCase identifier method call should use :: notation: {output}"
         );
     }
 }
