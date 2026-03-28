@@ -874,3 +874,100 @@ fn test_t066_promise_race_sets_needs_async_runtime() {
         "Promise.race should set needs_async_runtime"
     );
 }
+
+// ===========================================================================
+// Promise.all + throws — auto-unwrap Results from tokio::join!
+//
+// When Promise.all elements call throwing functions, the tokio::join! results
+// are Result values. In a throws context, each result must be unwrapped
+// with `?` after the join.
+// ===========================================================================
+
+// Test: Promise.all with throwing functions in throws context generates unwrap
+#[test]
+fn test_snapshot_promise_all_throws_generates_unwrap() {
+    let source = r#"async function fetchData(url: string): string throws string {
+  return "data";
+}
+
+async function fetchAll(): void throws string {
+  const [a, b] = await Promise.all([fetchData("/users"), fetchData("/posts")]);
+  console.log(a);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("let (a, b) = tokio::join!(fetchData("),
+        "should contain tokio::join! destructure, got: {actual}"
+    );
+    assert!(
+        actual.contains("let a = a?;"),
+        "should unwrap a with ?, got: {actual}"
+    );
+    assert!(
+        actual.contains("let b = b?;"),
+        "should unwrap b with ?, got: {actual}"
+    );
+}
+
+// Test: Promise.all with non-throwing functions — no unwrap
+#[test]
+fn test_snapshot_promise_all_non_throws_no_unwrap() {
+    let source = r#"async function getUser(): string {
+  return "alice";
+}
+
+async function getPosts(): string {
+  return "posts";
+}
+
+async function main() {
+  const [user, posts] = await Promise.all([getUser(), getPosts()]);
+  console.log(user);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("let (user, posts) = tokio::join!(getUser(), getPosts())"),
+        "should contain tokio::join! destructure, got: {actual}"
+    );
+    assert!(
+        !actual.contains("let user = user?;"),
+        "should NOT unwrap non-throwing results, got: {actual}"
+    );
+    assert!(
+        !actual.contains("let posts = posts?;"),
+        "should NOT unwrap non-throwing results, got: {actual}"
+    );
+}
+
+// Test: Promise.all with mixed throwing/non-throwing — only unwrap throwing
+#[test]
+fn test_snapshot_promise_all_mixed_throws_selective_unwrap() {
+    let source = r#"async function safeFetch(): string {
+  return "safe";
+}
+
+async function riskyFetch(url: string): string throws string {
+  return "risky";
+}
+
+async function doWork(): void throws string {
+  const [a, b] = await Promise.all([safeFetch(), riskyFetch("/api")]);
+  console.log(a);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("let (a, b) = tokio::join!("),
+        "should contain tokio::join! destructure, got: {actual}"
+    );
+    assert!(
+        !actual.contains("let a = a?;"),
+        "should NOT unwrap non-throwing element a, got: {actual}"
+    );
+    assert!(
+        actual.contains("let b = b?;"),
+        "should unwrap throwing element b, got: {actual}"
+    );
+}

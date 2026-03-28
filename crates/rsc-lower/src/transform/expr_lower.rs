@@ -312,8 +312,29 @@ impl Transform {
                     match mc.method.name.as_str() {
                         // `await Promise.all([...])` → `tokio::join!(...)`
                         "all" => {
+                            // tokio::join! takes futures directly — the `?` must
+                            // happen *after* the join, not inside it. Strip any
+                            // QuestionMark wrappers that lower_expr added for
+                            // throwing calls and record which positions need
+                            // unwrapping.
+                            let mut throwing_elements = vec![false; lowered_elements.len()];
+                            let stripped: Vec<RustExpr> = lowered_elements
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, e)| {
+                                    if let RustExprKind::QuestionMark(inner) = e.kind {
+                                        throwing_elements[i] = true;
+                                        *inner
+                                    } else {
+                                        e
+                                    }
+                                })
+                                .collect();
                             return RustExpr::new(
-                                RustExprKind::TokioJoin(lowered_elements),
+                                RustExprKind::TokioJoin {
+                                    elements: stripped,
+                                    throwing_elements,
+                                },
                                 expr.span,
                             );
                         }

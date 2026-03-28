@@ -1105,7 +1105,17 @@ pub enum RustExprKind {
     },
     /// `tokio::join!(expr1, expr2, ...)` — concurrent execution of futures.
     /// Produced by lowering `await Promise.all([...])`.
-    TokioJoin(Vec<RustExpr>),
+    ///
+    /// `throwing_elements[i]` is `true` when the i-th future comes from a
+    /// function declared with `throws`. After the join, each throwing
+    /// element's result must be unwrapped with `?` (in a `throws` context)
+    /// or `.unwrap()` (in a non-throws context).
+    TokioJoin {
+        /// The future expressions passed to `tokio::join!`.
+        elements: Vec<RustExpr>,
+        /// Per-element flag: `true` when the element is a call to a `throws` function.
+        throwing_elements: Vec<bool>,
+    },
     /// `tokio::select! { result = expr1 => result, ... }` — first-to-complete.
     /// Produced by lowering `await Promise.race([...])`.
     TokioSelect(Vec<RustExpr>),

@@ -585,9 +585,12 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_block_for_collections(block, needs_hashmap, needs_hashset);
             }
         },
-        RustExprKind::TokioJoin(exprs)
-        | RustExprKind::TokioSelect(exprs)
-        | RustExprKind::FuturesSelectOk(exprs) => {
+        RustExprKind::TokioJoin { elements, .. } => {
+            for expr in elements {
+                scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
+            }
+        }
+        RustExprKind::TokioSelect(exprs) | RustExprKind::FuturesSelectOk(exprs) => {
             for expr in exprs {
                 scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             }

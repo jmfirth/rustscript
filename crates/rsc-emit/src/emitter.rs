@@ -895,6 +895,28 @@ impl Emitter {
                 self.write(") = ");
                 self.emit_expr(&td.init);
                 self.writeln(";");
+                // When the init is a TokioJoin with throwing elements, emit
+                // `let binding = binding?;` for each throwing position to
+                // unwrap Result values produced by `tokio::join!`.
+                if let RustExprKind::TokioJoin {
+                    throwing_elements, ..
+                } = &td.init.kind
+                {
+                    for (i, binding) in td.bindings.iter().enumerate() {
+                        if throwing_elements.get(i).copied().unwrap_or(false) {
+                            self.write_indent();
+                            if td.mutable {
+                                self.write("let mut ");
+                            } else {
+                                self.write("let ");
+                            }
+                            self.write(binding);
+                            self.write(" = ");
+                            self.write(binding);
+                            self.writeln("?;");
+                        }
+                    }
+                }
             }
             RustStmt::Match(match_stmt) => {
                 self.set_span(match_stmt.span);
@@ -1435,9 +1457,9 @@ impl Emitter {
                 }
                 self.emit_block(body);
             }
-            RustExprKind::TokioJoin(exprs) => {
+            RustExprKind::TokioJoin { elements, .. } => {
                 self.write("tokio::join!(");
-                for (i, expr) in exprs.iter().enumerate() {
+                for (i, expr) in elements.iter().enumerate() {
                     if i > 0 {
                         self.write(", ");
                     }
@@ -4996,16 +5018,19 @@ fn main() {
     // Test: Emitter — tokio::join!
     #[test]
     fn test_emit_tokio_join_macro_syntax() {
-        let join_expr = syn(RustExprKind::TokioJoin(vec![
-            syn(RustExprKind::Call {
-                func: "get_user".into(),
-                args: vec![],
-            }),
-            syn(RustExprKind::Call {
-                func: "get_posts".into(),
-                args: vec![],
-            }),
-        ]));
+        let join_expr = syn(RustExprKind::TokioJoin {
+            elements: vec![
+                syn(RustExprKind::Call {
+                    func: "get_user".into(),
+                    args: vec![],
+                }),
+                syn(RustExprKind::Call {
+                    func: "get_posts".into(),
+                    args: vec![],
+                }),
+            ],
+            throwing_elements: vec![false, false],
+        });
         let file = simple_fn("test", vec![RustStmt::Semi(join_expr)], None);
         let output = emit_source(&file);
         assert!(
@@ -5082,6 +5107,128 @@ fn main() {
         assert!(
             output.contains("let (a, b) = get_pair();"),
             "expected 'let (a, b) = get_pair();' in output, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tuple destructure with TokioJoin + throwing elements emits `?` unwraps
+    #[test]
+    fn test_emit_tuple_destructure_tokio_join_throws_emits_unwrap() {
+        use rsc_syntax::rust_ir::RustTupleDestructureStmt;
+        let td = RustStmt::TupleDestructure(RustTupleDestructureStmt {
+            bindings: vec!["a".into(), "b".into()],
+            init: syn(RustExprKind::TokioJoin {
+                elements: vec![
+                    syn(RustExprKind::Call {
+                        func: "fetchUsers".into(),
+                        args: vec![],
+                    }),
+                    syn(RustExprKind::Call {
+                        func: "fetchPosts".into(),
+                        args: vec![],
+                    }),
+                ],
+                throwing_elements: vec![true, true],
+            }),
+            mutable: false,
+            span: None,
+        });
+        let file = simple_fn("test", vec![td], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let (a, b) = tokio::join!(fetchUsers(), fetchPosts());"),
+            "expected tokio::join! destructure, got: {output}"
+        );
+        assert!(
+            output.contains("let a = a?;"),
+            "expected unwrap for a, got: {output}"
+        );
+        assert!(
+            output.contains("let b = b?;"),
+            "expected unwrap for b, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tuple destructure with TokioJoin + mixed throwing emits selective unwraps
+    #[test]
+    fn test_emit_tuple_destructure_tokio_join_mixed_throws_selective_unwrap() {
+        use rsc_syntax::rust_ir::RustTupleDestructureStmt;
+        let td = RustStmt::TupleDestructure(RustTupleDestructureStmt {
+            bindings: vec!["a".into(), "b".into(), "c".into()],
+            init: syn(RustExprKind::TokioJoin {
+                elements: vec![
+                    syn(RustExprKind::Call {
+                        func: "safe".into(),
+                        args: vec![],
+                    }),
+                    syn(RustExprKind::Call {
+                        func: "risky".into(),
+                        args: vec![],
+                    }),
+                    syn(RustExprKind::Call {
+                        func: "also_safe".into(),
+                        args: vec![],
+                    }),
+                ],
+                throwing_elements: vec![false, true, false],
+            }),
+            mutable: false,
+            span: None,
+        });
+        let file = simple_fn("test", vec![td], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let (a, b, c) = tokio::join!(safe(), risky(), also_safe());"),
+            "expected tokio::join! destructure, got: {output}"
+        );
+        assert!(
+            !output.contains("let a = a?;"),
+            "should NOT unwrap non-throwing a, got: {output}"
+        );
+        assert!(
+            output.contains("let b = b?;"),
+            "expected unwrap for throwing b, got: {output}"
+        );
+        assert!(
+            !output.contains("let c = c?;"),
+            "should NOT unwrap non-throwing c, got: {output}"
+        );
+    }
+
+    // Test: Emitter — tuple destructure with TokioJoin + no throwing emits no unwraps
+    #[test]
+    fn test_emit_tuple_destructure_tokio_join_no_throws_no_unwrap() {
+        use rsc_syntax::rust_ir::RustTupleDestructureStmt;
+        let td = RustStmt::TupleDestructure(RustTupleDestructureStmt {
+            bindings: vec!["a".into(), "b".into()],
+            init: syn(RustExprKind::TokioJoin {
+                elements: vec![
+                    syn(RustExprKind::Call {
+                        func: "safe1".into(),
+                        args: vec![],
+                    }),
+                    syn(RustExprKind::Call {
+                        func: "safe2".into(),
+                        args: vec![],
+                    }),
+                ],
+                throwing_elements: vec![false, false],
+            }),
+            mutable: false,
+            span: None,
+        });
+        let file = simple_fn("test", vec![td], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("let (a, b) = tokio::join!(safe1(), safe2());"),
+            "expected tokio::join! destructure, got: {output}"
+        );
+        assert!(
+            !output.contains("= a?"),
+            "should NOT unwrap non-throwing results, got: {output}"
+        );
+        assert!(
+            !output.contains("= b?"),
+            "should NOT unwrap non-throwing results, got: {output}"
         );
     }
 

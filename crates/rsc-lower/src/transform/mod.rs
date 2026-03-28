@@ -5302,7 +5302,10 @@ function main() {}"#;
         match &file.items[0] {
             RustItem::Function(f) => match &f.body.stmts[0] {
                 RustStmt::Semi(expr) => match &expr.kind {
-                    RustExprKind::TokioJoin(elements) => {
+                    RustExprKind::TokioJoin {
+                        elements,
+                        throwing_elements,
+                    } => {
                         assert_eq!(elements.len(), 2, "expected 2 futures in tokio::join!");
                         assert!(
                             matches!(&elements[0].kind, RustExprKind::Call { func, .. } if func == "getUser"),
@@ -5311,6 +5314,10 @@ function main() {}"#;
                         assert!(
                             matches!(&elements[1].kind, RustExprKind::Call { func, .. } if func == "getPosts"),
                             "expected getPosts call"
+                        );
+                        assert!(
+                            throwing_elements.iter().all(|t| !t),
+                            "non-throws functions should not be marked throwing"
                         );
                     }
                     other => panic!("expected TokioJoin, got {other:?}"),
@@ -5334,7 +5341,7 @@ function main() {}"#;
                     assert_eq!(td.bindings, vec!["user", "posts"]);
                     assert!(!td.mutable);
                     match &td.init.kind {
-                        RustExprKind::TokioJoin(elements) => {
+                        RustExprKind::TokioJoin { elements, .. } => {
                             assert_eq!(elements.len(), 2);
                         }
                         other => panic!("expected TokioJoin, got {other:?}"),
@@ -5358,7 +5365,7 @@ function main() {}"#;
                 RustStmt::TupleDestructure(td) => {
                     assert_eq!(td.bindings, vec!["a", "b", "c"]);
                     match &td.init.kind {
-                        RustExprKind::TokioJoin(elements) => {
+                        RustExprKind::TokioJoin { elements, .. } => {
                             assert_eq!(elements.len(), 3, "expected 3 futures in tokio::join!");
                         }
                         other => panic!("expected TokioJoin, got {other:?}"),
@@ -5482,6 +5489,127 @@ async function main() {
         assert!(
             needs_async_runtime,
             "expected needs_async_runtime to be true when Promise.all is used"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Promise.all + throws — auto-unwrap Results from tokio::join!
+    // ---------------------------------------------------------------
+
+    // Test: Promise.all with throwing functions — elements are not wrapped with `?`,
+    // and throwing_elements flags are set correctly.
+    #[test]
+    fn test_lower_promise_all_throws_strips_question_mark_and_flags_throwing() {
+        let source = r#"async function fetchData(url: string): string throws string {
+            return "data";
+        }
+
+        async function fetchAll(): void throws string {
+            const [a, b] = await Promise.all([fetchData("/users"), fetchData("/posts")]);
+            console.log(a);
+        }"#;
+        let file = lower_source(source);
+        // fetchAll is the second function (index 1)
+        let RustItem::Function(f) = &file.items[1] else {
+            panic!("expected Function");
+        };
+        let RustStmt::TupleDestructure(td) = &f.body.stmts[0] else {
+            panic!("expected TupleDestructure, got {:?}", f.body.stmts[0]);
+        };
+        assert_eq!(td.bindings, vec!["a", "b"]);
+        let RustExprKind::TokioJoin {
+            elements,
+            throwing_elements,
+        } = &td.init.kind
+        else {
+            panic!("expected TokioJoin, got {:?}", td.init.kind);
+        };
+        assert_eq!(elements.len(), 2);
+        // Elements inside tokio::join! should be bare calls, NOT wrapped with `?`
+        for (i, elem) in elements.iter().enumerate() {
+            assert!(
+                matches!(&elem.kind, RustExprKind::Call { func, .. } if func == "fetchData"),
+                "element {i} should be a bare Call, got {:?}",
+                elem.kind
+            );
+        }
+        // Both elements should be flagged as throwing
+        assert_eq!(
+            throwing_elements,
+            &vec![true, true],
+            "both elements should be marked as throwing"
+        );
+    }
+
+    // Test: Promise.all with non-throwing functions — throwing_elements all false
+    #[test]
+    fn test_lower_promise_all_non_throws_no_throwing_flags() {
+        let source = r#"async function getA(): string {
+            return "a";
+        }
+
+        async function getB(): string {
+            return "b";
+        }
+
+        async function main() {
+            const [a, b] = await Promise.all([getA(), getB()]);
+        }"#;
+        let file = lower_source(source);
+        // main is the third function (index 2)
+        let RustItem::Function(f) = &file.items[2] else {
+            panic!("expected Function");
+        };
+        let RustStmt::TupleDestructure(td) = &f.body.stmts[0] else {
+            panic!("expected TupleDestructure");
+        };
+        let RustExprKind::TokioJoin {
+            throwing_elements, ..
+        } = &td.init.kind
+        else {
+            panic!("expected TokioJoin");
+        };
+        assert!(
+            throwing_elements.iter().all(|t| !t),
+            "non-throwing functions should have all false flags"
+        );
+    }
+
+    // Test: Promise.all with mixed throwing/non-throwing — selective flags
+    #[test]
+    fn test_lower_promise_all_mixed_throws_selective_flags() {
+        let source = r#"async function safeFn(): string {
+            return "safe";
+        }
+
+        async function riskyFn(url: string): string throws string {
+            return "risky";
+        }
+
+        async function doWork(): void throws string {
+            const [a, b] = await Promise.all([safeFn(), riskyFn("/api")]);
+        }"#;
+        let file = lower_source(source);
+        // doWork is the third function (index 2)
+        let RustItem::Function(f) = &file.items[2] else {
+            panic!("expected Function");
+        };
+        let RustStmt::TupleDestructure(td) = &f.body.stmts[0] else {
+            panic!("expected TupleDestructure");
+        };
+        let RustExprKind::TokioJoin {
+            elements,
+            throwing_elements,
+        } = &td.init.kind
+        else {
+            panic!("expected TokioJoin");
+        };
+        assert_eq!(elements.len(), 2);
+        // First element (safeFn) is not throwing, second (riskyFn) is
+        assert_eq!(
+            throwing_elements,
+            &vec![false, true],
+            "only the second element should be marked as throwing"
         );
     }
 
