@@ -560,8 +560,10 @@ fn parse_type(value: &serde_json::Value) -> RustdocType {
 
 /// Parse a `resolved_path` type from rustdoc JSON.
 fn parse_resolved_path(value: &serde_json::Value) -> RustdocType {
+    // Newer rustdoc JSON uses "path", older uses "name".
     let name = value
         .get("name")
+        .or_else(|| value.get("path"))
         .and_then(|n| n.as_str())
         .unwrap_or("?")
         .to_owned();
@@ -617,13 +619,17 @@ fn resolve_impl_block(
         return;
     };
 
-    // Get method IDs.
+    // Get method IDs (may be strings or integers depending on rustdoc JSON version).
     let method_ids: Vec<String> = impl_data
         .get("items")
         .and_then(|i| i.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .filter_map(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .or_else(|| v.as_u64().map(|n| n.to_string()))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -633,6 +639,12 @@ fn resolve_impl_block(
         if let Some(item) = crate_data.items.get_mut(method_id)
             && let RustdocItemKind::Function(func) = &mut item.kind
         {
+            if type_name == "TcpListener" {
+                eprintln!(
+                    "  [rustdoc] tagging {}.{} as TcpListener method",
+                    type_name, item.name
+                );
+            }
             func.parent_type = Some(type_name.clone());
         }
     }
@@ -663,12 +675,24 @@ fn extract_impl_type_name(
     let obj = for_type.as_object()?;
     let rp = obj.get("resolved_path")?;
 
-    if let Some(name) = rp.get("name").and_then(|n| n.as_str()) {
-        return Some(name.to_owned());
+    // `resolved_path` may use "name" (older format) or "path" (newer format).
+    if let Some(name) = rp
+        .get("name")
+        .or_else(|| rp.get("path"))
+        .and_then(|n| n.as_str())
+    {
+        // Extract the last segment of a qualified path (e.g., "TcpListener" from "net::TcpListener")
+        return Some(name.rsplit("::").next().unwrap_or(name).to_owned());
     }
 
     // Fall back to looking up by ID in paths.
-    if let Some(id) = rp.get("id").and_then(|i| i.as_str())
+    // ID may be a string or integer depending on rustdoc JSON version.
+    let id_str = rp.get("id").and_then(|i| {
+        i.as_str()
+            .map(String::from)
+            .or_else(|| i.as_u64().map(|n| n.to_string()))
+    });
+    if let Some(id) = id_str.as_deref()
         && let Some(path_entry) = paths.and_then(|p| p.get(id))
         && let Some(name) = path_entry.get("path").and_then(|p| {
             p.as_array()

@@ -93,9 +93,11 @@ fn is_str_type(ty: &RustdocType) -> bool {
 fn classify_return_type(ty: &RustdocType) -> ExternalReturnType {
     match ty {
         RustdocType::ResolvedPath { name, .. } => {
-            if name == "Result" {
+            // Match qualified paths like "io::Result", "std::result::Result", "Result"
+            let short_name = name.rsplit("::").next().unwrap_or(name);
+            if short_name == "Result" {
                 ExternalReturnType::Result
-            } else if name == "Option" {
+            } else if short_name == "Option" {
                 ExternalReturnType::Option
             } else {
                 ExternalReturnType::Value

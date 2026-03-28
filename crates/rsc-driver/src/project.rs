@@ -326,10 +326,12 @@ impl Project {
         let src_dir = build_dir.join("src");
         fs::create_dir_all(&src_dir)?;
 
-        // Load cached external function signatures from previous rustdoc runs.
-        // On the first compilation there won't be any cached data; the rustdoc
-        // JSON will be generated after this compilation for use in future runs.
-        let compile_options = self.load_compile_options_with_rustdoc(&build_dir);
+        // External signatures will be loaded after Cargo.toml is written and
+        // rustdoc JSON is generated (below). Initialized empty for now.
+        let compile_options = crate::pipeline::CompileOptions {
+            no_borrow_inference: self.compile_options.no_borrow_inference,
+            ..crate::pipeline::CompileOptions::default()
+        };
 
         // Collect all crate dependencies from all compiled modules
         let mut all_crate_deps: Vec<CrateDependency> = Vec::new();
@@ -402,7 +404,7 @@ impl Project {
             crate::pipeline::compile_source_with_mods_and_options(
                 &source,
                 file_name,
-                mod_decls,
+                mod_decls.clone(),
                 &compile_options,
             )
         };
@@ -469,10 +471,32 @@ impl Project {
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
 
-        // Generate rustdoc JSON for dependencies (non-fatal).
-        // Only runs if there are external deps and no cached docs exist yet.
+        // Generate rustdoc JSON for dependencies and re-compile with external
+        // signatures. This enables proper param types, throws detection, and
+        // async handling for external crate functions.
         if !all_crate_deps.is_empty() {
             Self::maybe_generate_rustdoc(&build_dir);
+            let enriched_options = self.load_compile_options_with_rustdoc(&build_dir);
+            if !enriched_options.external_signatures.is_empty() {
+                // Re-compile with external signatures for better output.
+                let enriched_result = if mod_decls.is_empty() {
+                    crate::pipeline::compile_source_with_options(
+                        &source,
+                        file_name,
+                        &enriched_options,
+                    )
+                } else {
+                    crate::pipeline::compile_source_with_mods_and_options(
+                        &source,
+                        file_name,
+                        mod_decls.clone(),
+                        &enriched_options,
+                    )
+                };
+                if !enriched_result.has_errors {
+                    let _ = fs::write(src_dir.join("main.rs"), &enriched_result.rust_source);
+                }
+            }
         }
 
         // If any module had errors, propagate that
