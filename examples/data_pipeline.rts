@@ -1,5 +1,3 @@
-import { Serialize, Deserialize } from "serde";
-
 /** ETL pipeline — TypeScript devs build these for data processing jobs */
 
 type RawEvent = {

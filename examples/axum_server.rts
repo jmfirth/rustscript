@@ -1,5 +1,6 @@
 import { Router, serve } from "axum";
 import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
 
 /** A simple REST API server using axum */
 
@@ -8,11 +9,11 @@ type User = {
   name: string,
 }
 
-function hello(): string {
+async function hello(): string {
   return "Hello from RustScript!";
 }
 
-function listUsers(): string {
+async function listUsers(): string {
   const alice: User = { id: 1, name: "Alice" };
   const bob: User = { id: 2, name: "Bob" };
   const users: Array<User> = [alice, bob];
@@ -24,6 +25,7 @@ async function main() {
     .route("/", get(hello))
     .route("/users", get(listUsers));
 
+  const listener = await TcpListener.bind("0.0.0.0:3000");
   console.log("Listening on http://0.0.0.0:3000");
-  serve("0.0.0.0:3000", app);
+  await serve(listener, app);
 }

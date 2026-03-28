@@ -1,6 +1,6 @@
 import { Router, serve } from "axum";
-import { get, post } from "axum/routing";
-import { Serialize, Deserialize } from "serde";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
 
 /** A REST API — the #1 thing TypeScript developers build */
 
@@ -8,10 +8,6 @@ type Todo = {
   id: u32,
   title: string,
   completed: bool,
-}
-
-type CreateTodo = {
-  title: string,
 }
 
 /** In-memory store */
@@ -23,19 +19,19 @@ function getTodos(): Array<Todo> {
 }
 
 /** GET /todos — list all todos */
-function handleList(): string {
+async function handleList(): string {
   return JSON.stringify(getTodos());
 }
 
 /** GET /todos/pending — list incomplete todos */
-function handlePending(): string {
+async function handlePending(): string {
   const todos = getTodos();
   const pending = todos.filter(t => !t.completed);
   return JSON.stringify(pending);
 }
 
 /** GET /stats — summary statistics */
-function handleStats(): string {
+async function handleStats(): string {
   const todos = getTodos();
   const total = todos.length;
   const done = todos.filter(t => t.completed).length;
@@ -48,6 +44,7 @@ async function main() {
     .route("/todos/pending", get(handlePending))
     .route("/stats", get(handleStats));
 
+  const listener = await TcpListener.bind("0.0.0.0:3000");
   console.log("Todo API listening on http://0.0.0.0:3000");
-  serve("0.0.0.0:3000", app);
+  await serve(listener, app);
 }

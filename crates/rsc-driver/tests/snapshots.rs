@@ -1133,6 +1133,7 @@ fn validate(x: i32) -> Result<(), String> {
     if x < 0 {
         return Err(\"negative\".to_string());
     }
+    Ok(())
 }
 ";
 

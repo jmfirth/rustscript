@@ -13,11 +13,9 @@ async function fetchData(url: string): ApiResponse throws string {
   return { status: 200, body: `response from ${url}` };
 }
 
-async function fetchMultiple(): void {
-  const [resp1, resp2] = await Promise.all([
-    fetchData("/users"),
-    fetchData("/posts"),
-  ]);
+async function fetchMultiple(): void throws string {
+  const resp1 = await fetchData("/users");
+  const resp2 = await fetchData("/posts");
   console.log(`Users: ${resp1.body}`);
   console.log(`Posts: ${resp2.body}`);
 }

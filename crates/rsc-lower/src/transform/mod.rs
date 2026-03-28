@@ -21,9 +21,9 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
 use rsc_syntax::rust_ir::{
     ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
-    RustEnumVariant, RustExpr, RustFieldDef, RustFile, RustFnDecl, RustItem, RustParam,
-    RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam, RustUnaryOp,
-    RustUseDecl,
+    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustItem,
+    RustParam, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam,
+    RustUnaryOp, RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -1210,7 +1210,16 @@ impl Transform {
         ctx.set_fn_throws(is_throws);
 
         // Lower the body
-        let body = self.lower_block(&f.body, ctx, &use_map, 0, &reassigned);
+        let mut body = self.lower_block(&f.body, ctx, &use_map, 0, &reassigned);
+
+        // For throws functions returning void (Result<(), E>), append Ok(()) if the
+        // body doesn't already end with a return statement.
+        if is_throws && !matches!(body.stmts.last(), Some(RustStmt::Return(_))) {
+            body.stmts
+                .push(RustStmt::Expr(RustExpr::synthetic(RustExprKind::Ok(
+                    Box::new(RustExpr::synthetic(RustExprKind::Ident("()".to_owned()))),
+                ))));
+        }
 
         // Unmark borrowed parameters so their names don't leak into sibling functions.
         for param in &params {
@@ -4638,17 +4647,17 @@ class Foo {
             RustItem::Function(f) => {
                 match &f.body.stmts[0] {
                     RustStmt::Let(let_stmt) => {
-                        // The init should be Await(QuestionMark(Call)) — the `?` is on
-                        // the inner call, NOT on the await. No double wrapping.
+                        // The init should be QuestionMark(Await(Call)) — `.await?`
+                        // For async throws functions, await first then unwrap.
                         match &let_stmt.init.kind {
-                            RustExprKind::Await(inner) => {
+                            RustExprKind::QuestionMark(inner) => {
                                 assert!(
-                                    matches!(&inner.kind, RustExprKind::QuestionMark(_)),
-                                    "expected QuestionMark inside Await, got {:?}",
+                                    matches!(&inner.kind, RustExprKind::Await(_)),
+                                    "expected Await inside QuestionMark, got {:?}",
                                     inner.kind
                                 );
                             }
-                            other => panic!("expected Await(QuestionMark(...)), got {other:?}"),
+                            other => panic!("expected QuestionMark(Await(...)), got {other:?}"),
                         }
                     }
                     other => panic!("expected Let, got {other:?}"),
