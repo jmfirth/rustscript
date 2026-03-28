@@ -385,4 +385,44 @@ mod tests {
         let result2 = format_source(&result).expect("should format again");
         assert_eq!(result, result2, "round-trip should be stable");
     }
+
+    #[test]
+    fn test_format_type_def_with_derives() {
+        let input = "type Foo = { x: i32 } derives Serialize, Deserialize";
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("} derives Serialize, Deserialize;"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_simple_enum_with_derives() {
+        let input = r#"type Dir = "n" | "s" derives Clone, Serialize"#;
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("derives Clone, Serialize;"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_class_with_derives() {
+        let input = "class Foo derives Debug { name: string; }";
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("class Foo derives Debug {"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_format_class_implements_and_derives() {
+        let input = "class Foo implements Bar, derives Serialize { name: string; }";
+        let result = format_source(input).expect("should format");
+        assert!(
+            result.contains("implements Bar, derives Serialize {"),
+            "got: {result}"
+        );
+    }
 }

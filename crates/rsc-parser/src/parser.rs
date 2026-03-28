@@ -269,6 +269,7 @@ impl<'src> Parser<'src> {
             TokenKind::Await => "`await`",
             TokenKind::Finally => "`finally`",
             TokenKind::Rust => "`rust`",
+            TokenKind::Derives => "`derives`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -855,8 +856,15 @@ impl<'src> Parser<'src> {
             TokenKind::StringLit(_) => {
                 // Simple enum: type Name = "a" | "b" | "c"
                 let mut enum_def = self.parse_simple_enum(name, start)?;
+                enum_def.derives = self.parse_derives_clause();
                 enum_def.doc_comment = doc_comment;
-                let span = enum_def.span;
+                // Update span to include derives
+                let span = if enum_def.derives.is_empty() {
+                    enum_def.span
+                } else {
+                    start.merge(self.previous_span())
+                };
+                enum_def.span = span;
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
                     exported: false,
@@ -866,8 +874,14 @@ impl<'src> Parser<'src> {
             TokenKind::Pipe => {
                 // Data enum: type Name = | { kind: "a", ... } | { kind: "b", ... }
                 let mut enum_def = self.parse_data_enum(name, start)?;
+                enum_def.derives = self.parse_derives_clause();
                 enum_def.doc_comment = doc_comment;
-                let span = enum_def.span;
+                let span = if enum_def.derives.is_empty() {
+                    enum_def.span
+                } else {
+                    start.merge(self.previous_span())
+                };
+                enum_def.span = span;
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
                     exported: false,
@@ -879,11 +893,17 @@ impl<'src> Parser<'src> {
                 self.expect(&TokenKind::LBrace)?;
                 let fields = self.parse_field_def_list();
                 let close = self.expect(&TokenKind::RBrace)?;
-                let span = start.merge(close.span);
+                let derives = self.parse_derives_clause();
+                let span = if derives.is_empty() {
+                    start.merge(close.span)
+                } else {
+                    start.merge(self.previous_span())
+                };
                 let td = TypeDef {
                     name,
                     type_params,
                     fields,
+                    derives,
                     doc_comment,
                     span,
                 };
@@ -941,6 +961,7 @@ impl<'src> Parser<'src> {
         Some(EnumDef {
             name,
             variants,
+            derives: Vec::new(),
             doc_comment: None,
             span,
         })
@@ -1020,9 +1041,34 @@ impl<'src> Parser<'src> {
         Some(EnumDef {
             name,
             variants,
+            derives: Vec::new(),
             doc_comment: None,
             span,
         })
+    }
+
+    /// Parse an optional `derives Ident, Ident, ...` clause.
+    ///
+    /// Returns an empty vec if no `derives` keyword is present.
+    /// Used after type definitions, enum definitions, and in class headers.
+    fn parse_derives_clause(&mut self) -> Vec<Ident> {
+        if !self.check(&TokenKind::Derives) {
+            return Vec::new();
+        }
+        self.advance(); // consume `derives`
+
+        let mut derives = Vec::new();
+        while let Some(name) = self.parse_ident() {
+            derives.push(name);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            // Stop if we hit a semicolon or opening brace
+            if self.check(&TokenKind::Semicolon) || self.check(&TokenKind::LBrace) {
+                break;
+            }
+        }
+        derives
     }
 
     /// Parse a comma-separated list of field definitions: `name: Type, ...`.
@@ -1164,20 +1210,39 @@ impl<'src> Parser<'src> {
         };
 
         // Optional implements clause
-        let implements = if self.check(&TokenKind::Implements) {
+        let mut implements = Vec::new();
+        let mut derives = Vec::new();
+        if self.check(&TokenKind::Implements) {
             self.advance(); // consume `implements`
-            let mut ifaces = Vec::new();
             loop {
+                // Check for `derives` keyword — signals end of implements, start of derives
+                if self.check(&TokenKind::Derives) {
+                    break;
+                }
                 let iface = self.parse_ident()?;
-                ifaces.push(iface);
+                implements.push(iface);
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
-            ifaces
-        } else {
-            Vec::new()
-        };
+        }
+
+        // Optional derives clause: `derives Serialize, Deserialize`
+        // Can appear after implements, or standalone before the class body
+        if self.check(&TokenKind::Derives) {
+            self.advance(); // consume `derives`
+            loop {
+                let derive_name = self.parse_ident()?;
+                derives.push(derive_name);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                // Stop if we hit the opening brace
+                if self.check(&TokenKind::LBrace) {
+                    break;
+                }
+            }
+        }
 
         self.expect(&TokenKind::LBrace)?;
 
@@ -1208,6 +1273,7 @@ impl<'src> Parser<'src> {
             type_params,
             extends,
             implements,
+            derives,
             members,
             doc_comment,
             span,
@@ -8561,6 +8627,127 @@ type Shape =
             ItemKind::TypeDef(td) => {
                 assert_eq!(td.name.name, "User");
                 assert_eq!(td.fields.len(), 2);
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // ---- derives keyword tests ----
+
+    #[test]
+    fn test_parser_type_def_derives_single() {
+        let source = "type Foo = { x: i32 } derives Serialize";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Foo");
+                assert_eq!(td.fields.len(), 1);
+                assert_eq!(td.derives.len(), 1);
+                assert_eq!(td.derives[0].name, "Serialize");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_type_def_derives_multiple() {
+        let source = "type Foo = { x: i32 } derives Serialize, Deserialize";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Foo");
+                assert_eq!(td.derives.len(), 2);
+                assert_eq!(td.derives[0].name, "Serialize");
+                assert_eq!(td.derives[1].name, "Deserialize");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_type_def_no_derives() {
+        let source = "type Foo = { x: i32 }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert!(td.derives.is_empty());
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_simple_enum_derives() {
+        let source = r#"type Dir = "n" | "s" derives Clone, Serialize"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::EnumDef(ed) => {
+                assert_eq!(ed.name.name, "Dir");
+                assert_eq!(ed.variants.len(), 2);
+                assert_eq!(ed.derives.len(), 2);
+                assert_eq!(ed.derives[0].name, "Clone");
+                assert_eq!(ed.derives[1].name, "Serialize");
+            }
+            _ => panic!("expected EnumDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_data_enum_derives() {
+        let source = r#"type Shape = | { kind: "circle", radius: f64 } | { kind: "rect", width: f64 } derives Serialize"#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::EnumDef(ed) => {
+                assert_eq!(ed.name.name, "Shape");
+                assert_eq!(ed.variants.len(), 2);
+                assert_eq!(ed.derives.len(), 1);
+                assert_eq!(ed.derives[0].name, "Serialize");
+            }
+            _ => panic!("expected EnumDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_class_derives() {
+        let source = "class Foo derives Debug { name: string; }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.name.name, "Foo");
+                assert_eq!(cls.derives.len(), 1);
+                assert_eq!(cls.derives[0].name, "Debug");
+                assert!(cls.implements.is_empty());
+            }
+            _ => panic!("expected ClassDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_class_implements_and_derives() {
+        let source =
+            "class Foo implements Displayable, derives Serialize, Deserialize { name: string; }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.name.name, "Foo");
+                assert_eq!(cls.implements.len(), 1);
+                assert_eq!(cls.implements[0].name, "Displayable");
+                assert_eq!(cls.derives.len(), 2);
+                assert_eq!(cls.derives[0].name, "Serialize");
+                assert_eq!(cls.derives[1].name, "Deserialize");
+            }
+            _ => panic!("expected ClassDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_type_def_derives_with_semicolon() {
+        let source = "type Foo = { x: i32 } derives Serialize;";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.derives.len(), 1);
+                assert_eq!(td.derives[0].name, "Serialize");
             }
             _ => panic!("expected TypeDef"),
         }

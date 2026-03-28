@@ -104,6 +104,8 @@ pub(crate) enum TokenKind {
     Await,
     /// `rust` (introduces an inline Rust block)
     Rust,
+    /// `derives` (explicit derive macros on types, enums, and classes)
+    Derives,
 
     // Operators
     /// `+`

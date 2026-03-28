@@ -839,6 +839,7 @@ impl<'a> Lexer<'a> {
             "async" => TokenKind::Async,
             "await" => TokenKind::Await,
             "rust" => TokenKind::Rust,
+            "derives" => TokenKind::Derives,
             "as" => TokenKind::As,
             "typeof" => TokenKind::TypeOf,
             "abstract" => TokenKind::Abstract,
@@ -1927,6 +1928,13 @@ mod tests {
     fn test_lexer_satisfies_keyword() {
         let tokens = tokenize("satisfies");
         assert_eq!(tokens[0].kind, TokenKind::Satisfies);
+    }
+
+    // `derives` is tokenized as a keyword
+    #[test]
+    fn test_lexer_derives_keyword() {
+        let tokens = tokenize("derives");
+        assert_eq!(tokens[0].kind, TokenKind::Derives);
     }
 
     // 81. `#field` is tokenized as an identifier with # prefix

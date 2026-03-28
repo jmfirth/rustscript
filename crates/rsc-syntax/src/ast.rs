@@ -232,6 +232,9 @@ pub struct TypeDef {
     pub type_params: Option<TypeParams>,
     /// The fields of the type definition.
     pub fields: Vec<FieldDef>,
+    /// Explicit derive macros requested via `derives Serialize, Deserialize`.
+    /// Merged with auto-inferred derives during lowering.
+    pub derives: Vec<Ident>,
     /// `JSDoc` comment attached to this type definition, if any.
     pub doc_comment: Option<String>,
     /// The span covering the entire type definition.
@@ -249,6 +252,9 @@ pub struct EnumDef {
     pub name: Ident,
     /// The variants of the enum.
     pub variants: Vec<EnumVariant>,
+    /// Explicit derive macros requested via `derives Serialize, Deserialize`.
+    /// Merged with auto-inferred derives during lowering.
+    pub derives: Vec<Ident>,
     /// `JSDoc` comment attached to this enum definition, if any.
     pub doc_comment: Option<String>,
     /// The span covering the entire enum definition.
@@ -329,6 +335,9 @@ pub struct ClassDef {
     pub extends: Option<Ident>,
     /// Interfaces this class implements.
     pub implements: Vec<Ident>,
+    /// Explicit derive macros requested via `derives Serialize, Deserialize`.
+    /// Merged with auto-inferred derives during lowering.
+    pub derives: Vec<Ident>,
     /// The class members (fields, constructor, methods).
     pub members: Vec<ClassMember>,
     /// `JSDoc` comment attached to this class definition, if any.

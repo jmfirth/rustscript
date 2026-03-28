@@ -4405,3 +4405,85 @@ function main() {
     let result = test_utils::compile_result(source);
     assert!(!result.needs_rand, "Math.floor should not set needs_rand");
 }
+
+// ---------------------------------------------------------------------------
+// derives keyword tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_type_def_with_derives_serialize_deserialize() {
+    let source = "type Foo = { x: i32, name: string } derives Serialize, Deserialize";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Foo {
+    pub x: i32,
+    pub name: String,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("type_def_derives_serialize", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_simple_enum_with_derives() {
+    let source = r#"type Dir = "north" | "south" derives Serialize"#;
+
+    let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+enum Dir {
+    North,
+    South,
+}
+
+impl std::fmt::Display for Dir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dir::North => write!(f, \"North\"),
+            Dir::South => write!(f, \"South\"),
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("simple_enum_derives", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_derives_sets_needs_serde_flag() {
+    let source = "type Foo = { x: i32 } derives Serialize";
+
+    let result = test_utils::compile_result(source);
+    assert!(
+        result.needs_serde,
+        "derives Serialize should set needs_serde"
+    );
+}
+
+#[test]
+fn test_snapshot_no_derives_does_not_set_needs_serde_flag() {
+    let source = "type Foo = { x: i32 }";
+
+    let result = test_utils::compile_result(source);
+    assert!(!result.needs_serde, "no derives should not set needs_serde");
+}
+
+#[test]
+fn test_snapshot_derives_deduplicates() {
+    let source = "type Foo = { x: i32 } derives Debug, Clone";
+
+    let actual = compile_to_rust(source);
+    // Debug and Clone are already auto-inferred — should only appear once each
+    let debug_count = actual.matches("Debug").count();
+    let clone_count = actual.matches("Clone").count();
+    assert_eq!(
+        debug_count, 1,
+        "Debug should appear only once in derives, got:\n{actual}"
+    );
+    assert_eq!(
+        clone_count, 1,
+        "Clone should appear only once in derives, got:\n{actual}"
+    );
+}

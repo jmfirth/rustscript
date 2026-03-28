@@ -343,6 +343,8 @@ impl Project {
         let mut any_needs_serde_json = false;
         // Track whether any module uses Math.random() (needs rand)
         let mut any_needs_rand = false;
+        // Track whether any module uses derives Serialize/Deserialize (needs serde)
+        let mut any_needs_serde = false;
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -366,6 +368,7 @@ impl Project {
             any_needs_futures_crate |= module_result.needs_futures_crate;
             any_needs_serde_json |= module_result.needs_serde_json;
             any_needs_rand |= module_result.needs_rand;
+            any_needs_serde |= module_result.needs_serde;
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -415,6 +418,7 @@ impl Project {
         any_needs_futures_crate |= result.needs_futures_crate;
         any_needs_serde_json |= result.needs_serde_json;
         any_needs_rand |= result.needs_rand;
+        any_needs_serde |= result.needs_serde;
 
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
@@ -437,6 +441,17 @@ impl Project {
         // Add rand crate if Math.random() is used
         if any_needs_rand {
             cargo_builder.add_dependency("rand", DependencySpec::Simple("0.8".to_owned()));
+        }
+
+        // Add serde with derive feature if derives Serialize/Deserialize is used
+        if any_needs_serde {
+            cargo_builder.add_dependency(
+                "serde",
+                DependencySpec::Detailed {
+                    version: "1".to_owned(),
+                    features: vec!["derive".to_owned()],
+                },
+            );
         }
 
         // Add all external crate dependencies (deduplicated by BTreeMap)

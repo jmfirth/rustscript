@@ -382,7 +382,9 @@ impl Printer {
             self.writeln(",");
         }
         self.dedent();
-        self.writeln("};");
+        self.write("}");
+        self.print_derives_clause(&t.derives);
+        self.writeln(";");
     }
 
     /// Print a field definition.
@@ -390,6 +392,20 @@ impl Printer {
         self.write(&field.name.name);
         self.write(": ");
         self.print_type_annotation(&field.type_ann);
+    }
+
+    /// Print an optional `derives Ident, Ident, ...` clause.
+    fn print_derives_clause(&mut self, derives: &[rsc_syntax::ast::Ident]) {
+        if derives.is_empty() {
+            return;
+        }
+        self.write(" derives ");
+        for (i, derive) in derives.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&derive.name);
+        }
     }
 
     /// Print an enum definition.
@@ -417,6 +433,7 @@ impl Printer {
                     self.write("\"");
                 }
             }
+            self.print_derives_clause(&e.derives);
             self.writeln(";");
         } else {
             // Multi-line discriminated union format
@@ -448,6 +465,7 @@ impl Printer {
                 }
             }
             self.dedent();
+            self.print_derives_clause(&e.derives);
             self.writeln(";");
         }
     }
@@ -497,6 +515,19 @@ impl Printer {
                     self.write(", ");
                 }
                 self.write(&iface.name);
+            }
+        }
+        if !class.derives.is_empty() {
+            if class.implements.is_empty() {
+                self.write(" derives ");
+            } else {
+                self.write(", derives ");
+            }
+            for (i, derive) in class.derives.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&derive.name);
             }
         }
         self.writeln(" {");

@@ -47,9 +47,9 @@ pub struct LowerOptions {
 /// Result of lowering a single module.
 ///
 /// Groups the Rust IR, diagnostics, external crate dependencies, and
-/// whether the module needs an async runtime, futures, `serde_json`, or rand crate.
+/// whether the module needs an async runtime, futures, `serde_json`, serde, or rand crate.
 #[allow(clippy::struct_excessive_bools)]
-// Four boolean flags for independent crate dependency tracking
+// Five boolean flags for independent crate dependency tracking
 pub struct LowerResult {
     /// The generated Rust IR.
     pub ir: RustFile,
@@ -66,6 +66,9 @@ pub struct LowerResult {
     pub needs_serde_json: bool,
     /// Whether the source uses `Math.random()` and needs the `rand` crate.
     pub needs_rand: bool,
+    /// Whether any type, enum, or class uses `derives Serialize` or `derives Deserialize`,
+    /// requiring `serde = { version = "1", features = ["derive"] }`.
+    pub needs_serde: bool,
 }
 
 /// Lower a `RustScript` AST to Rust IR.
@@ -95,6 +98,7 @@ pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> Lower
         needs_futures_crate,
         needs_serde_json,
         needs_rand,
+        needs_serde,
     ) = transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {
@@ -105,5 +109,6 @@ pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> Lower
         needs_futures_crate,
         needs_serde_json,
         needs_rand,
+        needs_serde,
     }
 }

@@ -181,7 +181,10 @@ impl Transform {
 
         let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
         let has_type_params = !type_params.is_empty();
-        let derives = derive_inference::infer_struct_derives(&field_types, has_type_params);
+        let derives = super::merge_derives(
+            derive_inference::infer_struct_derives(&field_types, has_type_params),
+            &cls.derives,
+        );
         items.push(RustItem::Struct(RustStructDef {
             public: exported,
             name: cls.name.name.clone(),
