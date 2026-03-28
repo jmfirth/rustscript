@@ -349,7 +349,40 @@ impl Transform {
                         RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span);
                     RustExpr::new(RustExprKind::QuestionMark(Box::new(await_expr)), expr.span)
                 } else {
-                    RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span)
+                    let await_expr =
+                        RustExpr::new(RustExprKind::Await(Box::new(lowered)), expr.span);
+                    // In non-throws context, if the awaited call is to a throws
+                    // function (returns Result), add .unwrap() to crash on error.
+                    // This matches TypeScript semantics where unhandled rejections crash.
+                    let callee_throws = match &inner.kind {
+                        ast::ExprKind::Call(call) => self
+                            .fn_signatures
+                            .get(&call.callee.name)
+                            .is_some_and(|sig| sig.throws),
+                        ast::ExprKind::MethodCall(mc) => {
+                            // Check Type::method or bare method name
+                            if let ast::ExprKind::Ident(obj) = &mc.object.kind {
+                                let key = format!("{}::{}", obj.name, mc.method.name);
+                                self.fn_signatures
+                                    .get(&key)
+                                    .or_else(|| self.fn_signatures.get(&mc.method.name))
+                                    .is_some_and(|sig| sig.throws)
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if callee_throws {
+                        RustExpr::synthetic(RustExprKind::MethodCall {
+                            receiver: Box::new(await_expr),
+                            method: "unwrap".to_owned(),
+                            type_args: vec![],
+                            args: vec![],
+                        })
+                    } else {
+                        await_expr
+                    }
                 }
             }
             ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),

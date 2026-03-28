@@ -126,30 +126,11 @@ fn find_rustdoc_json(crate_name: &str, build_dir: &Path) -> Option<PathBuf> {
 /// Returns `true` if the command succeeded, `false` otherwise.
 #[must_use]
 pub fn generate_rustdoc_json(build_dir: &Path) -> bool {
-    // Try nightly-style first.
+    // Use RUSTDOCFLAGS to pass --output-format json to rustdoc via cargo.
+    // Requires nightly for the unstable --output-format flag.
     let result = std::process::Command::new("cargo")
-        .args(["+nightly", "doc", "--output-format", "json", "--no-deps"])
-        .current_dir(build_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    if let Ok(status) = result
-        && status.success()
-    {
-        return true;
-    }
-
-    // Fall back to `-Z unstable-options`.
-    let result = std::process::Command::new("cargo")
-        .args([
-            "doc",
-            "-Z",
-            "unstable-options",
-            "--output-format",
-            "json",
-            "--no-deps",
-        ])
+        .args(["+nightly", "doc"])
+        .env("RUSTDOCFLAGS", "-Z unstable-options --output-format json")
         .current_dir(build_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
