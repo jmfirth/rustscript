@@ -5477,4 +5477,120 @@ async function main() {
             "for await should generate StreamExt use declaration: {output}"
         );
     }
+
+    // String literal arg to external function call → no .to_string()
+    #[test]
+    fn test_lower_external_fn_call_string_arg_no_to_string() {
+        // unknown_fn has no FnSignature → callee_modes is None
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::Call(CallExpr {
+                    callee: ident("unknown_fn", 0, 10),
+                    args: vec![string_expr("hello", 11, 18)],
+                }),
+                span: span(0, 19),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::Call { args, .. } => {
+                    assert!(
+                        matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "hello"),
+                        "external fn string arg should be bare StringLit, got {:?}",
+                        args[0].kind
+                    );
+                }
+                other => panic!("expected Call, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // String literal arg to external method call → no .to_string()
+    #[test]
+    fn test_lower_external_method_call_string_arg_no_to_string() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::Expr(Expr {
+                kind: ExprKind::MethodCall(MethodCallExpr {
+                    object: Box::new(ident_expr("router", 0, 6)),
+                    method: ident("route", 7, 12),
+                    args: vec![string_expr("/", 13, 16)],
+                }),
+                span: span(0, 17),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, _, _, _, _, _, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        match &func.body.stmts[0] {
+            RustStmt::Semi(expr) => match &expr.kind {
+                RustExprKind::MethodCall { args, .. } => {
+                    assert!(
+                        matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "/"),
+                        "external method string arg should be bare StringLit, got {:?}",
+                        args[0].kind
+                    );
+                }
+                other => panic!("expected MethodCall, got {other:?}"),
+            },
+            other => panic!("expected Semi, got {other:?}"),
+        }
+    }
+
+    // String literal arg to internal function with read-only string param → no .to_string()
+    // (Tier 2 changes read-only String param to &str, then strips .to_string() at call site)
+    #[test]
+    fn test_lower_internal_fn_readonly_string_param_strips_to_string() {
+        let output = compile_and_emit(
+            "function greet(name: string): void { console.log(name); }\n\
+             function main() { greet(\"Alice\"); }",
+        );
+        // Tier 2 converts read-only String → &str, so call site should not have .to_string()
+        assert!(
+            !output.contains("\"Alice\".to_string()"),
+            "read-only string param should strip .to_string() at call site: {output}"
+        );
+    }
+
+    // String literal arg to internal function with mutated string param → .to_string() stays
+    #[test]
+    fn test_lower_internal_fn_mutated_string_param_keeps_to_string() {
+        let output = compile_and_emit(
+            "function consume(name: string): string { return name; }\n\
+             function main() { consume(\"Alice\"); }",
+        );
+        // consume moves name (returns it), so Tier 2 keeps param as String.
+        // Call site should retain .to_string() for owned param.
+        assert!(
+            output.contains("to_string"),
+            "mutated/moved string param should keep .to_string(): {output}"
+        );
+    }
+
+    // String literal in variable binding → .to_string() stays
+    #[test]
+    fn test_lower_string_literal_binding_keeps_to_string() {
+        let output = compile_and_emit("function main() { const name = \"Alice\"; }");
+        assert!(
+            output.contains("to_string"),
+            "string literal in let binding should keep .to_string(): {output}"
+        );
+    }
 }

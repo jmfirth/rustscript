@@ -678,6 +678,15 @@ impl Transform {
             return RustExpr::synthetic(RustExprKind::Clone(Box::new(lowered)));
         }
 
+        // For external function calls (no signature info), pass string
+        // literals as &str rather than String. Most Rust APIs expect &str.
+        if callee_modes.is_none()
+            && let RustExprKind::ToString(inner) = &lowered.kind
+            && matches!(inner.kind, RustExprKind::StringLit(_))
+        {
+            return *inner.clone();
+        }
+
         lowered
     }
 
@@ -1030,12 +1039,22 @@ impl Transform {
             );
         }
 
-        // Not a builtin — lower as a regular method call
+        // Not a builtin — lower as a regular method call.
+        // For external method calls (no known signature), strip .to_string()
+        // from string literal args since most Rust APIs expect &str.
         let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
         let args: Vec<RustExpr> = mc
             .args
             .iter()
-            .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+            .map(|a| {
+                let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+                if let RustExprKind::ToString(inner) = &lowered.kind
+                    && matches!(inner.kind, RustExprKind::StringLit(_))
+                {
+                    return *inner.clone();
+                }
+                lowered
+            })
             .collect();
 
         RustExpr::new(

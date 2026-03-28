@@ -2593,7 +2593,7 @@ impl Greeter {
 
 fn main() {
     let g = Greeter::new();
-    g.greet(\"world\".to_string());
+    g.greet(\"world\");
 }
 ";
 
