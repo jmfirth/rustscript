@@ -165,6 +165,10 @@ pub(crate) struct Transform {
     /// Map from generator function name to its iterator struct name.
     /// Used to rewrite call sites: `range(0, 5)` → `RangeIter::new(0, 5)`.
     generator_structs: HashMap<String, String>,
+    /// Resolved types for type aliases, used for variadic tuple spread resolution.
+    /// When `type Extended = [...Pair, bool]` is encountered, we look up `Pair`
+    /// here to get its resolved `RustType::Tuple(...)` for flattening.
+    type_alias_types: HashMap<String, RustType>,
 }
 
 /// Convert a `RustScript` decorator to a Rust attribute.
@@ -224,6 +228,7 @@ impl Transform {
             extended_classes: HashSet::new(),
             external_signatures: HashMap::new(),
             generator_structs: HashMap::new(),
+            type_alias_types: HashMap::new(),
         }
     }
 
@@ -526,19 +531,9 @@ impl Transform {
                             }
                         } else {
                             // Non-utility type alias: type X = SomeType
-                            let mut diags = Vec::new();
-                            let generic_names =
-                                collect_generic_param_names(td.type_params.as_ref());
-                            let ty = resolve::resolve_type_annotation_with_generics(
-                                alias,
-                                &self.type_registry,
-                                &generic_names,
-                                &mut diags,
-                            );
-                            for d in diags {
-                                ctx.emit_diagnostic(d);
-                            }
-                            let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                            let rust_ty = self.resolve_type_alias_body(alias, td, &mut ctx);
+                            self.type_alias_types
+                                .insert(td.name.name.clone(), rust_ty.clone());
                             items.push(RustItem::TypeAlias(RustTypeAlias {
                                 public: exported,
                                 name: td.name.name.clone(),
@@ -923,6 +918,118 @@ impl Transform {
             ),
             span: Some(td.span),
         }
+    }
+
+    /// Resolve a type alias body, handling variadic tuple spreads.
+    ///
+    /// If the alias body is a tuple type containing `TupleSpread` elements,
+    /// resolves each spread by looking up previously-lowered type aliases and
+    /// flattening their tuple elements. Falls back to normal type resolution
+    /// for non-spread cases.
+    fn resolve_type_alias_body(
+        &self,
+        alias: &ast::TypeAnnotation,
+        td: &ast::TypeDef,
+        ctx: &mut LoweringContext,
+    ) -> RustType {
+        // Check if this is a tuple type with spread elements
+        if let ast::TypeKind::Tuple(elements) = &alias.kind {
+            let has_spread = elements
+                .iter()
+                .any(|e| matches!(e.kind, ast::TypeKind::TupleSpread(_)));
+            if has_spread {
+                return self.resolve_variadic_tuple(elements, td, ctx);
+            }
+        }
+
+        // Normal type alias resolution
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+        let ty = resolve::resolve_type_annotation_with_generics(
+            alias,
+            &self.type_registry,
+            &generic_names,
+            &mut diags,
+        );
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+        rsc_typeck::bridge::type_to_rust_type(&ty)
+    }
+
+    /// Resolve a variadic tuple type by flattening spread elements.
+    ///
+    /// For each element in the tuple:
+    /// - Plain types are resolved normally
+    /// - `...T` spreads look up `T` in `type_alias_types` and flatten
+    fn resolve_variadic_tuple(
+        &self,
+        elements: &[ast::TypeAnnotation],
+        td: &ast::TypeDef,
+        ctx: &mut LoweringContext,
+    ) -> RustType {
+        let mut result_types = Vec::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+
+        for element in elements {
+            if let ast::TypeKind::TupleSpread(inner) = &element.kind {
+                // First, check if it's a named type alias we've already resolved
+                let resolved = if let ast::TypeKind::Named(ident) = &inner.kind {
+                    if let Some(alias_ty) = self.type_alias_types.get(&ident.name) {
+                        Some(alias_ty.clone())
+                    } else {
+                        // Not a known type alias — try resolving normally
+                        let mut diags = Vec::new();
+                        let ty = resolve::resolve_type_annotation_with_generics(
+                            inner,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        for d in diags {
+                            ctx.emit_diagnostic(d);
+                        }
+                        Some(rsc_typeck::bridge::type_to_rust_type(&ty))
+                    }
+                } else {
+                    // Spread of a non-named type (e.g., inline tuple) — resolve it
+                    let mut diags = Vec::new();
+                    let ty = resolve::resolve_type_annotation_with_generics(
+                        inner,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    for d in diags {
+                        ctx.emit_diagnostic(d);
+                    }
+                    Some(rsc_typeck::bridge::type_to_rust_type(&ty))
+                };
+
+                if let Some(RustType::Tuple(inner_types)) = resolved {
+                    result_types.extend(inner_types);
+                } else {
+                    ctx.emit_diagnostic(Diagnostic::error(
+                        "spread in tuple type must refer to a tuple type".to_owned(),
+                    ));
+                }
+            } else {
+                // Normal tuple element
+                let mut diags = Vec::new();
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    element,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                );
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
+                result_types.push(rsc_typeck::bridge::type_to_rust_type(&ty));
+            }
+        }
+
+        RustType::Tuple(result_types)
     }
 
     /// Check whether a type alias annotation is a built-in utility type application.
@@ -2796,7 +2903,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::KeyOf(_)
                         | ast::TypeKind::TypeOf(_)
                         | ast::TypeKind::Conditional { .. }
-                        | ast::TypeKind::Infer(_) => vec![],
+                        | ast::TypeKind::Infer(_)
+                        | ast::TypeKind::TupleSpread(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

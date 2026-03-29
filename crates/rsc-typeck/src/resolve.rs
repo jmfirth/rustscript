@@ -139,11 +139,29 @@ pub fn resolve_type_annotation(
             Type::ArcMutex(Box::new(inner_ty))
         }
         ast::TypeKind::Tuple(types) => {
-            let resolved: Vec<Type> = types
-                .iter()
-                .map(|t| resolve_type_annotation(t, diagnostics))
-                .collect();
+            let mut resolved = Vec::new();
+            for t in types {
+                if let ast::TypeKind::TupleSpread(inner) = &t.kind {
+                    let spread_ty = resolve_type_annotation(inner, diagnostics);
+                    if let Type::Tuple(inner_types) = spread_ty {
+                        resolved.extend(inner_types);
+                    } else {
+                        diagnostics.push(Diagnostic::error(
+                            "spread in tuple type must refer to a tuple type".to_owned(),
+                        ));
+                    }
+                } else {
+                    resolved.push(resolve_type_annotation(t, diagnostics));
+                }
+            }
             Type::Tuple(resolved)
+        }
+        ast::TypeKind::TupleSpread(_) => {
+            // TupleSpread outside of a Tuple — invalid position
+            diagnostics.push(Diagnostic::error(
+                "spread type is only valid inside a tuple type".to_owned(),
+            ));
+            Type::Error
         }
         ast::TypeKind::IndexSignature(sig) => {
             let key_ty = resolve_type_annotation(&sig.key_type, diagnostics);
@@ -300,18 +318,39 @@ pub fn resolve_type_annotation_with_generics(
             Type::ArcMutex(Box::new(inner_ty))
         }
         ast::TypeKind::Tuple(types) => {
-            let resolved: Vec<Type> = types
-                .iter()
-                .map(|t| {
-                    resolve_type_annotation_with_generics(
+            let mut resolved = Vec::new();
+            for t in types {
+                if let ast::TypeKind::TupleSpread(inner) = &t.kind {
+                    let spread_ty = resolve_type_annotation_with_generics(
+                        inner,
+                        registry,
+                        generic_param_names,
+                        diagnostics,
+                    );
+                    if let Type::Tuple(inner_types) = spread_ty {
+                        resolved.extend(inner_types);
+                    } else {
+                        diagnostics.push(Diagnostic::error(
+                            "spread in tuple type must refer to a tuple type".to_owned(),
+                        ));
+                    }
+                } else {
+                    resolved.push(resolve_type_annotation_with_generics(
                         t,
                         registry,
                         generic_param_names,
                         diagnostics,
-                    )
-                })
-                .collect();
+                    ));
+                }
+            }
             Type::Tuple(resolved)
+        }
+        ast::TypeKind::TupleSpread(_) => {
+            // TupleSpread outside of a Tuple — invalid position
+            diagnostics.push(Diagnostic::error(
+                "spread type is only valid inside a tuple type".to_owned(),
+            ));
+            Type::Error
         }
         ast::TypeKind::IndexSignature(sig) => {
             let key_ty = resolve_type_annotation_with_generics(
@@ -682,7 +721,9 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
                 || ast_contains_infer(true_type)
                 || ast_contains_infer(false_type)
         }
-        ast::TypeKind::KeyOf(inner) | ast::TypeKind::Shared(inner) => ast_contains_infer(inner),
+        ast::TypeKind::KeyOf(inner)
+        | ast::TypeKind::Shared(inner)
+        | ast::TypeKind::TupleSpread(inner) => ast_contains_infer(inner),
         ast::TypeKind::IndexSignature(sig) => {
             ast_contains_infer(&sig.key_type) || ast_contains_infer(&sig.value_type)
         }
@@ -1405,5 +1446,102 @@ mod tests {
         let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
         assert_eq!(ty, Type::String);
         assert!(diags.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // Variadic tuple spread resolution tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_tuple_with_spread_of_inline_tuple() {
+        // [...[string, i32], bool] → (String, i32, bool)
+        let ann = TypeAnnotation {
+            kind: TypeKind::Tuple(vec![
+                TypeAnnotation {
+                    kind: TypeKind::TupleSpread(Box::new(TypeAnnotation {
+                        kind: TypeKind::Tuple(vec![
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("string", 4, 10)),
+                                span: span(4, 10),
+                            },
+                            TypeAnnotation {
+                                kind: TypeKind::Named(ident("i32", 12, 15)),
+                                span: span(12, 15),
+                            },
+                        ]),
+                        span: span(4, 16),
+                    })),
+                    span: span(1, 16),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("bool", 18, 22)),
+                    span: span(18, 22),
+                },
+            ]),
+            span: span(0, 23),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(
+            ty,
+            Type::Tuple(vec![
+                Type::String,
+                Type::Primitive(PrimitiveType::I32),
+                Type::Primitive(PrimitiveType::Bool),
+            ])
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_tuple_spread_of_non_tuple_produces_diagnostic() {
+        // [...string, i32] — string is not a tuple type
+        let ann = TypeAnnotation {
+            kind: TypeKind::Tuple(vec![
+                TypeAnnotation {
+                    kind: TypeKind::TupleSpread(Box::new(TypeAnnotation {
+                        kind: TypeKind::Named(ident("string", 4, 10)),
+                        span: span(4, 10),
+                    })),
+                    span: span(1, 10),
+                },
+                TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 12, 15)),
+                    span: span(12, 15),
+                },
+            ]),
+            span: span(0, 16),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        // The spread failed, so only i32 remains
+        assert_eq!(ty, Type::Tuple(vec![Type::Primitive(PrimitiveType::I32)]));
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0]
+                .message
+                .contains("spread in tuple type must refer to a tuple type")
+        );
+    }
+
+    #[test]
+    fn test_resolve_tuple_spread_outside_tuple_produces_diagnostic() {
+        // TupleSpread at top level — invalid
+        let ann = TypeAnnotation {
+            kind: TypeKind::TupleSpread(Box::new(TypeAnnotation {
+                kind: TypeKind::Named(ident("Pair", 3, 7)),
+                span: span(3, 7),
+            })),
+            span: span(0, 7),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Error);
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0]
+                .message
+                .contains("spread type is only valid inside a tuple type")
+        );
     }
 }

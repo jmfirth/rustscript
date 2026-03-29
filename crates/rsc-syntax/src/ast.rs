@@ -675,6 +675,10 @@ pub enum TypeKind {
     /// `infer R` — binds a type variable during conditional type pattern matching.
     /// Only valid inside the `extends` clause of a conditional type.
     Infer(Ident),
+    /// A spread element inside a tuple type: `...T` in `[i32, ...T, bool]`.
+    /// Only valid inside a `Tuple` type. Resolved at compile time by flattening
+    /// the spread type (which must be a known tuple type) into the outer tuple.
+    TupleSpread(Box<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
