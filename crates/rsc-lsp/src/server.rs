@@ -1138,6 +1138,7 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
                 format_type(&sig.value_type)
             )
         }
+        TypeKind::StringLiteral(value) => format!("\"{value}\""),
     }
 }
 

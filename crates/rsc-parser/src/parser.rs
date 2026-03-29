@@ -889,7 +889,7 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
-            _ => {
+            TokenKind::LBrace => {
                 // Struct type def: type Name = { field: Type, ... }
                 // or index signature: type Name = { [key: string]: string }
                 self.expect(&TokenKind::LBrace)?;
@@ -906,6 +906,32 @@ impl<'src> Parser<'src> {
                     type_params,
                     fields,
                     index_signature,
+                    type_alias: None,
+                    derives,
+                    doc_comment,
+                    span,
+                };
+                Some(Item {
+                    kind: ItemKind::TypeDef(td),
+                    exported: false,
+                    span,
+                })
+            }
+            _ => {
+                // Type alias: type Name = SomeType or type Name = Utility<T>
+                let alias_ann = self.parse_type_annotation()?;
+                let derives = self.parse_derives_clause();
+                let span = if derives.is_empty() {
+                    start.merge(alias_ann.span)
+                } else {
+                    start.merge(self.previous_span())
+                };
+                let td = TypeDef {
+                    name,
+                    type_params,
+                    fields: Vec::new(),
+                    index_signature: None,
+                    type_alias: Some(alias_ann),
                     derives,
                     doc_comment,
                     span,
@@ -1946,6 +1972,15 @@ impl<'src> Parser<'src> {
                     );
                     None
                 }
+            }
+            TokenKind::StringLit(value) => {
+                // String literal type, used in utility type args: Pick<User, "name" | "age">
+                let value = value.clone();
+                self.advance();
+                Some(TypeAnnotation {
+                    kind: TypeKind::StringLiteral(value),
+                    span: token.span,
+                })
             }
             _ => {
                 self.diagnostics.push(

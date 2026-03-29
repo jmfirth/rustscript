@@ -376,6 +376,11 @@ impl Printer {
                 self.print_type_annotation(&sig.value_type);
                 self.write(" }");
             }
+            TypeKind::StringLiteral(value) => {
+                self.write("\"");
+                self.write(value);
+                self.write("\"");
+            }
         }
     }
 
@@ -384,25 +389,32 @@ impl Printer {
         self.write("type ");
         self.write(&t.name.name);
         self.print_optional_type_params(t.type_params.as_ref());
-        self.writeln(" = {");
-        self.indent();
-        for field in &t.fields {
-            self.print_field_def(field);
-            self.writeln(",");
+        if let Some(ref alias) = t.type_alias {
+            self.write(" = ");
+            self.print_type_annotation(alias);
+            self.print_derives_clause(&t.derives);
+            self.writeln(";");
+        } else {
+            self.writeln(" = {");
+            self.indent();
+            for field in &t.fields {
+                self.print_field_def(field);
+                self.writeln(",");
+            }
+            if let Some(sig) = &t.index_signature {
+                self.write("[");
+                self.write(&sig.key_name.name);
+                self.write(": ");
+                self.print_type_annotation(&sig.key_type);
+                self.write("]: ");
+                self.print_type_annotation(&sig.value_type);
+                self.writeln(",");
+            }
+            self.dedent();
+            self.write("}");
+            self.print_derives_clause(&t.derives);
+            self.writeln(";");
         }
-        if let Some(sig) = &t.index_signature {
-            self.write("[");
-            self.write(&sig.key_name.name);
-            self.write(": ");
-            self.print_type_annotation(&sig.key_type);
-            self.write("]: ");
-            self.print_type_annotation(&sig.value_type);
-            self.writeln(",");
-        }
-        self.dedent();
-        self.write("}");
-        self.print_derives_clause(&t.derives);
-        self.writeln(";");
     }
 
     /// Print a field definition.

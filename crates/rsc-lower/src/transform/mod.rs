@@ -423,8 +423,40 @@ impl Transform {
                     items.push(RustItem::Function(lowered));
                 }
                 ast::ItemKind::TypeDef(td) => {
-                    // Pure index signature (no regular fields) → type alias to HashMap
-                    if td.fields.is_empty() && td.index_signature.is_some() {
+                    // Utility type alias: type X = Partial<Y>, Record<K,V>, etc.
+                    if let Some(ref alias) = td.type_alias {
+                        if Self::identify_utility_type(alias).is_some() {
+                            let mut lowered = self.lower_utility_type(td, alias, &mut ctx);
+                            match &mut lowered {
+                                RustItem::Struct(s) => s.public = exported,
+                                RustItem::TypeAlias(a) => a.public = exported,
+                                _ => {}
+                            }
+                            items.push(lowered);
+                        } else {
+                            // Non-utility type alias: type X = SomeType
+                            let mut diags = Vec::new();
+                            let generic_names =
+                                collect_generic_param_names(td.type_params.as_ref());
+                            let ty = resolve::resolve_type_annotation_with_generics(
+                                alias,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            );
+                            for d in diags {
+                                ctx.emit_diagnostic(d);
+                            }
+                            let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                            items.push(RustItem::TypeAlias(RustTypeAlias {
+                                public: exported,
+                                name: td.name.name.clone(),
+                                ty: rust_ty,
+                                span: Some(td.span),
+                            }));
+                        }
+                    } else if td.fields.is_empty() && td.index_signature.is_some() {
+                        // Pure index signature (no regular fields) → type alias to HashMap
                         let mut alias = self.lower_index_signature_type_alias(td, &mut ctx);
                         alias.public = exported;
                         items.push(RustItem::TypeAlias(alias));
@@ -555,6 +587,19 @@ impl Transform {
 
     /// Register a type definition in the type registry during the pre-pass.
     fn register_type_def(&mut self, td: &ast::TypeDef, ctx: &mut LoweringContext) {
+        // Check for utility type alias: type X = Partial<Y>
+        if let Some(ref alias) = td.type_alias {
+            if Self::identify_utility_type(alias).is_some() {
+                self.register_utility_type_def(td, alias, ctx);
+                return;
+            }
+            // Non-utility type alias — register as empty struct
+            // (the actual lowering will produce a type alias)
+            self.type_registry
+                .register(td.name.name.clone(), Vec::new());
+            return;
+        }
+
         let mut diags = Vec::new();
         let generic_names = collect_generic_param_names(td.type_params.as_ref());
         let fields: Vec<(String, Type)> = td
@@ -664,6 +709,284 @@ impl Transform {
             ),
             span: Some(td.span),
         }
+    }
+
+    /// Check whether a type alias annotation is a built-in utility type application.
+    ///
+    /// Returns the utility type name if recognized: `Partial`, `Required`,
+    /// `Readonly`, `Record`, `Pick`, or `Omit`.
+    fn identify_utility_type(ann: &ast::TypeAnnotation) -> Option<&str> {
+        if let ast::TypeKind::Generic(ident, _) = &ann.kind {
+            match ident.name.as_str() {
+                "Partial" | "Required" | "Readonly" | "Record" | "Pick" | "Omit" => {
+                    Some(&ident.name)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Extract string literal field names from a type annotation.
+    ///
+    /// Handles both a single string literal and a union of string literals
+    /// (e.g., `"name" | "age"`). Returns the field names as a `Vec<String>`.
+    fn extract_string_literal_fields(ann: &ast::TypeAnnotation) -> Vec<String> {
+        match &ann.kind {
+            ast::TypeKind::StringLiteral(value) => vec![value.clone()],
+            ast::TypeKind::Union(members) => members
+                .iter()
+                .filter_map(|m| {
+                    if let ast::TypeKind::StringLiteral(value) = &m.kind {
+                        Some(value.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Register a utility type application in the type registry during the pre-pass.
+    ///
+    /// Resolves `Partial<User>`, `Pick<User, "name">`, etc. by looking up the
+    /// source type's fields and generating a transformed field list.
+    fn register_utility_type_def(
+        &mut self,
+        td: &ast::TypeDef,
+        ann: &ast::TypeAnnotation,
+        ctx: &mut LoweringContext,
+    ) {
+        let ast::TypeKind::Generic(utility_ident, args) = &ann.kind else {
+            return;
+        };
+        let utility_name = utility_ident.name.as_str();
+
+        // Record<K, V> does not reference a source type — register as empty struct
+        if utility_name == "Record" {
+            self.type_registry
+                .register(td.name.name.clone(), Vec::new());
+            return;
+        }
+
+        // All other utility types require a source type as the first argument
+        let source_name = args.first().and_then(|a| {
+            if let ast::TypeKind::Named(ident) = &a.kind {
+                Some(ident.name.clone())
+            } else {
+                None
+            }
+        });
+
+        let Some(source_name) = source_name else {
+            ctx.emit_diagnostic(Diagnostic::error(format!(
+                "utility type `{utility_name}` requires a type argument"
+            )));
+            return;
+        };
+
+        // Look up source type fields
+        let source_fields = self
+            .type_registry
+            .lookup(&source_name)
+            .and_then(|td| td.struct_fields())
+            .map(<[(String, Type)]>::to_vec);
+
+        let Some(source_fields) = source_fields else {
+            ctx.emit_diagnostic(Diagnostic::error(format!(
+                "unknown type `{source_name}` in `{utility_name}<{source_name}>`"
+            )));
+            return;
+        };
+
+        let new_fields: Vec<(String, Type)> = match utility_name {
+            "Partial" => source_fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), Type::Option(Box::new(ty.clone()))))
+                .collect(),
+            "Required" => source_fields
+                .iter()
+                .map(|(name, ty)| {
+                    let unwrapped = if let Type::Option(inner) = ty {
+                        (**inner).clone()
+                    } else {
+                        ty.clone()
+                    };
+                    (name.clone(), unwrapped)
+                })
+                .collect(),
+            "Pick" => {
+                let field_names = args
+                    .get(1)
+                    .map_or_else(Vec::new, Self::extract_string_literal_fields);
+                if field_names.is_empty() {
+                    ctx.emit_diagnostic(Diagnostic::error(format!(
+                        "`Pick<{source_name}, ...>` requires string literal field names"
+                    )));
+                }
+                // Validate field names exist
+                for name in &field_names {
+                    if !source_fields.iter().any(|(n, _)| n == name) {
+                        ctx.emit_diagnostic(Diagnostic::error(format!(
+                            "unknown field `{name}` in `Pick<{source_name}, \"{name}\">`"
+                        )));
+                    }
+                }
+                source_fields
+                    .iter()
+                    .filter(|(name, _)| field_names.contains(name))
+                    .cloned()
+                    .collect()
+            }
+            "Omit" => {
+                let field_names = args
+                    .get(1)
+                    .map_or_else(Vec::new, Self::extract_string_literal_fields);
+                if field_names.is_empty() {
+                    ctx.emit_diagnostic(Diagnostic::error(format!(
+                        "`Omit<{source_name}, ...>` requires string literal field names"
+                    )));
+                }
+                // Validate field names exist
+                for name in &field_names {
+                    if !source_fields.iter().any(|(n, _)| n == name) {
+                        ctx.emit_diagnostic(Diagnostic::error(format!(
+                            "unknown field `{name}` in `Omit<{source_name}, \"{name}\">`"
+                        )));
+                    }
+                }
+                source_fields
+                    .iter()
+                    .filter(|(name, _)| !field_names.contains(name))
+                    .cloned()
+                    .collect()
+            }
+            _ => source_fields.clone(),
+        };
+
+        self.type_registry
+            .register(td.name.name.clone(), new_fields);
+    }
+
+    /// Lower a utility type application to a Rust struct or type alias.
+    ///
+    /// Handles `Partial<T>`, `Required<T>`, `Readonly<T>`, `Record<K, V>`,
+    /// `Pick<T, K>`, and `Omit<T, K>`.
+    fn lower_utility_type(
+        &self,
+        td: &ast::TypeDef,
+        ann: &ast::TypeAnnotation,
+        ctx: &mut LoweringContext,
+    ) -> RustItem {
+        let ast::TypeKind::Generic(utility_ident, args) = &ann.kind else {
+            unreachable!("called only for utility type applications");
+        };
+        let utility_name = utility_ident.name.as_str();
+
+        // Record<K, V> → type alias to HashMap<K, V>
+        if utility_name == "Record" {
+            let mut diags = Vec::new();
+            let generic_names = collect_generic_param_names(td.type_params.as_ref());
+            let key_ty = args.first().map_or(Type::String, |a| {
+                resolve::resolve_type_annotation_with_generics(
+                    a,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                )
+            });
+            let value_ty = args.get(1).map_or(Type::Unit, |a| {
+                resolve::resolve_type_annotation_with_generics(
+                    a,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                )
+            });
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
+            let key_rust = rsc_typeck::bridge::type_to_rust_type(&key_ty);
+            let value_rust = rsc_typeck::bridge::type_to_rust_type(&value_ty);
+
+            return RustItem::TypeAlias(RustTypeAlias {
+                public: false,
+                name: td.name.name.clone(),
+                ty: RustType::Generic(
+                    Box::new(RustType::Named("HashMap".to_owned())),
+                    vec![key_rust, value_rust],
+                ),
+                span: Some(td.span),
+            });
+        }
+
+        // All other utility types generate structs
+        let source_name = args.first().and_then(|a| {
+            if let ast::TypeKind::Named(ident) = &a.kind {
+                Some(ident.name.clone())
+            } else {
+                None
+            }
+        });
+
+        let source_name = source_name.unwrap_or_default();
+
+        // Look up the registered fields (already computed in pre-pass)
+        let registered_fields = self
+            .type_registry
+            .lookup(&td.name.name)
+            .and_then(|td| td.struct_fields())
+            .map(<[(String, Type)]>::to_vec)
+            .unwrap_or_default();
+
+        let fields: Vec<RustFieldDef> = registered_fields
+            .iter()
+            .map(|(name, ty)| {
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(ty);
+                RustFieldDef {
+                    public: true,
+                    name: name.clone(),
+                    ty: rust_ty,
+                    doc_comment: None,
+                    span: Some(td.span),
+                }
+            })
+            .collect();
+
+        let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
+        let type_params = lower_type_params(td.type_params.as_ref());
+        let has_type_params = !type_params.is_empty();
+
+        // Propagate derives from source type
+        let source_derives = self
+            .type_registry
+            .lookup(&source_name)
+            .and_then(|td| td.struct_fields())
+            .map(|source_fields| {
+                let source_field_types: Vec<RustType> = source_fields
+                    .iter()
+                    .map(|(_, ty)| rsc_typeck::bridge::type_to_rust_type(ty))
+                    .collect();
+                let refs: Vec<&RustType> = source_field_types.iter().collect();
+                derive_inference::infer_struct_derives(&refs, has_type_params)
+            });
+
+        let auto_derives = source_derives.unwrap_or_else(|| {
+            derive_inference::infer_struct_derives(&field_types, has_type_params)
+        });
+        let derives = merge_derives(auto_derives, &td.derives);
+
+        RustItem::Struct(RustStructDef {
+            public: false,
+            name: td.name.name.clone(),
+            type_params,
+            fields,
+            derives,
+            doc_comment: td.doc_comment.clone(),
+            span: Some(td.span),
+        })
     }
 
     /// Register an enum definition in the type registry during the pre-pass.
@@ -1514,7 +1837,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Inferred
                         | ast::TypeKind::Shared(_)
                         | ast::TypeKind::Tuple(_)
-                        | ast::TypeKind::IndexSignature(_) => vec![],
+                        | ast::TypeKind::IndexSignature(_)
+                        | ast::TypeKind::StringLiteral(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
@@ -2830,6 +3154,7 @@ mod tests {
                 },
             ],
             index_signature: None,
+            type_alias: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 50),
@@ -2884,6 +3209,7 @@ mod tests {
                 },
             ],
             index_signature: None,
+            type_alias: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 30),
@@ -3140,6 +3466,7 @@ mod tests {
                 span: span(0, 8),
             }],
             index_signature: None,
+            type_alias: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 30),
@@ -6785,6 +7112,213 @@ async function main() {
             matches!(&let_stmt.init.kind, RustExprKind::Index { .. }),
             "expected Index expression, got {:?}",
             let_stmt.init.kind
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Utility types: unit tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_utility_partial_produces_struct_with_option_fields() {
+        let source = r#"type User = { name: string, age: u32 }
+type PartialUser = Partial<User>"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(file.items.len(), 2);
+        let RustItem::Struct(s) = &file.items[1] else {
+            panic!("expected Struct item, got {:?}", file.items[1]);
+        };
+        assert_eq!(s.name, "PartialUser");
+        assert_eq!(s.fields.len(), 2);
+        assert_eq!(s.fields[0].name, "name");
+        assert!(
+            matches!(&s.fields[0].ty, RustType::Option(_)),
+            "expected Option type for name, got {:?}",
+            s.fields[0].ty
+        );
+        assert_eq!(s.fields[1].name, "age");
+        assert!(
+            matches!(&s.fields[1].ty, RustType::Option(_)),
+            "expected Option type for age, got {:?}",
+            s.fields[1].ty
+        );
+    }
+
+    #[test]
+    fn test_lower_utility_record_produces_type_alias() {
+        let source = r#"type Scores = Record<string, i32>"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert_eq!(file.items.len(), 1);
+        let RustItem::TypeAlias(ta) = &file.items[0] else {
+            panic!("expected TypeAlias item, got {:?}", file.items[0]);
+        };
+        assert_eq!(ta.name, "Scores");
+        assert_eq!(ta.ty.to_string(), "HashMap<String, i32>");
+    }
+
+    #[test]
+    fn test_lower_utility_pick_selects_named_fields() {
+        let source = r#"type User = { name: string, age: u32, email: string }
+type NameOnly = Pick<User, "name">"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Struct(s) = &file.items[1] else {
+            panic!("expected Struct item");
+        };
+        assert_eq!(s.name, "NameOnly");
+        assert_eq!(s.fields.len(), 1);
+        assert_eq!(s.fields[0].name, "name");
+    }
+
+    #[test]
+    fn test_lower_utility_omit_removes_named_fields() {
+        let source = r#"type User = { name: string, age: u32, email: string }
+type NoEmail = Omit<User, "email">"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Struct(s) = &file.items[1] else {
+            panic!("expected Struct item");
+        };
+        assert_eq!(s.name, "NoEmail");
+        assert_eq!(s.fields.len(), 2);
+        assert_eq!(s.fields[0].name, "name");
+        assert_eq!(s.fields[1].name, "age");
+    }
+
+    #[test]
+    fn test_lower_utility_readonly_is_identity() {
+        let source = r#"type Point = { x: f64, y: f64 }
+type ReadonlyPoint = Readonly<Point>"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Struct(s) = &file.items[1] else {
+            panic!("expected Struct item");
+        };
+        assert_eq!(s.name, "ReadonlyPoint");
+        assert_eq!(s.fields.len(), 2);
+        assert_eq!(s.fields[0].name, "x");
+        assert_eq!(s.fields[1].name, "y");
+    }
+
+    #[test]
+    fn test_lower_utility_required_unwraps_option() {
+        let source = r#"type Config = { name: string | null, debug: bool | null }
+type FullConfig = Required<Config>"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Struct(s) = &file.items[1] else {
+            panic!("expected Struct item");
+        };
+        assert_eq!(s.name, "FullConfig");
+        assert_eq!(s.fields.len(), 2);
+        // name should be String (not Option<String>)
+        assert_eq!(s.fields[0].ty, RustType::String);
+        // debug should be bool (not Option<bool>)
+        assert_eq!(s.fields[1].ty, RustType::Bool);
+    }
+
+    #[test]
+    fn test_lower_utility_partial_unknown_type_emits_diagnostic() {
+        let source = r#"type Foo = Partial<NonExistent>"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (_, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(
+            diags.iter().any(|d| d.message.contains("unknown type")),
+            "expected diagnostic about unknown type, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lower_utility_pick_unknown_field_emits_diagnostic() {
+        let source = r#"type User = { name: string, age: u32 }
+type Bad = Pick<User, "nonexistent">"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (_, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(
+            diags.iter().any(|d| d.message.contains("unknown field")),
+            "expected diagnostic about unknown field, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_identify_utility_type_recognizes_all_six() {
+        let make_generic = |name: &str| ast::TypeAnnotation {
+            kind: TypeKind::Generic(ident(name, 0, name.len() as u32), vec![]),
+            span: span(0, 10),
+        };
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Partial")),
+            Some("Partial")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Required")),
+            Some("Required")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Readonly")),
+            Some("Readonly")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Record")),
+            Some("Record")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Pick")),
+            Some("Pick")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("Omit")),
+            Some("Omit")
+        );
+        assert_eq!(
+            Transform::identify_utility_type(&make_generic("NotAUtilityType")),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_string_literal_fields_single() {
+        let ann = ast::TypeAnnotation {
+            kind: TypeKind::StringLiteral("name".to_owned()),
+            span: span(0, 6),
+        };
+        assert_eq!(Transform::extract_string_literal_fields(&ann), vec!["name"]);
+    }
+
+    #[test]
+    fn test_extract_string_literal_fields_union() {
+        let ann = ast::TypeAnnotation {
+            kind: TypeKind::Union(vec![
+                ast::TypeAnnotation {
+                    kind: TypeKind::StringLiteral("name".to_owned()),
+                    span: span(0, 6),
+                },
+                ast::TypeAnnotation {
+                    kind: TypeKind::StringLiteral("age".to_owned()),
+                    span: span(9, 14),
+                },
+            ]),
+            span: span(0, 14),
+        };
+        assert_eq!(
+            Transform::extract_string_literal_fields(&ann),
+            vec!["name", "age"]
         );
     }
 }

@@ -236,6 +236,11 @@ pub struct TypeDef {
     /// Optional index signature: `[key: KeyType]: ValueType`.
     /// When present with no regular fields, the type lowers to `HashMap<K, V>`.
     pub index_signature: Option<IndexSignature>,
+    /// Optional type alias: `type X = Partial<User>`.
+    /// When present, the RHS is a type annotation rather than a field list.
+    /// Used for utility type applications (`Partial`, `Required`, `Readonly`,
+    /// `Record`, `Pick`, `Omit`) and general type aliases.
+    pub type_alias: Option<TypeAnnotation>,
     /// Explicit derive macros requested via `derives Serialize, Deserialize`.
     /// Merged with auto-inferred derives during lowering.
     pub derives: Vec<Ident>,
@@ -618,6 +623,10 @@ pub enum TypeKind {
     /// Lowers to `HashMap<KeyType, ValueType>` in Rust.
     /// Used for inline index signature types in variable declarations and parameters.
     IndexSignature(Box<IndexSignature>),
+    /// A string literal type, used as a type argument in utility types like
+    /// `Pick<User, "name" | "age">` or `Omit<User, "email">`.
+    /// The string is the literal value (field name).
+    StringLiteral(String),
 }
 
 /// An identifier with its source span.

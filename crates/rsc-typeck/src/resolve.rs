@@ -150,6 +150,12 @@ pub fn resolve_type_annotation(
             let value_ty = resolve_type_annotation(&sig.value_type, diagnostics);
             Type::Generic("HashMap".to_owned(), vec![key_ty, value_ty])
         }
+        ast::TypeKind::StringLiteral(_) => {
+            // String literal types are used in utility type arguments
+            // (e.g., Pick<User, "name" | "age">). They don't resolve to a runtime
+            // type — they're consumed by the utility type lowering pass.
+            Type::Error
+        }
     }
 }
 
@@ -293,6 +299,12 @@ pub fn resolve_type_annotation_with_generics(
                 diagnostics,
             );
             Type::Generic("HashMap".to_owned(), vec![key_ty, value_ty])
+        }
+        ast::TypeKind::StringLiteral(_) => {
+            // String literal types are used in utility type arguments
+            // (e.g., Pick<User, "name" | "age">). They don't resolve to a runtime
+            // type — they're consumed by the utility type lowering pass.
+            Type::Error
         }
     }
 }
