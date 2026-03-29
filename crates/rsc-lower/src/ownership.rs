@@ -220,6 +220,26 @@ impl UseMap {
                     );
                 }
             }
+            ast::Stmt::ForIn(for_in) => {
+                // The iterable is borrowed for key iteration
+                Self::collect_expr_uses(
+                    &for_in.iterable,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                for inner_stmt in &for_in.body.stmts {
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+            }
             ast::Stmt::ArrayDestructure(adestr) => {
                 Self::collect_expr_uses(
                     &adestr.init,
@@ -769,6 +789,11 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 collect_assignments(inner, reassigned);
             }
         }
+        ast::Stmt::ForIn(for_in) => {
+            for inner in &for_in.body.stmts {
+                collect_assignments(inner, reassigned);
+            }
+        }
         ast::Stmt::Switch(switch) => {
             for case in &switch.cases {
                 for inner in &case.body {
@@ -874,6 +899,11 @@ fn collect_method_call_receivers(stmt: &ast::Stmt, receivers: &mut HashSet<Strin
         }
         ast::Stmt::For(for_of) => {
             for s in &for_of.body.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+        }
+        ast::Stmt::ForIn(for_in) => {
+            for s in &for_in.body.stmts {
                 collect_method_call_receivers(s, receivers);
             }
         }
@@ -1068,6 +1098,17 @@ fn collect_param_usage_stmt(
                 collect_param_usage_expr(&for_of.iterable, param_set, is_ref_call, result);
             }
             for inner in &for_of.body.stmts {
+                collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+            }
+        }
+        ast::Stmt::ForIn(for_in) => {
+            // The iterable is borrowed in for-in (key iteration borrows)
+            if let ast::ExprKind::Ident(ident) = &for_in.iterable.kind {
+                record_usage(&ident.name, ParamUsage::ReadOnly, param_set, result);
+            } else {
+                collect_param_usage_expr(&for_in.iterable, param_set, is_ref_call, result);
+            }
+            for inner in &for_in.body.stmts {
                 collect_param_usage_stmt(inner, param_set, is_ref_call, result);
             }
         }
@@ -1459,6 +1500,12 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
             }
         }
         ast::Stmt::For(f) => {
+            collect_idents_in_expr(&f.iterable, names);
+            for s in &f.body.stmts {
+                collect_idents_in_stmt(s, names);
+            }
+        }
+        ast::Stmt::ForIn(f) => {
             collect_idents_in_expr(&f.iterable, names);
             for s in &f.body.stmts {
                 collect_idents_in_stmt(s, names);

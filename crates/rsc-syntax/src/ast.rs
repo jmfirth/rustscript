@@ -726,6 +726,9 @@ pub enum Stmt {
     /// A `for (const/let x of items) { ... }` loop.
     /// Lowers to Rust `for x in &items { ... }`.
     For(ForOfStmt),
+    /// A `for (const/let key in obj) { ... }` loop.
+    /// Lowers to Rust `for key in obj.keys() { ... }`.
+    ForIn(ForInStmt),
     /// An array destructuring declaration: `const [a, b] = expr;`.
     /// Lowers to Rust tuple destructuring: `let (a, b) = expr;`.
     ArrayDestructure(ArrayDestructureStmt),
@@ -948,6 +951,28 @@ pub struct ForOfStmt {
     /// Whether this is a `for await` async iteration loop.
     pub is_await: bool,
     /// The span covering the entire for-of statement.
+    pub span: Span,
+}
+
+/// A for-in loop: `for (const key in obj) { ... }`.
+///
+/// Corresponds to `RustScript` `for (const/let IDENT in EXPR) { body }`.
+/// Lowers to Rust `for key in obj.keys() { body }`.
+///
+/// Unlike `for...of` which iterates values, `for...in` iterates keys:
+/// - For `HashMap`/`Map` types: iterates over the map's keys via `.keys()`.
+/// - For arrays: iterates over indices (0, 1, 2, ...).
+#[derive(Debug, Clone)]
+pub struct ForInStmt {
+    /// The binding kind (`const` or `let`).
+    pub binding: VarBinding,
+    /// The loop variable name (receives the key).
+    pub variable: Ident,
+    /// The iterable expression (a map or collection to iterate keys of).
+    pub iterable: Expr,
+    /// The loop body.
+    pub body: Block,
+    /// The span covering the entire for-in statement.
     pub span: Span,
 }
 

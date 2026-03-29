@@ -4576,3 +4576,69 @@ function getConfig(settings: { [key: string]: string }): string {
         "expected HashMap<String, String> param type, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T110-1. For-in loop on Map iterates keys via .keys()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_t110_for_in_map_keys() {
+    let source = r#"
+function main() {
+  const map: Map<string, i32> = new Map();
+  for (const k in map) {
+    console.log(k);
+  }
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".keys()"),
+        "expected .keys() call for for-in loop, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("for k in map.keys()"),
+        "expected `for k in map.keys()`, got:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T110-2. For-in vs for-of produce different output for the same collection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_t110_for_in_vs_for_of_different_output() {
+    let source_for_of = r#"
+function main() {
+  const items: Array<i32> = [1, 2, 3];
+  for (const n of items) {
+    console.log(n);
+  }
+}
+"#;
+
+    let source_for_in = r#"
+function main() {
+  const items: Map<string, i32> = new Map();
+  for (const k in items) {
+    console.log(k);
+  }
+}
+"#;
+
+    let actual_of = compile_to_rust(source_for_of);
+    let actual_in = compile_to_rust(source_for_in);
+
+    // for-of should use `for &n in &items` (value iteration)
+    assert!(
+        actual_of.contains("for &n in &items"),
+        "for-of should iterate values, got:\n{actual_of}"
+    );
+
+    // for-in should use `.keys()` (key iteration)
+    assert!(
+        actual_in.contains(".keys()"),
+        "for-in should use .keys(), got:\n{actual_in}"
+    );
+}

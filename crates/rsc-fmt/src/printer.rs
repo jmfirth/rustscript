@@ -8,13 +8,13 @@ use rsc_syntax::ast::{
     ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef,
     ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
     DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr,
-    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr,
-    IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
-    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
-    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
-    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
-    VarDecl, Visibility, WhileStmt,
+    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForInStmt, ForOfStmt, IfStmt, ImportDecl,
+    IndexAssignExpr, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    LogicalAssignExpr, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess,
+    OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    VarBinding, VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -806,6 +806,7 @@ impl Printer {
             Stmt::Switch(s) => self.print_switch_stmt(s),
             Stmt::TryCatch(t) => self.print_try_catch_stmt(t),
             Stmt::For(f) => self.print_for_of_stmt(f),
+            Stmt::ForIn(f) => self.print_for_in_stmt(f),
             Stmt::ArrayDestructure(a) => self.print_array_destructure_stmt(a),
             Stmt::Break(_) => self.writeln("break;"),
             Stmt::Continue(_) => self.writeln("continue;"),
@@ -989,6 +990,21 @@ impl Printer {
         }
         self.write(&f.variable.name);
         self.write(" of ");
+        self.print_expr(&f.iterable);
+        self.write(") ");
+        self.print_block(&f.body);
+        self.newline();
+    }
+
+    /// Print a for-in statement.
+    fn print_for_in_stmt(&mut self, f: &ForInStmt) {
+        self.write("for (");
+        match f.binding {
+            VarBinding::Const => self.write("const "),
+            VarBinding::Let => self.write("let "),
+        }
+        self.write(&f.variable.name);
+        self.write(" in ");
         self.print_expr(&f.iterable);
         self.write(") ");
         self.print_block(&f.body);
@@ -1880,6 +1896,54 @@ mod tests {
         assert!(
             !output.contains("await"),
             "regular for should not contain await: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 110: for-in formatting
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_printer_for_in_formats_correctly() {
+        let for_in_stmt = ForInStmt {
+            binding: VarBinding::Const,
+            variable: ident("k"),
+            iterable: ident_expr("obj"),
+            body: Block {
+                stmts: vec![],
+                span: Span::dummy(),
+            },
+            span: Span::dummy(),
+        };
+
+        let mut printer = Printer::new();
+        printer.print_for_in_stmt(&for_in_stmt);
+        let output = printer.into_output();
+        assert!(
+            output.starts_with("for (const k in obj)"),
+            "for-in should format as 'for (const k in obj)': {output}"
+        );
+    }
+
+    #[test]
+    fn test_printer_for_in_let_binding() {
+        let for_in_stmt = ForInStmt {
+            binding: VarBinding::Let,
+            variable: ident("key"),
+            iterable: ident_expr("map"),
+            body: Block {
+                stmts: vec![],
+                span: Span::dummy(),
+            },
+            span: Span::dummy(),
+        };
+
+        let mut printer = Printer::new();
+        printer.print_for_in_stmt(&for_in_stmt);
+        let output = printer.into_output();
+        assert!(
+            output.starts_with("for (let key in map)"),
+            "for-in with let should format as 'for (let key in map)': {output}"
         );
     }
 }

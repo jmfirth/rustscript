@@ -130,6 +130,9 @@ impl Transform {
                     RustStmt::ForIn(self.lower_for_of(for_of, ctx, use_map, stmt_index, reassigned))
                 }
             }
+            ast::Stmt::ForIn(for_in) => {
+                RustStmt::ForIn(self.lower_for_in(for_in, ctx, use_map, stmt_index, reassigned))
+            }
             ast::Stmt::ArrayDestructure(adestr) => {
                 self.lower_array_destructure(adestr, ctx, use_map, stmt_index)
             }
@@ -635,6 +638,45 @@ impl Transform {
             deref_pattern,
             iterable_is_borrowed,
             span: Some(for_of.span),
+        }
+    }
+
+    /// Lower a for-in statement to a Rust for loop over keys.
+    ///
+    /// `for (const key in map) { body }` → `for key in map.keys() { body }`.
+    /// The iterable is wrapped in a `.keys()` method call.
+    fn lower_for_in(
+        &self,
+        for_in: &ast::ForInStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustForInStmt {
+        let iterable = self.lower_expr(&for_in.iterable, ctx, use_map, stmt_index);
+
+        // Wrap the iterable in a `.keys()` call: `expr.keys()`
+        let keys_call = RustExpr {
+            kind: RustExprKind::MethodCall {
+                receiver: Box::new(iterable),
+                method: "keys".to_owned(),
+                type_args: vec![],
+                args: vec![],
+            },
+            span: None,
+        };
+
+        let body = self.lower_block(&for_in.body, ctx, use_map, stmt_index, reassigned);
+
+        RustForInStmt {
+            variable: for_in.variable.name.clone(),
+            iterable: keys_call,
+            body,
+            deref_pattern: false,
+            // The `.keys()` call returns an iterator that owns its values,
+            // so the emitter should not add `&` prefix.
+            iterable_is_borrowed: true,
+            span: Some(for_in.span),
         }
     }
 

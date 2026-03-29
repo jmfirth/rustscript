@@ -786,6 +786,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::Switch(s) => s.span,
         Stmt::TryCatch(t) => t.span,
         Stmt::For(f) => f.span,
+        Stmt::ForIn(f) => f.span,
         Stmt::ArrayDestructure(a) => a.span,
         Stmt::Break(b) => b.span,
         Stmt::Continue(c) => c.span,
@@ -867,6 +868,11 @@ fn find_hover_in_stmts(
             }
             Stmt::For(for_stmt) => {
                 if let Some(info) = find_hover_in_stmts(&for_stmt.body.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
+            Stmt::ForIn(for_in_stmt) => {
+                if let Some(info) = find_hover_in_stmts(&for_in_stmt.body.stmts, pos, cache) {
                     return Some(info);
                 }
             }
