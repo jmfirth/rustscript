@@ -114,6 +114,12 @@ pub(crate) enum TokenKind {
     Infer,
     /// `@` (decorator prefix, lowers to Rust `#[...]` attributes)
     At,
+    /// `delete` (delete operator for map removal)
+    Delete,
+    /// `void` (void expression, discards result)
+    Void,
+    /// `in` (in operator for key containment check, also used in `for...in`)
+    In,
 
     // Operators
     /// `+`

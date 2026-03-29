@@ -809,8 +809,24 @@ impl Printer {
             Stmt::For(f) => self.print_for_of_stmt(f),
             Stmt::ForIn(f) => self.print_for_in_stmt(f),
             Stmt::ArrayDestructure(a) => self.print_array_destructure_stmt(a),
-            Stmt::Break(_) => self.writeln("break;"),
-            Stmt::Continue(_) => self.writeln("continue;"),
+            Stmt::Break(brk) => {
+                if let Some(lbl) = &brk.label {
+                    self.write("break ");
+                    self.write(lbl);
+                    self.writeln(";");
+                } else {
+                    self.writeln("break;");
+                }
+            }
+            Stmt::Continue(cont) => {
+                if let Some(lbl) = &cont.label {
+                    self.write("continue ");
+                    self.write(lbl);
+                    self.writeln(";");
+                } else {
+                    self.writeln("continue;");
+                }
+            }
             Stmt::RustBlock(rb) => self.print_rust_block(rb),
         }
     }
@@ -865,6 +881,10 @@ impl Printer {
 
     /// Print a while statement.
     fn print_while_stmt(&mut self, w: &WhileStmt) {
+        if let Some(lbl) = &w.label {
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("while (");
         self.print_expr(&w.condition);
         self.write(") ");
@@ -874,6 +894,10 @@ impl Printer {
 
     /// Print a do-while statement.
     fn print_do_while_stmt(&mut self, dw: &DoWhileStmt) {
+        if let Some(lbl) = &dw.label {
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("do ");
         self.print_block(&dw.body);
         self.write(" while (");
@@ -989,6 +1013,10 @@ impl Printer {
 
     /// Print a for-of statement.
     fn print_for_of_stmt(&mut self, f: &ForOfStmt) {
+        if let Some(lbl) = &f.label {
+            self.write(lbl);
+            self.write(": ");
+        }
         if f.is_await {
             self.write("for await (");
         } else {
@@ -1008,6 +1036,10 @@ impl Printer {
 
     /// Print a for-in statement.
     fn print_for_in_stmt(&mut self, f: &ForInStmt) {
+        if let Some(lbl) = &f.label {
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("for (");
         match f.binding {
             VarBinding::Const => self.write("const "),
@@ -1102,6 +1134,24 @@ impl Printer {
             ExprKind::Yield(inner) => {
                 self.write("yield ");
                 self.print_expr(inner);
+            }
+            ExprKind::Delete(inner) => {
+                self.write("delete ");
+                self.print_expr(inner);
+            }
+            ExprKind::Void(inner) => {
+                self.write("void ");
+                self.print_expr(inner);
+            }
+            ExprKind::Comma(exprs) => {
+                self.write("(");
+                for (i, e) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.print_expr(e);
+                }
+                self.write(")");
             }
         }
     }
@@ -1858,6 +1908,7 @@ mod tests {
     #[test]
     fn test_printer_for_await_preserves_await_keyword() {
         let for_stmt = ForOfStmt {
+            label: None,
             binding: VarBinding::Const,
             variable: ident("msg"),
             iterable: ident_expr("channel"),
@@ -1885,6 +1936,7 @@ mod tests {
     #[test]
     fn test_printer_regular_for_no_await() {
         let for_stmt = ForOfStmt {
+            label: None,
             binding: VarBinding::Const,
             variable: ident("x"),
             iterable: ident_expr("items"),
@@ -1916,6 +1968,7 @@ mod tests {
     #[test]
     fn test_printer_for_in_formats_correctly() {
         let for_in_stmt = ForInStmt {
+            label: None,
             binding: VarBinding::Const,
             variable: ident("k"),
             iterable: ident_expr("obj"),
@@ -1938,6 +1991,7 @@ mod tests {
     #[test]
     fn test_printer_for_in_let_binding() {
         let for_in_stmt = ForInStmt {
+            label: None,
             binding: VarBinding::Let,
             variable: ident("key"),
             iterable: ident_expr("map"),

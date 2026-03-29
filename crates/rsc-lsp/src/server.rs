@@ -1532,6 +1532,7 @@ fn format_binary_op_hover(op: rsc_syntax::ast::BinaryOp) -> String {
         BinaryOp::Ge => "```rustscript\n(operator) >=\n```\nGreater than or equal.".to_owned(),
         BinaryOp::And => "```rustscript\n(operator) &&\n```\nLogical AND.".to_owned(),
         BinaryOp::Or => "```rustscript\n(operator) ||\n```\nLogical OR.".to_owned(),
+        BinaryOp::In => "```rustscript\n(operator) in\n```\nKey containment check. Lowers to `.contains_key()`.".to_owned(),
     }
 }
 

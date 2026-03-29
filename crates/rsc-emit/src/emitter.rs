@@ -876,6 +876,11 @@ impl Emitter {
             RustStmt::While(while_stmt) => {
                 self.set_span(while_stmt.span);
                 self.write_indent();
+                if let Some(lbl) = &while_stmt.label {
+                    self.write("'");
+                    self.write(lbl);
+                    self.write(": ");
+                }
                 self.write("while ");
                 self.emit_expr(&while_stmt.condition);
                 self.write(" ");
@@ -1000,15 +1005,27 @@ impl Emitter {
                 self.emit_for_in(for_in);
                 self.newline();
             }
-            RustStmt::Break(span) => {
+            RustStmt::Break { label, span } => {
                 self.set_span(*span);
                 self.write_indent();
-                self.writeln("break;");
+                if let Some(lbl) = label {
+                    self.write("break '");
+                    self.write(lbl);
+                    self.writeln(";");
+                } else {
+                    self.writeln("break;");
+                }
             }
-            RustStmt::Continue(span) => {
+            RustStmt::Continue { label, span } => {
                 self.set_span(*span);
                 self.write_indent();
-                self.writeln("continue;");
+                if let Some(lbl) = label {
+                    self.write("continue '");
+                    self.write(lbl);
+                    self.writeln(";");
+                } else {
+                    self.writeln("continue;");
+                }
             }
             RustStmt::RawRust(code) => self.emit_raw_rust(code, true),
             RustStmt::TryFinally(tf) => {
@@ -1152,6 +1169,11 @@ impl Emitter {
     /// When `deref_pattern` is true, emits `for &variable in &iterable { ... }`
     /// so the loop variable gets bound by value for Copy types.
     fn emit_for_in(&mut self, for_in: &RustForInStmt) {
+        if let Some(lbl) = &for_in.label {
+            self.write("'");
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("for ");
         if for_in.deref_pattern {
             self.write("&");
@@ -1173,6 +1195,11 @@ impl Emitter {
     ///
     /// `while let Some(item) = stream.next().await { body }`
     fn emit_while_let(&mut self, wl: &RustWhileLetStmt) {
+        if let Some(lbl) = &wl.label {
+            self.write("'");
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("while let Some(");
         self.write(&wl.binding);
         self.write(") = ");
@@ -1185,6 +1212,11 @@ impl Emitter {
     ///
     /// Produced by lowering `do { ... } while (condition)`.
     fn emit_loop(&mut self, loop_stmt: &RustLoopStmt) {
+        if let Some(lbl) = &loop_stmt.label {
+            self.write("'");
+            self.write(lbl);
+            self.write(": ");
+        }
         self.write("loop ");
         self.emit_block(&loop_stmt.body);
     }
@@ -1642,6 +1674,9 @@ impl Emitter {
             }
             RustExprKind::Raw(code) => {
                 self.write(code);
+            }
+            RustExprKind::BlockExpr(block) => {
+                self.emit_block(block);
             }
         }
     }
@@ -2245,6 +2280,7 @@ fn main() {
         let file = simple_fn(
             "main",
             vec![RustStmt::While(RustWhileStmt {
+                label: None,
                 condition: ident("running"),
                 body: RustBlock {
                     stmts: vec![RustStmt::Semi(int_lit(1))],
@@ -2733,6 +2769,7 @@ fn fibonacci(n: i32) -> i32 {
                     span: None,
                 }),
                 RustStmt::While(RustWhileStmt {
+                    label: None,
                     condition: syn(RustExprKind::Binary {
                         op: RustBinaryOp::Gt,
                         left: Box::new(ident("y")),
@@ -4140,6 +4177,7 @@ fn main() {
         let file = simple_fn(
             "main",
             vec![RustStmt::ForIn(RustForInStmt {
+                label: None,
                 variable: "x".to_owned(),
                 iterable: ident("items"),
                 body: RustBlock {
@@ -4167,6 +4205,7 @@ fn main() {
         let file = simple_fn(
             "main",
             vec![RustStmt::ForIn(RustForInStmt {
+                label: None,
                 variable: "job".to_owned(),
                 iterable: ident("jobs"),
                 body: RustBlock {
@@ -4196,7 +4235,14 @@ fn main() {
     // T018-9: Emit `break;`
     #[test]
     fn test_emit_break_statement() {
-        let file = simple_fn("main", vec![RustStmt::Break(None)], None);
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Break {
+                label: None,
+                span: None,
+            }],
+            None,
+        );
         let output = emit_source(&file);
         assert!(
             output.contains("break;"),
@@ -4207,7 +4253,14 @@ fn main() {
     // T018-10: Emit `continue;`
     #[test]
     fn test_emit_continue_statement() {
-        let file = simple_fn("main", vec![RustStmt::Continue(None)], None);
+        let file = simple_fn(
+            "main",
+            vec![RustStmt::Continue {
+                label: None,
+                span: None,
+            }],
+            None,
+        );
         let output = emit_source(&file);
         assert!(
             output.contains("continue;"),
@@ -5608,6 +5661,7 @@ fn main() {
     #[test]
     fn test_emit_while_let_async_iteration() {
         let wl = RustWhileLetStmt {
+            label: None,
             binding: "msg".into(),
             stream: syn(RustExprKind::Ident("channel".into())),
             body: RustBlock {

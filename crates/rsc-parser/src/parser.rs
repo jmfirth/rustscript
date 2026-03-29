@@ -301,6 +301,9 @@ impl<'src> Parser<'src> {
             TokenKind::Satisfies => "`satisfies`",
             TokenKind::Infer => "`infer`",
             TokenKind::At => "`@`",
+            TokenKind::Delete => "`delete`",
+            TokenKind::Void => "`void`",
+            TokenKind::In => "`in`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -2032,6 +2035,13 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
+            TokenKind::Void => {
+                self.advance();
+                Some(TypeAnnotation {
+                    kind: TypeKind::Void,
+                    span: token.span,
+                })
+            }
             TokenKind::Ident(name) if name == "shared" => {
                 let start = token.span;
                 self.advance(); // consume `shared`
@@ -2266,24 +2276,55 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse an identifier token into an [`Ident`] AST node.
+    ///
+    /// Also accepts `delete`, `void`, and `in` keywords as identifiers since
+    /// they can be used as method/field names (e.g., `map.delete("key")`).
     fn parse_ident(&mut self) -> Option<Ident> {
         let token = self.current_token().clone();
-        if let TokenKind::Ident(name) = &token.kind {
-            let name = name.clone();
-            self.advance();
-            Some(Ident {
-                name,
-                span: token.span,
-            })
-        } else {
-            self.diagnostics.push(
-                Diagnostic::error(format!(
-                    "expected identifier, found {}",
-                    Self::describe_kind(&token.kind)
-                ))
-                .with_label(token.span, self.file_id, "expected identifier"),
-            );
-            None
+        match &token.kind {
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                Some(Ident {
+                    name,
+                    span: token.span,
+                })
+            }
+            TokenKind::Delete => {
+                self.advance();
+                Some(Ident {
+                    name: "delete".to_owned(),
+                    span: token.span,
+                })
+            }
+            TokenKind::Void => {
+                self.advance();
+                Some(Ident {
+                    name: "void".to_owned(),
+                    span: token.span,
+                })
+            }
+            TokenKind::In => {
+                self.advance();
+                Some(Ident {
+                    name: "in".to_owned(),
+                    span: token.span,
+                })
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "expected identifier, found {}",
+                        Self::describe_kind(&token.kind)
+                    ))
+                    .with_label(
+                        token.span,
+                        self.file_id,
+                        "expected identifier",
+                    ),
+                );
+                None
+            }
         }
     }
 
@@ -2367,20 +2408,61 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a statement.
+    ///
+    /// Detects labeled loops: `identifier: while/for/do { ... }`.
     fn parse_stmt(&mut self) -> Option<Stmt> {
+        // Check for labeled loop: `ident : (while | for | do)`
+        if let TokenKind::Ident(name) = self.peek() {
+            let name = name.clone();
+            if self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| t.kind == TokenKind::Colon)
+            {
+                let after_colon = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+                if matches!(
+                    after_colon,
+                    Some(TokenKind::While | TokenKind::For | TokenKind::Do)
+                ) {
+                    self.advance(); // consume ident
+                    self.advance(); // consume ':'
+                    return self.parse_labeled_stmt(name);
+                }
+            }
+        }
+
         match self.peek() {
             TokenKind::Const | TokenKind::Let => self.parse_var_decl(),
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
-            TokenKind::While => self.parse_while_stmt().map(Stmt::While),
-            TokenKind::Do => self.parse_do_while_stmt().map(Stmt::DoWhile),
+            TokenKind::While => self.parse_while_stmt(None).map(Stmt::While),
+            TokenKind::Do => self.parse_do_while_stmt(None).map(Stmt::DoWhile),
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
             TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
             TokenKind::Try => self.parse_try_catch_stmt().map(Stmt::TryCatch),
-            TokenKind::For => self.parse_for_stmt(),
+            TokenKind::For => self.parse_for_stmt(None),
             TokenKind::Break => Some(Stmt::Break(self.parse_break_stmt())),
             TokenKind::Continue => Some(Stmt::Continue(self.parse_continue_stmt())),
             TokenKind::Rust => self.parse_rust_block_stmt(),
             _ => self.parse_expr_stmt(),
+        }
+    }
+
+    /// Parse a labeled loop statement after consuming `label:`.
+    fn parse_labeled_stmt(&mut self, label: String) -> Option<Stmt> {
+        match self.peek() {
+            TokenKind::While => self.parse_while_stmt(Some(label)).map(Stmt::While),
+            TokenKind::Do => self.parse_do_while_stmt(Some(label)).map(Stmt::DoWhile),
+            TokenKind::For => self.parse_for_stmt(Some(label)),
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error("label must precede a loop statement").with_label(
+                        self.current_token().span,
+                        self.file_id,
+                        "expected `while`, `for`, or `do`",
+                    ),
+                );
+                None
+            }
         }
     }
 
@@ -2485,7 +2567,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a while statement: `while ( expr ) block`.
-    fn parse_while_stmt(&mut self) -> Option<WhileStmt> {
+    fn parse_while_stmt(&mut self, label: Option<String>) -> Option<WhileStmt> {
         let while_token = self.advance(); // consume `while`
         let start = while_token.span;
 
@@ -2497,6 +2579,7 @@ impl<'src> Parser<'src> {
         let body_span = body.span;
 
         Some(WhileStmt {
+            label,
             condition,
             body,
             span: start.merge(body_span),
@@ -2504,7 +2587,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a do-while statement: `do { body } while ( condition ) ;`.
-    fn parse_do_while_stmt(&mut self) -> Option<DoWhileStmt> {
+    fn parse_do_while_stmt(&mut self, label: Option<String>) -> Option<DoWhileStmt> {
         let do_token = self.advance(); // consume `do`
         let start = do_token.span;
 
@@ -2530,6 +2613,7 @@ impl<'src> Parser<'src> {
         if matches!(self.peek(), TokenKind::Semicolon) {
             let semi = self.advance();
             return Some(DoWhileStmt {
+                label,
                 body,
                 condition,
                 span: start.merge(semi.span),
@@ -2538,6 +2622,7 @@ impl<'src> Parser<'src> {
 
         let end = self.previous_span();
         Some(DoWhileStmt {
+            label,
             body,
             condition,
             span: start.merge(end),
@@ -2548,7 +2633,7 @@ impl<'src> Parser<'src> {
     ///
     /// `for (const/let IDENT of EXPR) BLOCK` → `Stmt::For`
     /// `for (const/let IDENT in EXPR) BLOCK` → `Stmt::ForIn`
-    fn parse_for_stmt(&mut self) -> Option<Stmt> {
+    fn parse_for_stmt(&mut self, label: Option<String>) -> Option<Stmt> {
         let for_token = self.advance(); // consume `for`
         let start = for_token.span;
 
@@ -2588,8 +2673,8 @@ impl<'src> Parser<'src> {
             return None;
         };
 
-        // Distinguish `of` vs `in` contextual keyword
-        let is_for_in = self.check_contextual_keyword("in");
+        // Distinguish `of` vs `in` keyword
+        let is_for_in = self.check(&TokenKind::In);
         let is_for_of = self.check_contextual_keyword("of");
 
         if !is_for_in && !is_for_of {
@@ -2619,6 +2704,7 @@ impl<'src> Parser<'src> {
 
         if is_for_in {
             Some(Stmt::ForIn(ForInStmt {
+                label,
                 binding,
                 variable,
                 iterable,
@@ -2627,6 +2713,7 @@ impl<'src> Parser<'src> {
             }))
         } else {
             Some(Stmt::For(ForOfStmt {
+                label,
                 binding,
                 variable,
                 iterable,
@@ -2637,30 +2724,52 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a `break;` statement.
+    /// Parse a `break [label];` statement.
     fn parse_break_stmt(&mut self) -> BreakStmt {
         let break_token = self.advance(); // consume `break`
         let start = break_token.span;
+
+        // Check for optional label: `break label;`
+        let label = if let TokenKind::Ident(name) = self.peek() {
+            let name = name.clone();
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
         let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
             semi.span
         } else {
-            start
+            self.previous_span()
         };
         BreakStmt {
+            label,
             span: start.merge(end),
         }
     }
 
-    /// Parse a `continue;` statement.
+    /// Parse a `continue [label];` statement.
     fn parse_continue_stmt(&mut self) -> ContinueStmt {
         let continue_token = self.advance(); // consume `continue`
         let start = continue_token.span;
+
+        // Check for optional label: `continue label;`
+        let label = if let TokenKind::Ident(name) = self.peek() {
+            let name = name.clone();
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
         let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
             semi.span
         } else {
-            start
+            self.previous_span()
         };
         ContinueStmt {
+            label,
             span: start.merge(end),
         }
     }
@@ -3367,7 +3476,7 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse comparison: `shift ( ("<" | ">" | "<=" | ">=") shift )*`.
+    /// Parse comparison: `shift ( ("<" | ">" | "<=" | ">=" | "in") shift )*`.
     fn parse_comparison(&mut self) -> Option<Expr> {
         let mut left = self.parse_shift()?;
 
@@ -3377,6 +3486,7 @@ impl<'src> Parser<'src> {
                 TokenKind::Gt => BinaryOp::Gt,
                 TokenKind::LtEq => BinaryOp::Le,
                 TokenKind::GtEq => BinaryOp::Ge,
+                TokenKind::In => BinaryOp::In,
                 _ => break,
             };
             self.advance();
@@ -3582,6 +3692,24 @@ impl<'src> Parser<'src> {
                 let span = yield_token.span.merge(value.span);
                 Some(Expr {
                     kind: ExprKind::Yield(Box::new(value)),
+                    span,
+                })
+            }
+            TokenKind::Delete => {
+                let delete_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = delete_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::Delete(Box::new(operand)),
+                    span,
+                })
+            }
+            TokenKind::Void => {
+                let void_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = void_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::Void(Box::new(operand)),
                     span,
                 })
             }
@@ -3995,9 +4123,9 @@ impl<'src> Parser<'src> {
     /// Handles nested `<>` for generic types. Returns the position of the
     /// first token after the type. Used only by `is_arrow_function_ahead`.
     fn skip_type_tokens(&self, mut i: usize) -> usize {
-        // Skip the base type name
+        // Skip the base type name (identifiers and keyword types like `void`)
         match self.tokens.get(i).map(|t| &t.kind) {
-            Some(TokenKind::Ident(_)) => i += 1,
+            Some(TokenKind::Ident(_) | TokenKind::Void) => i += 1,
             Some(TokenKind::LParen) => {
                 // Function type in return position: `(i32) => i32`
                 // Skip past matching `)`
@@ -4278,13 +4406,29 @@ impl<'src> Parser<'src> {
                     self.parse_arrow_function()
                 } else {
                     let open = self.advance();
-                    let inner = self.parse_expr()?;
-                    let close = self.expect(&TokenKind::RParen)?;
-                    let span = open.span.merge(close.span);
-                    Some(Expr {
-                        kind: ExprKind::Paren(Box::new(inner)),
-                        span,
-                    })
+                    let first = self.parse_expr()?;
+
+                    // Check for comma operator: `(a, b, c)`
+                    if self.check(&TokenKind::Comma) {
+                        let mut exprs = vec![first];
+                        while self.eat(&TokenKind::Comma) {
+                            let next = self.parse_expr()?;
+                            exprs.push(next);
+                        }
+                        let close = self.expect(&TokenKind::RParen)?;
+                        let span = open.span.merge(close.span);
+                        Some(Expr {
+                            kind: ExprKind::Comma(exprs),
+                            span,
+                        })
+                    } else {
+                        let close = self.expect(&TokenKind::RParen)?;
+                        let span = open.span.merge(close.span);
+                        Some(Expr {
+                            kind: ExprKind::Paren(Box::new(first)),
+                            span,
+                        })
+                    }
                 }
             }
             _ => {

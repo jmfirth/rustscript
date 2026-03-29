@@ -8,7 +8,8 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustType, SpreadOp,
+    ParamMode, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustStmt,
+    RustType, SpreadOp,
 };
 
 use crate::context::LoweringContext;
@@ -51,6 +52,23 @@ impl Transform {
                 if bin.op == ast::BinaryOp::Pow {
                     return self.lower_pow_expr(
                         &bin.left, &bin.right, expr.span, ctx, use_map, stmt_index,
+                    );
+                }
+
+                // Special handling for `in` operator: `"key" in map` → `map.contains_key(&"key".to_string())`
+                if bin.op == ast::BinaryOp::In {
+                    let left = self.lower_expr(&bin.left, ctx, use_map, stmt_index);
+                    let right = self.lower_expr(&bin.right, ctx, use_map, stmt_index);
+                    // Wrap the key in a borrow for `contains_key(&key)`
+                    let key_arg = RustExpr::synthetic(RustExprKind::Borrow(Box::new(left)));
+                    return RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(right),
+                            method: "contains_key".to_owned(),
+                            type_args: vec![],
+                            args: vec![key_arg],
+                        },
+                        expr.span,
                     );
                 }
 
@@ -583,6 +601,60 @@ impl Transform {
                     RustExprKind::Ident("compile_error!(\"yield outside generator\")".to_owned()),
                     expr.span,
                 )
+            }
+            ast::ExprKind::Delete(operand) => {
+                // `delete map["key"]` → `map.remove("key")`
+                // The operand must be an index expression.
+                if let ast::ExprKind::Index(idx) = &operand.kind {
+                    let object = self.lower_expr(&idx.object, ctx, use_map, stmt_index);
+                    let key = self.lower_expr(&idx.index, ctx, use_map, stmt_index);
+                    RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(object),
+                            method: "remove".to_owned(),
+                            type_args: vec![],
+                            args: vec![key],
+                        },
+                        expr.span,
+                    )
+                } else {
+                    // Unsupported delete target — emit a compile error placeholder
+                    RustExpr::new(
+                        RustExprKind::Ident(
+                            "compile_error!(\"delete requires an index expression\")".to_owned(),
+                        ),
+                        expr.span,
+                    )
+                }
+            }
+            ast::ExprKind::Void(inner) => {
+                // `void expr` → `{ expr; }` (block expression that evaluates and discards)
+                let lowered = self.lower_expr(inner, ctx, use_map, stmt_index);
+                let block = RustBlock {
+                    stmts: vec![RustStmt::Semi(lowered)],
+                    expr: None,
+                };
+                RustExpr::new(RustExprKind::BlockExpr(block), expr.span)
+            }
+            ast::ExprKind::Comma(exprs) => {
+                // `(a, b, c)` → `{ a; b; c }` — all but last are statements, last is value
+                let mut stmts = Vec::new();
+                let last = exprs.len() - 1;
+                for (i, e) in exprs.iter().enumerate() {
+                    let lowered = self.lower_expr(e, ctx, use_map, stmt_index);
+                    if i < last {
+                        stmts.push(RustStmt::Semi(lowered));
+                    } else {
+                        // Last expression is the block value (trailing expression)
+                        let block = RustBlock {
+                            stmts,
+                            expr: Some(Box::new(lowered)),
+                        };
+                        return RustExpr::new(RustExprKind::BlockExpr(block), expr.span);
+                    }
+                }
+                // Should never reach here — comma expressions always have at least one element
+                unreachable!("comma expression should have at least one element")
             }
         }
     }

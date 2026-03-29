@@ -633,7 +633,9 @@ impl UseMap {
             | ast::ExprKind::NonNullAssert(inner)
             | ast::ExprKind::TypeOf(inner)
             | ast::ExprKind::Cast(inner, _)
-            | ast::ExprKind::Yield(inner) => {
+            | ast::ExprKind::Yield(inner)
+            | ast::ExprKind::Delete(inner)
+            | ast::ExprKind::Void(inner) => {
                 Self::collect_expr_uses(
                     inner,
                     stmt_index,
@@ -642,6 +644,18 @@ impl UseMap {
                     callee_param_modes,
                     uses,
                 );
+            }
+            ast::ExprKind::Comma(exprs) => {
+                for e in exprs {
+                    Self::collect_expr_uses(
+                        e,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
             }
             ast::ExprKind::LogicalAssign(la) => {
                 Self::collect_expr_uses(
@@ -1338,8 +1352,15 @@ fn collect_param_usage_expr(
         | ast::ExprKind::TypeOf(inner)
         | ast::ExprKind::Cast(inner, _)
         | ast::ExprKind::Satisfies(inner, _)
-        | ast::ExprKind::Yield(inner) => {
+        | ast::ExprKind::Yield(inner)
+        | ast::ExprKind::Delete(inner)
+        | ast::ExprKind::Void(inner) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
+        }
+        ast::ExprKind::Comma(exprs) => {
+            for e in exprs {
+                collect_param_usage_expr(e, param_set, is_ref_call, result);
+            }
         }
         ast::ExprKind::LogicalAssign(la) => {
             collect_param_usage_expr(&la.value, param_set, is_ref_call, result);
@@ -1476,8 +1497,15 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::TypeOf(inner)
         | ast::ExprKind::Cast(inner, _)
         | ast::ExprKind::Satisfies(inner, _)
-        | ast::ExprKind::Yield(inner) => {
+        | ast::ExprKind::Yield(inner)
+        | ast::ExprKind::Delete(inner)
+        | ast::ExprKind::Void(inner) => {
             collect_idents_in_expr(inner, names);
+        }
+        ast::ExprKind::Comma(exprs) => {
+            for e in exprs {
+                collect_idents_in_expr(e, names);
+            }
         }
         ast::ExprKind::LogicalAssign(la) => {
             collect_idents_in_expr(&la.value, names);
@@ -1851,6 +1879,7 @@ mod tests {
         let block = Block {
             stmts: vec![
                 Stmt::For(ForOfStmt {
+                    label: None,
                     binding: VarBinding::Const,
                     variable: ident("x", 0, 1),
                     iterable: ident_expr("items", 5, 10),
@@ -1887,6 +1916,7 @@ mod tests {
     fn test_find_reassigned_variables_inside_for_of() {
         let block = Block {
             stmts: vec![Stmt::For(ForOfStmt {
+                label: None,
                 binding: VarBinding::Const,
                 variable: ident("x", 0, 1),
                 iterable: ident_expr("items", 5, 10),
@@ -2270,6 +2300,7 @@ mod tests {
         // function process(items: Vec<i32>) { for (const x of items) { } }
         let block = Block {
             stmts: vec![Stmt::For(ForOfStmt {
+                label: None,
                 binding: VarBinding::Const,
                 variable: ident("x", 0, 1),
                 iterable: ident_expr("items", 5, 10),
@@ -2510,6 +2541,7 @@ mod tests {
         // function f(name: string) { while (true) { console.log(name); } }
         let block = Block {
             stmts: vec![Stmt::While(WhileStmt {
+                label: None,
                 condition: Expr {
                     kind: ExprKind::BoolLit(true),
                     span: span(0, 4),

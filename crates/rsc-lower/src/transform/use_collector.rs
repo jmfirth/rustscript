@@ -490,7 +490,7 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
         RustStmt::Loop(loop_stmt) => {
             scan_block_for_collections(&loop_stmt.body, needs_hashmap, needs_hashset);
         }
-        RustStmt::Break(_) | RustStmt::Continue(_) | RustStmt::RawRust(_) => {}
+        RustStmt::Break { .. } | RustStmt::Continue { .. } | RustStmt::RawRust(_) => {}
     }
 }
 
@@ -681,6 +681,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                     scan_expr_for_collections(body, needs_hashmap, needs_hashset);
                 }
             }
+        }
+        RustExprKind::BlockExpr(block) => {
+            scan_block_for_collections(block, needs_hashmap, needs_hashset);
         }
     }
 }

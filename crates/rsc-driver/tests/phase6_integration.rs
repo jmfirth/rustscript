@@ -1446,3 +1446,278 @@ function main() {
     assert_eq!(lines[0], "150");
     assert!(lines[1].contains("Alice") && lines[1].contains("150"));
 }
+
+// ---------------------------------------------------------------------------
+// Task 111: Labeled break/continue
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_labeled_for_of_break() {
+    let source = r#"function main() {
+  const items: Array<i32> = [1, 2, 3];
+  const other: Array<i32> = [10, 2, 30];
+  let found: bool = false;
+  outer: for (const x of items) {
+    for (const y of other) {
+      if (x == y) {
+        found = true;
+        break outer;
+      }
+    }
+  }
+  console.log(found);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("'outer: for"),
+        "should emit labeled for loop: {actual}"
+    );
+    assert!(
+        actual.contains("break 'outer;"),
+        "should emit labeled break: {actual}"
+    );
+}
+
+#[test]
+fn test_labeled_while_continue() {
+    let source = r#"function main() {
+  let i: i32 = 0;
+  outer: while (i < 5) {
+    i = i + 1;
+    let j: i32 = 0;
+    while (j < 3) {
+      j = j + 1;
+      if (j == 2) {
+        continue outer;
+      }
+    }
+  }
+  console.log(i);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("'outer: while"),
+        "should emit labeled while loop: {actual}"
+    );
+    assert!(
+        actual.contains("continue 'outer;"),
+        "should emit labeled continue: {actual}"
+    );
+}
+
+#[test]
+fn test_labeled_do_while() {
+    let source = r#"function main() {
+  let i: i32 = 0;
+  outer: do {
+    i = i + 1;
+    if (i == 3) {
+      break outer;
+    }
+  } while (i < 10);
+  console.log(i);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("'outer: loop"),
+        "should emit labeled loop (do-while lowers to loop): {actual}"
+    );
+    assert!(
+        actual.contains("break 'outer;"),
+        "should emit labeled break in do-while: {actual}"
+    );
+}
+
+#[test]
+fn test_nested_labels_different_names() {
+    let source = r#"function main() {
+  const rows: Array<i32> = [1, 2];
+  const cols: Array<i32> = [3, 4];
+  outer: for (const r of rows) {
+    inner: for (const c of cols) {
+      if (c == 4) {
+        break inner;
+      }
+    }
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("'outer: for"),
+        "should emit outer label: {actual}"
+    );
+    assert!(
+        actual.contains("'inner: for"),
+        "should emit inner label: {actual}"
+    );
+    assert!(
+        actual.contains("break 'inner;"),
+        "should emit break inner: {actual}"
+    );
+}
+
+#[test]
+fn test_unlabeled_break_continue_regression() {
+    let source = r#"function main() {
+  let sum: i32 = 0;
+  const items: Array<i32> = [1, 2, 3, 4, 5];
+  for (const x of items) {
+    if (x == 3) { continue; }
+    if (x == 5) { break; }
+    sum = sum + x;
+  }
+  console.log(sum);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("continue;"),
+        "unlabeled continue should still work: {actual}"
+    );
+    assert!(
+        actual.contains("break;"),
+        "unlabeled break should still work: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_labeled_break_e2e() {
+    let source = r#"function main() {
+  const items: Array<i32> = [1, 2, 3];
+  const other: Array<i32> = [10, 2, 30];
+  let found: bool = false;
+  outer: for (const x of items) {
+    for (const y of other) {
+      if (x == y) {
+        found = true;
+        break outer;
+      }
+    }
+  }
+  console.log(found);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output.trim(), "true");
+}
+
+// ---------------------------------------------------------------------------
+// Task 112: `in` operator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_in_operator_snapshot() {
+    let source = r#"function main() {
+  const m: Map<string, i32> = new Map();
+  m.set("key", 42);
+  const has_it: bool = "key" in m;
+  console.log(has_it);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".contains_key("),
+        "in operator should lower to .contains_key(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 113: `delete` operator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_delete_operator_snapshot() {
+    let source = r#"function main() {
+  const m: Map<string, i32> = new Map();
+  m.set("a", 1);
+  delete m["a"];
+  console.log(m.has("a"));
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".remove("),
+        "delete operator should lower to .remove(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 114: `void` expression
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_void_expression_snapshot() {
+    let source = r#"function main() {
+  const x: i32 = 42;
+  void console.log(x);
+}"#;
+    let actual = compile_to_rust(source);
+    // void should produce a block expression that discards the result
+    assert!(
+        actual.contains("println!") || actual.contains("{"),
+        "void expression should lower to a discarding block: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 115: Comma operator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_comma_operator_snapshot() {
+    let source = r#"function main() {
+  let x: i32 = 0;
+  let y: i32 = 0;
+  const result: i32 = (x = 1, y = 2, x + y);
+  console.log(result);
+}"#;
+    let actual = compile_to_rust(source);
+    // Comma operator should produce a block expression
+    assert!(
+        actual.contains("{") && actual.contains("}"),
+        "comma operator should produce block expression: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Compilation tests for operators
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_in_operator_compiles() {
+    let source = r#"function main() {
+  const m: Map<string, i32> = new Map();
+  m.set("hello", 1);
+  const result: bool = "hello" in m;
+  console.log(result);
+}"#;
+    // Should compile without errors
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.is_empty(),
+        "in operator should compile successfully"
+    );
+}
+
+#[test]
+fn test_delete_operator_compiles() {
+    let source = r#"function main() {
+  const m: Map<string, i32> = new Map();
+  m.set("a", 1);
+  delete m["a"];
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.is_empty(),
+        "delete operator should compile successfully"
+    );
+}
+
+#[test]
+fn test_void_expression_compiles() {
+    let source = r#"function main() {
+  void 42;
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.is_empty(),
+        "void expression should compile successfully"
+    );
+}

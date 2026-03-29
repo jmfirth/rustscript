@@ -2763,7 +2763,8 @@ fn emit_expr_to_string(expr: &ast::Expr, transform: &Transform) -> String {
                 | ast::BinaryOp::BitOr
                 | ast::BinaryOp::BitXor
                 | ast::BinaryOp::Shl
-                | ast::BinaryOp::Shr => "+",
+                | ast::BinaryOp::Shr
+                | ast::BinaryOp::In => "+",
             };
             format!("{left} {op} {right}")
         }
@@ -2859,6 +2860,8 @@ fn lower_binary_op(op: ast::BinaryOp) -> RustBinaryOp {
         ast::BinaryOp::Shr => RustBinaryOp::Shr,
         // Pow is handled specially in expr_lower, not via this mapping.
         ast::BinaryOp::Pow => unreachable!("Pow is handled specially in expr_lower"),
+        // In is handled specially in expr_lower as a method call, not via this mapping.
+        ast::BinaryOp::In => unreachable!("In is handled specially in expr_lower"),
     }
 }
 

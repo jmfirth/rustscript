@@ -618,10 +618,20 @@ pub enum RustStmt {
     /// Destructuring with defaults: individual `let` bindings with `unwrap_or_else`.
     /// Produced when destructuring fields have default values.
     DestructureDefaults(RustDestructureDefaultsStmt),
-    /// A `break;` statement.
-    Break(Option<Span>),
-    /// A `continue;` statement.
-    Continue(Option<Span>),
+    /// A `break` statement, optionally with a label: `break;` or `break 'label;`.
+    Break {
+        /// Optional label (e.g., `'outer`).
+        label: Option<String>,
+        /// The source span, if derived from source.
+        span: Option<Span>,
+    },
+    /// A `continue` statement, optionally with a label: `continue;` or `continue 'label;`.
+    Continue {
+        /// Optional label (e.g., `'outer`).
+        label: Option<String>,
+        /// The source span, if derived from source.
+        span: Option<Span>,
+    },
     /// A raw Rust code block in a function body. The contents are emitted verbatim.
     RawRust(String),
     /// A `try {} finally {}` block (no catch). The try body is followed by
@@ -655,6 +665,8 @@ pub struct RustTryFinallyStmt {
 /// Iterates over an async `Stream`, consuming items until the stream is exhausted.
 #[derive(Debug, Clone)]
 pub struct RustWhileLetStmt {
+    /// Optional label (e.g., `'outer`).
+    pub label: Option<String>,
     /// The pattern binding name (the `item` in `Some(item)`).
     pub binding: String,
     /// The stream expression (the `stream` in `stream.next().await`).
@@ -716,6 +728,8 @@ pub enum RustElse {
 /// A Rust `while` loop.
 #[derive(Debug, Clone)]
 pub struct RustWhileStmt {
+    /// Optional label (e.g., `'outer`).
+    pub label: Option<String>,
     /// The loop condition expression.
     pub condition: RustExpr,
     /// The loop body.
@@ -730,6 +744,8 @@ pub struct RustWhileStmt {
 /// `loop { body; if !condition { break; } }`.
 #[derive(Debug, Clone)]
 pub struct RustLoopStmt {
+    /// Optional label (e.g., `'outer`).
+    pub label: Option<String>,
     /// The loop body (includes the break-condition `if` at the end).
     pub body: RustBlock,
     /// The source span, if derived from source.
@@ -741,6 +757,8 @@ pub struct RustLoopStmt {
 /// Produced by lowering a `RustScript` [`ForOfStmt`](crate::ast::ForOfStmt).
 #[derive(Debug, Clone)]
 pub struct RustForInStmt {
+    /// Optional label (e.g., `'outer`).
+    pub label: Option<String>,
     /// The loop variable name.
     pub variable: String,
     /// The iterable expression (typically a `&collection` reference).
@@ -1248,6 +1266,9 @@ pub enum RustExprKind {
     /// Raw Rust code emitted verbatim.
     /// Used for generator state machine bodies and other compiler-generated code.
     Raw(String),
+    /// A block expression: `{ stmts; expr }`.
+    /// Produced by lowering `void expr` and comma operator `(a, b, c)`.
+    BlockExpr(RustBlock),
 }
 
 /// A single intermediate iterator operation in a chain.

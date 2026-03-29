@@ -139,8 +139,14 @@ impl Transform {
             ast::Stmt::ArrayDestructure(adestr) => {
                 self.lower_array_destructure(adestr, ctx, use_map, stmt_index)
             }
-            ast::Stmt::Break(brk) => RustStmt::Break(Some(brk.span)),
-            ast::Stmt::Continue(cont) => RustStmt::Continue(Some(cont.span)),
+            ast::Stmt::Break(brk) => RustStmt::Break {
+                label: brk.label.clone(),
+                span: Some(brk.span),
+            },
+            ast::Stmt::Continue(cont) => RustStmt::Continue {
+                label: cont.label.clone(),
+                span: Some(cont.span),
+            },
             ast::Stmt::RustBlock(rb) => RustStmt::RawRust(rb.code.clone()),
         }
     }
@@ -574,6 +580,7 @@ impl Transform {
         let body = self.lower_block(&while_stmt.body, ctx, use_map, stmt_index, reassigned);
 
         RustWhileStmt {
+            label: while_stmt.label.clone(),
             condition,
             body,
             span: Some(while_stmt.span),
@@ -612,7 +619,10 @@ impl Transform {
         let break_if = RustStmt::If(RustIfStmt {
             condition: negated_condition,
             then_block: RustBlock {
-                stmts: vec![RustStmt::Break(None)],
+                stmts: vec![RustStmt::Break {
+                    label: None,
+                    span: None,
+                }],
                 expr: None,
             },
             else_clause: None,
@@ -622,6 +632,7 @@ impl Transform {
         body.stmts.push(break_if);
 
         RustLoopStmt {
+            label: dw.label.clone(),
             body,
             span: Some(dw.span),
         }
@@ -682,6 +693,7 @@ impl Transform {
         }
 
         RustForInStmt {
+            label: for_of.label.clone(),
             variable: for_of.variable.name.clone(),
             iterable,
             body,
@@ -719,6 +731,7 @@ impl Transform {
         let body = self.lower_block(&for_in.body, ctx, use_map, stmt_index, reassigned);
 
         RustForInStmt {
+            label: for_in.label.clone(),
             variable: for_in.variable.name.clone(),
             iterable: keys_call,
             body,
@@ -746,6 +759,7 @@ impl Transform {
         let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
 
         RustWhileLetStmt {
+            label: for_of.label.clone(),
             binding: for_of.variable.name.clone(),
             stream,
             body,

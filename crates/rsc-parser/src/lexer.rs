@@ -849,6 +849,9 @@ impl<'a> Lexer<'a> {
             "abstract" => TokenKind::Abstract,
             "override" => TokenKind::Override,
             "satisfies" => TokenKind::Satisfies,
+            "delete" => TokenKind::Delete,
+            "void" => TokenKind::Void,
+            "in" => TokenKind::In,
             _ => TokenKind::Ident(text.to_owned()),
         };
 

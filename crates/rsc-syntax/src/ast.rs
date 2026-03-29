@@ -809,8 +809,11 @@ pub enum ElseClause {
 /// A `while` loop.
 ///
 /// Corresponds to `while (condition) { body }`.
+/// Supports optional label: `label: while (condition) { body }`.
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
+    /// Optional label for labeled break/continue (e.g., `outer` in `outer: while ...`).
+    pub label: Option<String>,
     /// The loop condition expression.
     pub condition: Expr,
     /// The loop body.
@@ -823,8 +826,11 @@ pub struct WhileStmt {
 ///
 /// Corresponds to `do { body } while (condition);`.
 /// Lowers to Rust `loop { body; if !condition { break; } }`.
+/// Supports optional label: `label: do { body } while (condition);`.
 #[derive(Debug, Clone)]
 pub struct DoWhileStmt {
+    /// Optional label for labeled break/continue (e.g., `outer` in `outer: do ...`).
+    pub label: Option<String>,
     /// The loop body (executed at least once).
     pub body: Block,
     /// The loop condition expression (checked after each iteration).
@@ -955,8 +961,12 @@ pub struct TryCatchStmt {
 /// When `is_await` is true, this is an async iteration:
 /// `for await (const item of stream) { body }` which lowers to
 /// `while let Some(item) = stream.next().await { body }`.
+///
+/// Supports optional label: `label: for (const x of items) { body }`.
 #[derive(Debug, Clone)]
 pub struct ForOfStmt {
+    /// Optional label for labeled break/continue (e.g., `outer` in `outer: for ...`).
+    pub label: Option<String>,
     /// The binding kind (`const` or `let`).
     pub binding: VarBinding,
     /// The loop variable name.
@@ -979,8 +989,12 @@ pub struct ForOfStmt {
 /// Unlike `for...of` which iterates values, `for...in` iterates keys:
 /// - For `HashMap`/`Map` types: iterates over the map's keys via `.keys()`.
 /// - For arrays: iterates over indices (0, 1, 2, ...).
+///
+/// Supports optional label: `label: for (const key in obj) { body }`.
 #[derive(Debug, Clone)]
 pub struct ForInStmt {
+    /// Optional label for labeled break/continue (e.g., `outer` in `outer: for ...`).
+    pub label: Option<String>,
     /// The binding kind (`const` or `let`).
     pub binding: VarBinding,
     /// The loop variable name (receives the key).
@@ -993,21 +1007,27 @@ pub struct ForInStmt {
     pub span: Span,
 }
 
-/// A `break` statement.
+/// A `break` statement, optionally with a label.
 ///
-/// Terminates the innermost loop. No labeled breaks are supported.
+/// `break;` terminates the innermost loop.
+/// `break label;` terminates the loop with the given label.
 #[derive(Debug, Clone)]
 pub struct BreakStmt {
-    /// The span covering the `break;` keyword and semicolon.
+    /// Optional label to break to (e.g., `outer` in `break outer;`).
+    pub label: Option<String>,
+    /// The span covering the `break` keyword, optional label, and semicolon.
     pub span: Span,
 }
 
-/// A `continue` statement.
+/// A `continue` statement, optionally with a label.
 ///
-/// Skips to the next iteration of the innermost loop. No labeled continues are supported.
+/// `continue;` skips to the next iteration of the innermost loop.
+/// `continue label;` skips to the next iteration of the labeled loop.
 #[derive(Debug, Clone)]
 pub struct ContinueStmt {
-    /// The span covering the `continue;` keyword and semicolon.
+    /// Optional label to continue (e.g., `outer` in `continue outer;`).
+    pub label: Option<String>,
+    /// The span covering the `continue` keyword, optional label, and semicolon.
     pub span: Span,
 }
 
@@ -1134,6 +1154,17 @@ pub enum ExprKind {
     /// Only valid inside generator functions (`function*`).
     /// Lowers to a state transition in the generated Iterator state machine.
     Yield(Box<Expr>),
+    /// A `delete` expression: `delete map["key"]`.
+    /// Lowers to `map.remove("key")`.
+    Delete(Box<Expr>),
+    /// A `void` expression: `void expr`.
+    /// Evaluates the expression and discards the result.
+    /// Lowers to a block expression: `{ expr; }`.
+    Void(Box<Expr>),
+    /// A comma expression: `(a, b, c)`.
+    /// Evaluates all expressions left-to-right, returns the last.
+    /// Lowers to a block expression: `{ a; b; c }`.
+    Comma(Vec<Expr>),
 }
 
 /// Logical assignment operators.
@@ -1227,6 +1258,8 @@ pub enum BinaryOp {
     Shl,
     /// Right shift (`>>`).
     Shr,
+    /// `in` operator: `"key" in map` → `map.contains_key("key")`.
+    In,
 }
 
 impl std::fmt::Display for BinaryOp {
@@ -1251,6 +1284,7 @@ impl std::fmt::Display for BinaryOp {
             Self::BitXor => "^",
             Self::Shl => "<<",
             Self::Shr => ">>",
+            Self::In => "in",
         };
         f.write_str(s)
     }
@@ -1651,6 +1685,7 @@ mod tests {
         });
 
         let while_stmt = WhileStmt {
+            label: None,
             condition: Expr {
                 kind: ExprKind::Binary(BinaryExpr {
                     op: BinaryOp::Lt,
@@ -1798,5 +1833,6 @@ mod tests {
         assert_eq!(BinaryOp::Ge.to_string(), ">=");
         assert_eq!(BinaryOp::And.to_string(), "&&");
         assert_eq!(BinaryOp::Or.to_string(), "||");
+        assert_eq!(BinaryOp::In.to_string(), "in");
     }
 }
