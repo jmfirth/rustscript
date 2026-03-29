@@ -33,6 +33,11 @@ pub enum TypeDefKind {
     Class {
         /// The struct fields of the class.
         fields: Vec<(String, Type)>,
+        /// The base class this class extends (single inheritance).
+        base_class: Option<String>,
+        /// Instance method signatures, populated when this class is used as a
+        /// base class for inheritance. Enables derived classes to generate trait impls.
+        methods: Vec<InterfaceMethodSig>,
         /// Names of getter accessors (property-style read access).
         getters: Vec<String>,
         /// Names of setter accessors (property-style write access).
@@ -100,6 +105,7 @@ impl TypeRegistry {
         &mut self,
         name: String,
         fields: Vec<(String, Type)>,
+        base_class: Option<String>,
         getters: Vec<String>,
         setters: Vec<String>,
         static_methods: Vec<String>,
@@ -110,12 +116,30 @@ impl TypeRegistry {
                 name,
                 kind: TypeDefKind::Class {
                     fields,
+                    base_class,
+                    methods: Vec::new(),
                     getters,
                     setters,
                     static_methods,
                 },
             },
         );
+    }
+
+    /// Set method signatures on an already-registered class.
+    ///
+    /// Called during the pre-pass when a concrete class is identified as a base
+    /// class (another class `extends` it). The methods enable derived classes to
+    /// generate `impl {Name}Trait for DerivedClass` during lowering.
+    pub fn set_class_methods(&mut self, name: &str, methods: Vec<InterfaceMethodSig>) {
+        if let Some(td) = self.types.get_mut(name)
+            && let TypeDefKind::Class {
+                methods: ref mut existing_methods,
+                ..
+            } = td.kind
+        {
+            *existing_methods = methods;
+        }
     }
 
     /// Register a simple enum type.
@@ -172,13 +196,16 @@ impl TypeRegistry {
             .is_some_and(|td| matches!(td.kind, TypeDefKind::SimpleEnum(_)))
     }
 
-    /// Look up the method signatures for a registered interface.
+    /// Look up the method signatures for a registered interface or class.
     ///
-    /// Returns `None` if the name is not registered or is not an interface.
+    /// Returns methods from `Interface` types (abstract classes, interfaces)
+    /// and from `Class` types that have methods set (concrete base classes).
+    /// Returns `None` if the name is not registered or has no methods.
     #[must_use]
     pub fn get_interface_methods(&self, name: &str) -> Option<&[InterfaceMethodSig]> {
         self.types.get(name).and_then(|td| match &td.kind {
             TypeDefKind::Interface(methods) => Some(methods.as_slice()),
+            TypeDefKind::Class { methods, .. } if !methods.is_empty() => Some(methods.as_slice()),
             _ => None,
         })
     }
@@ -205,6 +232,24 @@ impl TypeRegistry {
     #[must_use]
     pub fn has_type(&self, name: &str) -> bool {
         self.types.contains_key(name)
+    }
+
+    /// Get the base class name for a class, if it extends another class.
+    #[must_use]
+    pub fn get_base_class(&self, name: &str) -> Option<&str> {
+        self.types.get(name).and_then(|td| match &td.kind {
+            TypeDefKind::Class { base_class, .. } => base_class.as_deref(),
+            _ => None,
+        })
+    }
+
+    /// Get the fields for a class type.
+    #[must_use]
+    pub fn get_class_fields(&self, name: &str) -> Option<&[(String, Type)]> {
+        self.types.get(name).and_then(|td| match &td.kind {
+            TypeDefKind::Class { fields, .. } => Some(fields.as_slice()),
+            _ => None,
+        })
     }
 
     /// Check whether a registered type has a static method with the given name.
@@ -368,6 +413,7 @@ mod tests {
                 ("name".to_owned(), Type::String),
                 ("age".to_owned(), Type::Primitive(PrimitiveType::U32)),
             ],
+            None,
             vec!["full_name".to_owned()],
             vec!["full_name".to_owned()],
             vec!["create".to_owned()],
@@ -388,6 +434,7 @@ mod tests {
         reg.register_class(
             "User".to_owned(),
             vec![],
+            None,
             vec!["name".to_owned()],
             vec![],
             vec![],
@@ -404,6 +451,7 @@ mod tests {
         reg.register_class(
             "User".to_owned(),
             vec![],
+            None,
             vec![],
             vec!["name".to_owned()],
             vec![],
@@ -419,6 +467,7 @@ mod tests {
         reg.register_class(
             "Factory".to_owned(),
             vec![],
+            None,
             vec![],
             vec![],
             vec!["create".to_owned(), "default".to_owned()],
@@ -441,5 +490,104 @@ mod tests {
     fn test_registry_has_type_returns_false_for_missing() {
         let reg = TypeRegistry::new();
         assert!(!reg.has_type("Missing"));
+    }
+
+    // ---- Inheritance support tests ----
+
+    #[test]
+    fn test_registry_class_with_base_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "Dog".to_owned(),
+            vec![("name".to_owned(), Type::String)],
+            Some("Animal".to_owned()),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(reg.get_base_class("Dog"), Some("Animal"));
+        assert_eq!(reg.get_base_class("Missing"), None);
+    }
+
+    #[test]
+    fn test_registry_class_without_base_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "Animal".to_owned(),
+            vec![("name".to_owned(), Type::String)],
+            None,
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(reg.get_base_class("Animal"), None);
+    }
+
+    #[test]
+    fn test_registry_get_class_fields() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "Animal".to_owned(),
+            vec![
+                ("name".to_owned(), Type::String),
+                ("age".to_owned(), Type::Primitive(PrimitiveType::U32)),
+            ],
+            None,
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let fields = reg.get_class_fields("Animal");
+        assert!(fields.is_some());
+        let fields = fields.unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].0, "name");
+        assert_eq!(fields[1].0, "age");
+    }
+
+    #[test]
+    fn test_registry_set_class_methods_and_get_interface_methods() {
+        let mut reg = TypeRegistry::new();
+        reg.register_class(
+            "Animal".to_owned(),
+            vec![("name".to_owned(), Type::String)],
+            None,
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        // Initially no methods
+        assert!(reg.get_interface_methods("Animal").is_none());
+
+        // Set methods
+        reg.set_class_methods(
+            "Animal",
+            vec![InterfaceMethodSig {
+                name: "speak".to_owned(),
+                param_types: vec![],
+                return_type: Some(Type::String),
+            }],
+        );
+
+        // Now methods should be available
+        let methods = reg.get_interface_methods("Animal");
+        assert!(methods.is_some());
+        let methods = methods.unwrap();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "speak");
+
+        // Fields should still be available
+        assert!(reg.get_class_fields("Animal").is_some());
+    }
+
+    #[test]
+    fn test_registry_get_class_fields_returns_none_for_non_class() {
+        let mut reg = TypeRegistry::new();
+        reg.register("Point".to_owned(), vec![]);
+        assert!(reg.get_class_fields("Point").is_none());
     }
 }

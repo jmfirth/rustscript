@@ -89,6 +89,7 @@ fn union_variant_name(ty: &RustType) -> String {
         RustType::SelfType => "Self_".to_owned(),
         RustType::Infer => "Infer".to_owned(),
         RustType::ArcMutex(inner) => format!("Shared{}", union_variant_name(inner)),
+        RustType::DynRef(name) => format!("Dyn{name}"),
     }
 }
 

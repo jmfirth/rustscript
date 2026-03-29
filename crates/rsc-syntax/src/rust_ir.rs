@@ -463,6 +463,10 @@ pub enum RustType {
     /// Tuple type: `(T1, T2, ...)`.
     /// Produced by lowering `[T1, T2]` tuple type annotations.
     Tuple(Vec<RustType>),
+    /// Dynamic trait reference: `&dyn TraitName`.
+    /// Produced when a function parameter has a base class type that is extended,
+    /// enabling polymorphic dispatch.
+    DynRef(String),
     /// Auto-generated union enum type: `StringOrI32`.
     /// Produced by lowering `string | i32` (non-null general union types).
     /// The `name` is the deterministic enum name (e.g., `"StringOrI32"`),
@@ -494,6 +498,7 @@ impl std::fmt::Display for RustType {
             Self::Named(name) | Self::TypeParam(name) | Self::GeneratedUnion { name, .. } => {
                 return f.write_str(name);
             }
+            Self::DynRef(trait_name) => return write!(f, "&dyn {trait_name}"),
             Self::Generic(base, args) => {
                 write!(f, "{base}<")?;
                 for (i, arg) in args.iter().enumerate() {

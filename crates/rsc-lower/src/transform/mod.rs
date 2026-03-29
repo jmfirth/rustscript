@@ -154,6 +154,9 @@ pub(crate) struct Transform {
     /// Names imported from other modules/crates.
     /// Used to distinguish `Type.method()` (static call) from `variable.method()`.
     imported_types: HashSet<String>,
+    /// Names of classes that are used as base classes (some other class `extends` them).
+    /// These classes generate a `{Name}Trait` for polymorphism.
+    extended_classes: HashSet<String>,
     /// External function signatures from rustdoc JSON, keyed by
     /// `"crate::function"` or `"crate::Type::method"`.
     external_signatures: HashMap<String, ExternalFnInfo>,
@@ -170,6 +173,7 @@ impl Transform {
             no_borrow_inference,
             union_registry: UnionRegistry::new(),
             imported_types: HashSet::new(),
+            extended_classes: HashSet::new(),
             external_signatures: HashMap::new(),
         }
     }
@@ -341,6 +345,16 @@ impl Transform {
     ) {
         let mut ctx = LoweringContext::new();
 
+        // Pre-pass: identify classes used as base classes for inheritance.
+        // These classes will generate a `{Name}Trait` for polymorphism.
+        for item in &module.items {
+            if let ast::ItemKind::Class(cls) = &item.kind
+                && let Some(ref base) = cls.extends
+            {
+                self.extended_classes.insert(base.name.clone());
+            }
+        }
+
         // Pre-pass: register all type definitions so they can be resolved
         // during function lowering.
         for item in &module.items {
@@ -362,6 +376,17 @@ impl Transform {
                 | ast::ItemKind::RustBlock(_)
                 | ast::ItemKind::Const(_)
                 | ast::ItemKind::TestBlock(_) => {}
+            }
+        }
+
+        // Pre-pass: for concrete classes that are extended, register their
+        // methods as interface methods so derived classes can generate trait impls.
+        for item in &module.items {
+            if let ast::ItemKind::Class(cls) = &item.kind
+                && !cls.is_abstract
+                && self.extended_classes.contains(&cls.name.name)
+            {
+                self.register_concrete_class_as_interface(cls, &mut ctx);
             }
         }
 
@@ -735,6 +760,67 @@ impl Transform {
             .register_interface(cls.name.name.clone(), methods);
     }
 
+    /// Register a concrete extended class as an interface in the type registry.
+    ///
+    /// When a concrete class is used as a base class (another class `extends` it),
+    /// its instance methods are registered as interface methods. This enables the
+    /// derived class to generate `impl {Name}Trait for DerivedClass` during lowering.
+    fn register_concrete_class_as_interface(
+        &mut self,
+        cls: &ast::ClassDef,
+        ctx: &mut LoweringContext,
+    ) {
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+        let mut diags = Vec::new();
+
+        let methods: Vec<rsc_typeck::registry::InterfaceMethodSig> = cls
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                ast::ClassMember::Method(method) if !method.is_static => {
+                    let param_types: Vec<(String, rsc_typeck::types::Type)> = method
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let ty = resolve::resolve_type_annotation_with_generics(
+                                &p.type_ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            );
+                            (p.name.name.clone(), ty)
+                        })
+                        .collect();
+                    let return_type = method.return_type.as_ref().and_then(|rt| {
+                        rt.type_ann.as_ref().map(|ann| {
+                            resolve::resolve_type_annotation_with_generics(
+                                ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            )
+                        })
+                    });
+                    Some(rsc_typeck::registry::InterfaceMethodSig {
+                        name: method.name.name.clone(),
+                        param_types,
+                        return_type,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        // Set methods on the existing class registration — does not overwrite
+        // the Class kind, so get_class_fields() still works.
+        self.type_registry
+            .set_class_methods(&cls.name.name, methods);
+    }
+
     /// Lower an interface definition to a Rust trait.
     fn lower_interface_def(
         &self,
@@ -890,6 +976,12 @@ impl Transform {
                     &mut diags,
                 );
                 let mut rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                // Rewrite base class types to &dyn {Name}Trait for polymorphism
+                if let RustType::Named(ref name) = rust_ty
+                    && self.extended_classes.contains(name)
+                {
+                    rust_ty = RustType::DynRef(format!("{name}Trait"));
+                }
                 // Wrap optional params (without defaults) in Option<T>
                 if p.optional && p.default_value.is_none() {
                     rust_ty = RustType::Option(Box::new(rust_ty));
@@ -1144,6 +1236,13 @@ impl Transform {
                     ctx.emit_diagnostic(d);
                 }
 
+                // Rewrite base class types to &dyn {Name}Trait for polymorphism
+                if let RustType::Named(ref name) = ty
+                    && self.extended_classes.contains(name)
+                {
+                    ty = RustType::DynRef(format!("{name}Trait"));
+                }
+
                 // Optional params (without defaults) get wrapped in Option<T>
                 if p.optional && p.default_value.is_none() {
                     ty = RustType::Option(Box::new(ty));
@@ -1152,14 +1251,22 @@ impl Transform {
                 ctx.declare_variable(p.name.name.clone(), ty.clone());
 
                 // Use pre-computed param mode from Tier 2 analysis
-                let mode = precomputed_modes
+                let mut mode = precomputed_modes
                     .and_then(|modes| modes.get(param_idx))
                     .copied()
                     .unwrap_or(ParamMode::Owned);
 
+                // DynRef types are already references — force Owned mode
+                // to avoid emitting `&&dyn Trait`
+                if matches!(ty, RustType::DynRef(_)) {
+                    mode = ParamMode::Owned;
+                }
+
                 // Borrowed parameters are already references — mark them so
                 // downstream lowering (e.g., for-of) avoids double-borrowing.
-                if matches!(mode, ParamMode::Borrowed | ParamMode::BorrowedStr) {
+                if matches!(mode, ParamMode::Borrowed | ParamMode::BorrowedStr)
+                    || matches!(ty, RustType::DynRef(_))
+                {
                     ctx.mark_as_reference(p.name.name.clone());
                 }
 

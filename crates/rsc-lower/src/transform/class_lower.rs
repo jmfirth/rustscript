@@ -2,12 +2,13 @@
 //!
 //! Handles registration of class types, lowering of class definitions to
 //! struct + impl blocks, constructors, methods, getters, setters, static
-//! fields (associated constants), and constructor parameter properties.
+//! fields (associated constants), constructor parameter properties, and
+//! class inheritance via `extends` with trait-based polymorphism.
 
 use rsc_syntax::ast;
 use rsc_syntax::rust_ir::{
     ParamMode, RustBlock, RustConstItem, RustExpr, RustExprKind, RustFieldDef, RustImplBlock,
-    RustItem, RustMethod, RustParam, RustSelfParam, RustStructDef, RustTraitDef,
+    RustItem, RustMethod, RustParam, RustSelfParam, RustStmt, RustStructDef, RustTraitDef,
     RustTraitImplBlock, RustTraitMethod, RustType,
 };
 
@@ -90,6 +91,7 @@ impl Transform {
         self.type_registry.register_class(
             cls.name.name.clone(),
             fields,
+            cls.extends.as_ref().map(|e| e.name.clone()),
             getters,
             setters,
             static_methods,
@@ -146,7 +148,27 @@ impl Transform {
         }
 
         // 2. Build the struct definition from non-static class fields + param properties
-        let mut fields: Vec<RustFieldDef> = cls
+        //    If this class extends a base class, prepend inherited fields.
+        let mut fields: Vec<RustFieldDef> = Vec::new();
+
+        // Inherit fields from base class (field copying, not composition)
+        if let Some(ref base_name) = cls.extends
+            && let Some(base_fields) = self.type_registry.get_class_fields(&base_name.name)
+        {
+            for (fname, fty) in base_fields {
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(fty);
+                fields.push(RustFieldDef {
+                    public: true,
+                    name: fname.clone(),
+                    ty: rust_ty,
+                    doc_comment: None,
+                    span: None,
+                });
+            }
+        }
+
+        // Collect own non-static fields
+        let own_fields: Vec<RustFieldDef> = cls
             .members
             .iter()
             .filter_map(|m| match m {
@@ -171,6 +193,13 @@ impl Transform {
                 _ => None,
             })
             .collect();
+
+        // Add own fields (skip if already inherited with same name)
+        for f in own_fields {
+            if !fields.iter().any(|existing| existing.name == f.name) {
+                fields.push(f);
+            }
+        }
 
         // Add parameter property fields that aren't already declared
         for ppf in param_property_fields {
@@ -306,6 +335,41 @@ impl Transform {
             }
         }
 
+        // 3b. For concrete class inheritance, fill in field accessor methods
+        //     and inherited methods that the derived class does not override.
+        if let Some(ref base_name) = cls.extends
+            && self.is_concrete_base_class(&base_name.name)
+        {
+            let overridden: std::collections::HashSet<String> = trait_methods
+                .get(&base_name.name)
+                .map(|ms| ms.iter().map(|m| m.name.clone()).collect())
+                .unwrap_or_default();
+
+            // Add field accessor methods for all inherited fields
+            if let Some(base_fields) = self.type_registry.get_class_fields(&base_name.name) {
+                for (fname, fty) in base_fields {
+                    if overridden.contains(fname) {
+                        continue;
+                    }
+                    let rust_ty = rsc_typeck::bridge::type_to_rust_type(fty);
+                    let (return_ty, accessor_body) = field_accessor_type_and_body(fname, &rust_ty);
+                    trait_methods
+                        .entry(base_name.name.clone())
+                        .or_default()
+                        .push(RustMethod {
+                            is_async: false,
+                            name: fname.clone(),
+                            self_param: Some(RustSelfParam::Ref),
+                            params: vec![],
+                            return_type: Some(return_ty),
+                            body: accessor_body,
+                            doc_comment: None,
+                            span: None,
+                        });
+                }
+            }
+        }
+
         // 4. Lower static fields to associated constants
         let mut associated_consts: Vec<RustConstItem> = Vec::new();
         for member in &cls.members {
@@ -351,8 +415,15 @@ impl Transform {
         // 6. Emit trait impl blocks (for both implements and extends)
         for iface in &all_trait_sources {
             if let Some(methods) = trait_methods.remove(&iface.name) {
+                // For concrete class extends, the trait is named {Base}Trait.
+                // Abstract classes already generate a trait with the class name.
+                let trait_name = if self.is_concrete_base_class(&iface.name) {
+                    format!("{}Trait", iface.name)
+                } else {
+                    iface.name.clone()
+                };
                 items.push(RustItem::TraitImpl(RustTraitImplBlock {
-                    trait_name: iface.name.clone(),
+                    trait_name,
                     type_name: cls.name.name.clone(),
                     type_params: type_params.clone(),
                     methods,
@@ -361,11 +432,191 @@ impl Transform {
             }
         }
 
+        // 7. If this class is extended by another class, generate the trait
+        //    definition and self-impl for polymorphism.
+        if self.extended_classes.contains(&cls.name.name) {
+            let inheritance_items =
+                self.generate_inheritance_trait(cls, exported, &type_params, ctx);
+            items.extend(inheritance_items);
+        }
+
         for d in diags {
             ctx.emit_diagnostic(d);
         }
 
         items
+    }
+
+    /// Check whether a name refers to a concrete class that is in the extended set.
+    ///
+    /// Returns `true` for concrete classes that are used as base classes. Returns
+    /// `false` for abstract classes (they generate their own trait with the class name).
+    fn is_concrete_base_class(&self, name: &str) -> bool {
+        self.extended_classes.contains(name)
+            && self.type_registry.lookup(name).is_some_and(|td| {
+                matches!(td.kind, rsc_typeck::registry::TypeDefKind::Class { .. })
+            })
+    }
+
+    /// Generate a `{Name}Trait` definition and `impl {Name}Trait for {Name}` for
+    /// a concrete class that is used as a base class by another class.
+    ///
+    /// The trait contains:
+    /// - Field accessor methods for each public field
+    /// - All instance method signatures from the class
+    ///
+    /// The self-impl provides the base class's own implementations.
+    #[allow(clippy::too_many_lines)]
+    // Inheritance trait generation coordinates field accessors, method signatures,
+    // and the self-impl block; splitting would fragment the coherent output.
+    fn generate_inheritance_trait(
+        &self,
+        cls: &ast::ClassDef,
+        exported: bool,
+        type_params: &[rsc_syntax::rust_ir::RustTypeParam],
+        ctx: &mut LoweringContext,
+    ) -> Vec<RustItem> {
+        let mut result = Vec::new();
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(cls.type_params.as_ref());
+        let trait_name = format!("{}Trait", cls.name.name);
+
+        // Build trait method signatures
+        let mut trait_methods = Vec::new();
+        let mut self_impl_methods = Vec::new();
+
+        // Field accessor methods: fn field_name(&self) -> &FieldType (for String)
+        // or fn field_name(&self) -> FieldType (for Copy types)
+        if let Some(base_fields) = self.type_registry.get_class_fields(&cls.name.name) {
+            for (fname, fty) in base_fields {
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(fty);
+                let (return_ty, accessor_body) = field_accessor_type_and_body(fname, &rust_ty);
+
+                // Trait method signature
+                trait_methods.push(RustTraitMethod {
+                    name: fname.clone(),
+                    params: vec![],
+                    return_type: Some(return_ty.clone()),
+                    has_self: true,
+                    default_body: None,
+                    doc_comment: None,
+                    span: None,
+                });
+
+                // Self-impl method body
+                self_impl_methods.push(RustMethod {
+                    is_async: false,
+                    name: fname.clone(),
+                    self_param: Some(RustSelfParam::Ref),
+                    params: vec![],
+                    return_type: Some(return_ty),
+                    body: accessor_body,
+                    doc_comment: None,
+                    span: None,
+                });
+            }
+        }
+
+        // Instance method signatures
+        for member in &cls.members {
+            if let ast::ClassMember::Method(method) = member
+                && !method.is_static
+            {
+                let mut params = Vec::new();
+                for p in &method.params {
+                    let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                        &p.type_ann,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                    params.push(RustParam {
+                        name: p.name.name.clone(),
+                        ty: rust_ty,
+                        mode: ParamMode::Owned,
+                        span: Some(p.span),
+                    });
+                }
+
+                let return_type = method.return_type.as_ref().and_then(|rt| {
+                    rt.type_ann.as_ref().and_then(|ann| {
+                        let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                            ann,
+                            &self.type_registry,
+                            &generic_names,
+                            &mut diags,
+                        );
+                        let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                        if rust_ty == RustType::Unit {
+                            return None;
+                        }
+                        Some(rust_ty)
+                    })
+                });
+
+                // Trait method signature (no body)
+                trait_methods.push(RustTraitMethod {
+                    name: method.name.name.clone(),
+                    params: params.clone(),
+                    return_type: return_type.clone(),
+                    has_self: true,
+                    default_body: None,
+                    doc_comment: method.doc_comment.clone(),
+                    span: Some(method.span),
+                });
+
+                // Self-impl method body
+                ctx.push_scope();
+                for p in &params {
+                    ctx.declare_variable(p.name.clone(), p.ty.clone());
+                }
+                let reassigned = ownership::find_reassigned_variables(&method.body);
+                let use_map = UseMap::analyze(
+                    &method.body,
+                    |obj, m| self.builtins.is_ref_args(obj, m),
+                    |_| None,
+                );
+                let body = self.lower_block(&method.body, ctx, &use_map, 0, &reassigned);
+                ctx.pop_scope();
+
+                self_impl_methods.push(RustMethod {
+                    is_async: method.is_async,
+                    name: method.name.name.clone(),
+                    self_param: Some(RustSelfParam::Ref),
+                    params,
+                    return_type,
+                    body,
+                    doc_comment: method.doc_comment.clone(),
+                    span: Some(method.span),
+                });
+            }
+        }
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        // Emit the trait definition
+        result.push(RustItem::Trait(RustTraitDef {
+            public: exported,
+            name: trait_name.clone(),
+            type_params: type_params.to_vec(),
+            methods: trait_methods,
+            doc_comment: None,
+            span: Some(cls.span),
+        }));
+
+        // Emit impl {Name}Trait for {Name}
+        result.push(RustItem::TraitImpl(RustTraitImplBlock {
+            trait_name,
+            type_name: cls.name.name.clone(),
+            type_params: type_params.to_vec(),
+            methods: self_impl_methods,
+            span: Some(cls.span),
+        }));
+
+        result
     }
 
     /// Lower an abstract class definition to a trait.
@@ -920,4 +1171,50 @@ fn stmt_mutates_self(stmt: &ast::Stmt) -> bool {
 /// Check if an expression contains a `this.field = value` pattern.
 fn expr_mutates_self(expr: &ast::Expr) -> bool {
     matches!(expr.kind, ast::ExprKind::FieldAssign(ref fa) if matches!(fa.object.kind, ast::ExprKind::This))
+}
+
+/// Determine the return type and body for a field accessor method in an
+/// inheritance trait.
+///
+/// For `String` fields, returns `&str` with `&self.field`. For copy types
+/// (primitives, bool), returns the type directly with `self.field`. For other
+/// types, returns a reference `&Type` with `&self.field`.
+fn field_accessor_type_and_body(field_name: &str, rust_ty: &RustType) -> (RustType, RustBlock) {
+    let is_copy = matches!(
+        rust_ty,
+        RustType::I8
+            | RustType::I16
+            | RustType::I32
+            | RustType::I64
+            | RustType::U8
+            | RustType::U16
+            | RustType::U32
+            | RustType::U64
+            | RustType::F32
+            | RustType::F64
+            | RustType::Bool
+    );
+
+    if *rust_ty == RustType::String {
+        // String fields return &str
+        let body = RustBlock {
+            stmts: vec![RustStmt::RawRust(format!("&self.{field_name}"))],
+            expr: None,
+        };
+        (RustType::Named("&str".to_owned()), body)
+    } else if is_copy {
+        // Copy types return by value
+        let body = RustBlock {
+            stmts: vec![RustStmt::RawRust(format!("self.{field_name}"))],
+            expr: None,
+        };
+        (rust_ty.clone(), body)
+    } else {
+        // Other types return by reference
+        let body = RustBlock {
+            stmts: vec![RustStmt::RawRust(format!("&self.{field_name}"))],
+            expr: None,
+        };
+        (RustType::Named(format!("&{rust_ty}")), body)
+    }
 }

@@ -2069,3 +2069,350 @@ function main() {
         "hash-private access should strip #:\n{actual}"
     );
 }
+
+// ===========================================================================
+// CATEGORY 7: Concrete class inheritance via `extends`
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 7.1 Base class generates {Name}Trait when extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_concrete_extends_generates_trait() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Base class generates AnimalTrait
+    assert!(
+        actual.contains("trait AnimalTrait"),
+        "extended base class should generate {{Name}}Trait:\n{actual}"
+    );
+
+    // Base class struct still generated
+    assert!(
+        actual.contains("struct Animal"),
+        "base class struct should still exist:\n{actual}"
+    );
+
+    // Derived class struct generated
+    assert!(
+        actual.contains("struct Dog"),
+        "derived class struct should exist:\n{actual}"
+    );
+
+    // Derived class has inherited fields
+    assert!(
+        actual.contains("pub name: String") && actual.contains("pub breed: String"),
+        "derived struct should have inherited + own fields:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.2 Non-extended class does NOT generate a trait (regression)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_non_extended_class_no_trait() {
+    let source = "\
+class User {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  greet(): string {
+    return this.name;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // No trait should be generated for a class that is never extended
+    assert!(
+        !actual.contains("trait UserTrait"),
+        "non-extended class should not generate a trait:\n{actual}"
+    );
+    assert!(
+        !actual.contains("trait User "),
+        "non-extended class should not generate a trait:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.3 Derived class gets impl {Base}Trait for {Derived}
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_concrete_extends_trait_impl() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // impl AnimalTrait for Animal
+    assert!(
+        actual.contains("impl AnimalTrait for Animal"),
+        "base class should implement its own trait:\n{actual}"
+    );
+
+    // impl AnimalTrait for Dog
+    assert!(
+        actual.contains("impl AnimalTrait for Dog"),
+        "derived class should implement base trait:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.4 Polymorphic function parameter rewriting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_polymorphic_param_rewrite() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+function makeSpeak(animal: Animal): string {
+  return animal.speak();
+}
+
+function main() {
+  const dog = new Dog(\"Rex\");
+  console.log(makeSpeak(dog));
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Parameter type rewritten to &dyn AnimalTrait
+    assert!(
+        actual.contains("&dyn AnimalTrait"),
+        "base class param should be rewritten to &dyn Trait:\n{actual}"
+    );
+
+    // Call site should add & before the argument
+    assert!(
+        actual.contains("makeSpeak(&dog)"),
+        "call site should borrow the argument:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.5 Field accessor methods in trait
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_field_accessors_in_trait() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Trait should have field accessor: fn name(&self) -> &str
+    assert!(
+        actual.contains("fn name(&self) -> &str"),
+        "trait should have field accessor method:\n{actual}"
+    );
+
+    // AnimalTrait impl for Animal should have accessor body
+    assert!(
+        actual.contains("&self.name"),
+        "trait impl should have accessor body:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.6 Extends with extra fields: derived adds fields beyond inherited ones
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_extends_with_extra_fields() {
+    let source = "\
+class Vehicle {
+  speed: f64;
+
+  constructor(speed: f64) {
+    this.speed = speed;
+  }
+
+  describe(): string {
+    return \"vehicle\";
+  }
+}
+
+class Car extends Vehicle {
+  brand: string;
+
+  constructor(speed: f64, brand: string) {
+    this.speed = speed;
+    this.brand = brand;
+  }
+
+  describe(): string {
+    return this.brand;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // Car struct should have both inherited and own fields
+    // Check that Car struct appears and has speed and brand
+    let car_section = actual.split("struct Car").nth(1);
+    assert!(car_section.is_some(), "struct Car should exist:\n{actual}");
+    let car_section = car_section.unwrap();
+    assert!(
+        car_section.contains("speed: f64") && car_section.contains("brand: String"),
+        "Car should have inherited speed and own brand fields:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7.7 E2e: polymorphic dispatch runs correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore] // e2e test — requires cargo
+fn test_e2e_concrete_extends_polymorphic_dispatch() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return \"generic sound\";
+  }
+}
+
+class Dog extends Animal {
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return \"woof\";
+  }
+}
+
+function doSpeak(a: Animal): string {
+  return a.speak();
+}
+
+function main() {
+  const dog = new Dog(\"Rex\");
+  console.log(doSpeak(dog));
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output.trim(), "woof");
+}
