@@ -487,6 +487,9 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
             scan_expr_for_collections(&wl.stream, needs_hashmap, needs_hashset);
             scan_block_for_collections(&wl.body, needs_hashmap, needs_hashset);
         }
+        RustStmt::Loop(loop_stmt) => {
+            scan_block_for_collections(&loop_stmt.body, needs_hashmap, needs_hashset);
+        }
         RustStmt::Break(_) | RustStmt::Continue(_) | RustStmt::RawRust(_) => {}
     }
 }

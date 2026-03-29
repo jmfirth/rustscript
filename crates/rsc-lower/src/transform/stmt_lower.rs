@@ -10,9 +10,9 @@ use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     IteratorTerminal, RustBlock, RustDestructureDefaultField, RustDestructureDefaultsStmt,
     RustDestructureField, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt,
-    RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt, RustMatchResultStmt, RustReturnStmt,
-    RustStmt, RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustWhileLetStmt,
-    RustWhileStmt,
+    RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt, RustLoopStmt, RustMatchResultStmt,
+    RustReturnStmt, RustStmt, RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustUnaryOp,
+    RustWhileLetStmt, RustWhileStmt,
 };
 
 use crate::context::LoweringContext;
@@ -111,6 +111,9 @@ impl Transform {
             }
             ast::Stmt::While(while_stmt) => {
                 RustStmt::While(self.lower_while(while_stmt, ctx, use_map, stmt_index, reassigned))
+            }
+            ast::Stmt::DoWhile(dw) => {
+                RustStmt::Loop(self.lower_do_while(dw, ctx, use_map, stmt_index, reassigned))
             }
             ast::Stmt::Destructure(destr) => {
                 self.lower_destructure(destr, ctx, use_map, stmt_index)
@@ -571,6 +574,53 @@ impl Transform {
             condition,
             body,
             span: Some(while_stmt.span),
+        }
+    }
+
+    /// Lower a do-while statement to a Rust `loop` with a trailing break.
+    ///
+    /// `do { body } while (cond)` → `loop { body; if !cond { break; } }`.
+    fn lower_do_while(
+        &self,
+        dw: &ast::DoWhileStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustLoopStmt {
+        let mut body = self.lower_block(&dw.body, ctx, use_map, stmt_index, reassigned);
+        let condition = self.lower_expr(&dw.condition, ctx, use_map, stmt_index);
+
+        // Append `if !(condition) { break; }` to the end of the body.
+        // Wrap the condition in parentheses to ensure correct precedence
+        // when the `!` operator is applied (e.g., `!(x < 10)` not `!x < 10`).
+        let parens = RustExpr {
+            kind: RustExprKind::Paren(Box::new(condition)),
+            span: None,
+        };
+        let negated_condition = RustExpr {
+            kind: RustExprKind::Unary {
+                op: RustUnaryOp::Not,
+                operand: Box::new(parens),
+            },
+            span: None,
+        };
+
+        let break_if = RustStmt::If(RustIfStmt {
+            condition: negated_condition,
+            then_block: RustBlock {
+                stmts: vec![RustStmt::Break(None)],
+                expr: None,
+            },
+            else_clause: None,
+            span: None,
+        });
+
+        body.stmts.push(break_if);
+
+        RustLoopStmt {
+            body,
+            span: Some(dw.span),
         }
     }
 

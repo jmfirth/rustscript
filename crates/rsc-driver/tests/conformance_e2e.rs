@@ -463,3 +463,48 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "55");
 }
+
+// ===========================================================================
+// Do-While Loop E2E Tests (Task 109)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Do-while loop that iterates 5 times → correct output
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_conformance_e2e_do_while_iterates_five_times() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+  } while (x < 5);
+  console.log(x);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "5");
+}
+
+// ---------------------------------------------------------------------------
+// Do-while executes body at least once (condition false on first check)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_conformance_e2e_do_while_executes_at_least_once() {
+    let source = "\
+function main() {
+  let x: i32 = 100;
+  do {
+    console.log(x);
+    x += 1;
+  } while (x < 5);
+  console.log(x);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "100\n101");
+}

@@ -106,6 +106,8 @@ pub(crate) enum TokenKind {
     Rust,
     /// `derives` (explicit derive macros on types, enums, and classes)
     Derives,
+    /// `do` (introduces a do-while loop)
+    Do,
     /// `yield` (yield a value from a generator function)
     Yield,
     /// `infer` (bind a type variable in conditional type extends clause)

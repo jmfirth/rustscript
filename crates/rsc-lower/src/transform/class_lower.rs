@@ -1167,6 +1167,14 @@ fn stmt_mutates_self(stmt: &ast::Stmt) -> bool {
             }
             false
         }
+        ast::Stmt::DoWhile(dw) => {
+            for s in &dw.body.stmts {
+                if stmt_mutates_self(s) {
+                    return true;
+                }
+            }
+            false
+        }
         _ => false,
     }
 }

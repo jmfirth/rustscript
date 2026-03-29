@@ -48,6 +48,9 @@ fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
         ast::Stmt::While(w) => {
             expr_needs_async_runtime(&w.condition) || block_needs_async_runtime(&w.body)
         }
+        ast::Stmt::DoWhile(dw) => {
+            block_needs_async_runtime(&dw.body) || expr_needs_async_runtime(&dw.condition)
+        }
         ast::Stmt::For(f) => {
             f.is_await
                 || expr_needs_async_runtime(&f.iterable)
@@ -130,6 +133,9 @@ fn stmt_needs_futures(stmt: &ast::Stmt) -> bool {
                 || matches!(&if_stmt.else_clause, Some(ast::ElseClause::Block(b)) if block_needs_futures(b))
         }
         ast::Stmt::While(w) => expr_needs_futures(&w.condition) || block_needs_futures(&w.body),
+        ast::Stmt::DoWhile(dw) => {
+            block_needs_futures(&dw.body) || expr_needs_futures(&dw.condition)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_needs_futures(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_needs_futures)
@@ -188,6 +194,9 @@ fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
                 || matches!(&if_stmt.else_clause, Some(ast::ElseClause::ElseIf(elif)) if stmt_contains_await(&ast::Stmt::If(*elif.clone())))
         }
         ast::Stmt::While(w) => expr_contains_await(&w.condition) || block_contains_await(&w.body),
+        ast::Stmt::DoWhile(dw) => {
+            block_contains_await(&dw.body) || expr_contains_await(&dw.condition)
+        }
         ast::Stmt::For(f) => {
             f.is_await || expr_contains_await(&f.iterable) || block_contains_await(&f.body)
         }

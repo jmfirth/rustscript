@@ -10,9 +10,9 @@ use rsc_syntax::ast::{
     ArrayDestructureElement, ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, BinaryOp,
     Block, BreakStmt, CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember,
     ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, Decorator,
-    DestructureField, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
-    ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock, InterfaceDef,
+    DestructureField, DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr,
+    ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident,
+    IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock, InterfaceDef,
     InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module,
     NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
     ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
@@ -211,6 +211,7 @@ impl<'src> Parser<'src> {
             TokenKind::If => "`if`",
             TokenKind::Else => "`else`",
             TokenKind::While => "`while`",
+            TokenKind::Do => "`do`",
             TokenKind::Return => "`return`",
             TokenKind::True => "`true`",
             TokenKind::False => "`false`",
@@ -2371,6 +2372,7 @@ impl<'src> Parser<'src> {
             TokenKind::Const | TokenKind::Let => self.parse_var_decl(),
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
             TokenKind::While => self.parse_while_stmt().map(Stmt::While),
+            TokenKind::Do => self.parse_do_while_stmt().map(Stmt::DoWhile),
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
             TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
             TokenKind::Try => self.parse_try_catch_stmt().map(Stmt::TryCatch),
@@ -2498,6 +2500,47 @@ impl<'src> Parser<'src> {
             condition,
             body,
             span: start.merge(body_span),
+        })
+    }
+
+    /// Parse a do-while statement: `do { body } while ( condition ) ;`.
+    fn parse_do_while_stmt(&mut self) -> Option<DoWhileStmt> {
+        let do_token = self.advance(); // consume `do`
+        let start = do_token.span;
+
+        let body = self.parse_block()?;
+
+        if !matches!(self.peek(), TokenKind::While) {
+            self.diagnostics.push(
+                Diagnostic::error("expected `while` after `do` block").with_label(
+                    self.current_token().span,
+                    self.file_id,
+                    "expected `while`",
+                ),
+            );
+            return None;
+        }
+        self.advance(); // consume `while`
+
+        self.expect(&TokenKind::LParen)?;
+        let condition = self.parse_expr()?;
+        self.expect(&TokenKind::RParen)?;
+
+        // Consume optional trailing semicolon
+        if matches!(self.peek(), TokenKind::Semicolon) {
+            let semi = self.advance();
+            return Some(DoWhileStmt {
+                body,
+                condition,
+                span: start.merge(semi.span),
+            });
+        }
+
+        let end = self.previous_span();
+        Some(DoWhileStmt {
+            body,
+            condition,
+            span: start.merge(end),
         })
     }
 

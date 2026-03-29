@@ -4576,3 +4576,218 @@ function getConfig(settings: { [key: string]: string }): string {
         "expected HashMap<String, String> param type, got:\n{actual}"
     );
 }
+
+// ===========================================================================
+// Do-While Loop Tests (Task 109)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 1. Basic do-while → correct loop + break pattern
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_basic_generates_loop_break() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+  } while (x < 10);
+  console.log(x);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x: i32 = 0;
+    loop {
+        x += 1;
+        if !(x < 10) {
+            break;
+        }
+    }
+    println!(\"{}\", x);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_basic", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 2. Do-while with compound condition (&&, ||)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_compound_condition_generates_loop_break() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  let y: i32 = 100;
+  do {
+    x += 1;
+    y -= 1;
+  } while (x < 10 && y > 50);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x: i32 = 0;
+    let mut y: i32 = 100;
+    loop {
+        x += 1;
+        y -= 1;
+        if !(x < 10 && y > 50) {
+            break;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_compound", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Do-while with break inside body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_with_break_generates_loop_break() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+    if (x == 5) {
+      break;
+    }
+  } while (x < 10);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x: i32 = 0;
+    loop {
+        x += 1;
+        if x == 5 {
+            break;
+        }
+        if !(x < 10) {
+            break;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_break", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Do-while with continue inside body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_with_continue_generates_loop_break() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+    if (x == 5) {
+      continue;
+    }
+    console.log(x);
+  } while (x < 10);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x: i32 = 0;
+    loop {
+        x += 1;
+        if x == 5 {
+            continue;
+        }
+        println!(\"{}\", x);
+        if !(x < 10) {
+            break;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_continue", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 5. Nested do-while loops
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_nested_generates_nested_loops() {
+    let source = "\
+function main() {
+  let i: i32 = 0;
+  do {
+    let j: i32 = 0;
+    do {
+      j += 1;
+    } while (j < 3);
+    i += 1;
+  } while (i < 2);
+}";
+
+    let expected = "\
+fn main() {
+    let mut i: i32 = 0;
+    loop {
+        let mut j: i32 = 0;
+        loop {
+            j += 1;
+            if !(j < 3) {
+                break;
+            }
+        }
+        i += 1;
+        if !(i < 2) {
+            break;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_nested", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Do-while with or condition
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_do_while_or_condition_generates_loop_break() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+  } while (x < 5 || x == 7);
+}";
+
+    let expected = "\
+fn main() {
+    let mut x: i32 = 0;
+    loop {
+        x += 1;
+        if !(x < 5 || x == 7) {
+            break;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("do_while_or_condition", &actual, expected);
+}

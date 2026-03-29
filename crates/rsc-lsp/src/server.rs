@@ -782,6 +782,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::Return(r) => r.span,
         Stmt::If(i) => i.span,
         Stmt::While(w) => w.span,
+        Stmt::DoWhile(dw) => dw.span,
         Stmt::Destructure(d) => d.span,
         Stmt::Switch(s) => s.span,
         Stmt::TryCatch(t) => t.span,

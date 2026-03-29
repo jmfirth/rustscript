@@ -630,6 +630,9 @@ pub enum RustStmt {
     /// A `while let Some(binding) = expr.next().await { body }` loop.
     /// Produced by lowering `for await (const item of stream) { ... }`.
     WhileLet(RustWhileLetStmt),
+    /// An infinite `loop { ... }` with an internal break condition.
+    /// Produced by lowering `do { ... } while (condition)`.
+    Loop(RustLoopStmt),
 }
 
 /// A `try {} finally {}` block without catch.
@@ -716,6 +719,18 @@ pub struct RustWhileStmt {
     /// The loop condition expression.
     pub condition: RustExpr,
     /// The loop body.
+    pub body: RustBlock,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
+}
+
+/// A Rust `loop { ... }` with body statements.
+///
+/// Produced by lowering `do { ... } while (condition)` to
+/// `loop { body; if !condition { break; } }`.
+#[derive(Debug, Clone)]
+pub struct RustLoopStmt {
+    /// The loop body (includes the break-condition `if` at the end).
     pub body: RustBlock,
     /// The source span, if derived from source.
     pub span: Option<Span>,

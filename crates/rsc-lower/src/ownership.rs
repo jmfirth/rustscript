@@ -136,6 +136,25 @@ impl UseMap {
                     );
                 }
             }
+            ast::Stmt::DoWhile(dw) => {
+                for inner_stmt in &dw.body.stmts {
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+                Self::collect_expr_uses(
+                    &dw.condition,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+            }
             ast::Stmt::Destructure(destr) => {
                 Self::collect_expr_uses(
                     &destr.init,
@@ -757,6 +776,11 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 collect_assignments(inner, reassigned);
             }
         }
+        ast::Stmt::DoWhile(dw) => {
+            for inner in &dw.body.stmts {
+                collect_assignments(inner, reassigned);
+            }
+        }
         ast::Stmt::VarDecl(_)
         | ast::Stmt::Return(_)
         | ast::Stmt::Destructure(_)
@@ -869,6 +893,11 @@ fn collect_method_call_receivers(stmt: &ast::Stmt, receivers: &mut HashSet<Strin
         }
         ast::Stmt::While(w) => {
             for s in &w.body.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+        }
+        ast::Stmt::DoWhile(dw) => {
+            for s in &dw.body.stmts {
                 collect_method_call_receivers(s, receivers);
             }
         }
@@ -1033,6 +1062,12 @@ fn collect_param_usage_stmt(
             for inner in &while_stmt.body.stmts {
                 collect_param_usage_stmt(inner, param_set, is_ref_call, result);
             }
+        }
+        ast::Stmt::DoWhile(dw) => {
+            for inner in &dw.body.stmts {
+                collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+            }
+            collect_param_usage_expr(&dw.condition, param_set, is_ref_call, result);
         }
         ast::Stmt::Destructure(destr) => {
             collect_param_usage_expr(&destr.init, param_set, is_ref_call, result);
@@ -1457,6 +1492,12 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
             for s in &w.body.stmts {
                 collect_idents_in_stmt(s, names);
             }
+        }
+        ast::Stmt::DoWhile(dw) => {
+            for s in &dw.body.stmts {
+                collect_idents_in_stmt(s, names);
+            }
+            collect_idents_in_expr(&dw.condition, names);
         }
         ast::Stmt::For(f) => {
             collect_idents_in_expr(&f.iterable, names);

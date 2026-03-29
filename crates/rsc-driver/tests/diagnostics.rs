@@ -187,3 +187,37 @@ type Dir = \"north\" | | \"south\"";
         "expected at least one diagnostic for malformed enum definition"
     );
 }
+
+// ===========================================================================
+// Do-While Diagnostic Tests (Task 109)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Missing `while` after do block → parse error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_diagnostic_do_while_missing_while_keyword() {
+    let source = "\
+function main() {
+  let x: i32 = 0;
+  do {
+    x += 1;
+  }
+}";
+
+    let messages = compile_diagnostics(source);
+
+    assert!(
+        !messages.is_empty(),
+        "expected at least one diagnostic for missing `while` after `do`"
+    );
+
+    let has_while = messages
+        .iter()
+        .any(|m| m.contains("while") || m.contains("expected"));
+    assert!(
+        has_while,
+        "expected diagnostic to mention 'while' or 'expected', got: {messages:?}"
+    );
+}

@@ -363,6 +363,9 @@ impl Transform {
                 ast::Stmt::While(w) => {
                     self.scan_stmts_for_unions(&w.body.stmts, generic_names);
                 }
+                ast::Stmt::DoWhile(dw) => {
+                    self.scan_stmts_for_unions(&dw.body.stmts, generic_names);
+                }
                 ast::Stmt::For(f) => {
                     self.scan_stmts_for_unions(&f.body.stmts, generic_names);
                 }
@@ -2362,6 +2365,9 @@ fn collect_locals_from_stmts(
             ast::Stmt::While(w) => {
                 collect_locals_from_stmts(&w.body.stmts, param_names, params, locals);
             }
+            ast::Stmt::DoWhile(dw) => {
+                collect_locals_from_stmts(&dw.body.stmts, param_names, params, locals);
+            }
             ast::Stmt::If(if_stmt) => {
                 collect_locals_from_stmts(&if_stmt.then_block.stmts, param_names, params, locals);
                 if let Some(ast::ElseClause::Block(ref blk)) = if_stmt.else_clause {
@@ -2491,6 +2497,7 @@ fn stmt_contains_yield(stmt: &ast::Stmt) -> bool {
                 })
         }
         ast::Stmt::While(w) => body_contains_yield(&w.body),
+        ast::Stmt::DoWhile(dw) => body_contains_yield(&dw.body),
         _ => false,
     }
 }

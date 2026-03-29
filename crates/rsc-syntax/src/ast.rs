@@ -714,6 +714,9 @@ pub enum Stmt {
     If(IfStmt),
     /// A `while` loop.
     While(WhileStmt),
+    /// A `do { ... } while (condition)` loop.
+    /// Lowers to Rust `loop { body; if !condition { break; } }`.
+    DoWhile(DoWhileStmt),
     /// A destructuring declaration: `const { name, age } = user;`.
     /// Lowers to Rust `let TypeName { field1, field2, .. } = expr;`.
     Destructure(DestructureStmt),
@@ -810,6 +813,20 @@ pub struct WhileStmt {
     /// The loop body.
     pub body: Block,
     /// The span covering the entire `while` statement.
+    pub span: Span,
+}
+
+/// A `do { ... } while (condition)` loop.
+///
+/// Corresponds to `do { body } while (condition);`.
+/// Lowers to Rust `loop { body; if !condition { break; } }`.
+#[derive(Debug, Clone)]
+pub struct DoWhileStmt {
+    /// The loop body (executed at least once).
+    pub body: Block,
+    /// The loop condition expression (checked after each iteration).
+    pub condition: Expr,
+    /// The span covering the entire `do...while` statement.
     pub span: Span,
 }
 

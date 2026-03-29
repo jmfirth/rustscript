@@ -8,8 +8,8 @@ use rsc_syntax::rust_ir::{
     IteratorOp, IteratorTerminal, ParamMode, RustBlock, RustClosureBody, RustConstItem,
     RustDescribeModule, RustElse, RustEnumDef, RustExpr, RustExprKind, RustFile, RustFnDecl,
     RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt,
-    RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
-    RustStructDef, RustTestItem, RustTestModule, RustTraitDef, RustTraitImplBlock,
+    RustLoopStmt, RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam,
+    RustStmt, RustStructDef, RustTestItem, RustTestModule, RustTraitDef, RustTraitImplBlock,
     RustTryFinallyStmt, RustType, RustTypeAlias, RustTypeParam, RustWhileLetStmt, SpreadOp,
 };
 use rsc_syntax::span::Span;
@@ -1023,6 +1023,12 @@ impl Emitter {
                 self.emit_while_let(wl);
                 self.newline();
             }
+            RustStmt::Loop(loop_stmt) => {
+                self.set_span(loop_stmt.span);
+                self.write_indent();
+                self.emit_loop(loop_stmt);
+                self.newline();
+            }
         }
     }
 
@@ -1173,6 +1179,14 @@ impl Emitter {
         self.emit_expr(&wl.stream);
         self.write(".next().await ");
         self.emit_block(&wl.body);
+    }
+
+    /// Emit a `loop { ... }` block.
+    ///
+    /// Produced by lowering `do { ... } while (condition)`.
+    fn emit_loop(&mut self, loop_stmt: &RustLoopStmt) {
+        self.write("loop ");
+        self.emit_block(&loop_stmt.body);
     }
 
     /// Emit an expression.

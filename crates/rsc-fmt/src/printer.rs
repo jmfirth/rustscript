@@ -7,14 +7,14 @@
 use rsc_syntax::ast::{
     ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef,
     ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
-    DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr,
-    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr,
-    IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
-    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
-    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
-    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
-    VarDecl, Visibility, WhileStmt,
+    DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
+    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl,
+    IndexAssignExpr, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    LogicalAssignExpr, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess,
+    OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    VarBinding, VarDecl, Visibility, WhileStmt,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -802,6 +802,7 @@ impl Printer {
             Stmt::Return(r) => self.print_return_stmt(r),
             Stmt::If(i) => self.print_if_stmt(i),
             Stmt::While(w) => self.print_while_stmt(w),
+            Stmt::DoWhile(dw) => self.print_do_while_stmt(dw),
             Stmt::Destructure(d) => self.print_destructure_stmt(d),
             Stmt::Switch(s) => self.print_switch_stmt(s),
             Stmt::TryCatch(t) => self.print_try_catch_stmt(t),
@@ -868,6 +869,15 @@ impl Printer {
         self.write(") ");
         self.print_block(&w.body);
         self.newline();
+    }
+
+    /// Print a do-while statement.
+    fn print_do_while_stmt(&mut self, dw: &DoWhileStmt) {
+        self.write("do ");
+        self.print_block(&dw.body);
+        self.write(" while (");
+        self.print_expr(&dw.condition);
+        self.writeln(");");
     }
 
     /// Print a destructure statement.
