@@ -108,6 +108,8 @@ pub(crate) enum TokenKind {
     Derives,
     /// `yield` (yield a value from a generator function)
     Yield,
+    /// `infer` (bind a type variable in conditional type extends clause)
+    Infer,
 
     // Operators
     /// `+`

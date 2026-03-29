@@ -639,6 +639,22 @@ pub enum TypeKind {
     /// `typeof x` in type position — resolves to the declared type of a variable.
     /// Distinct from expression-level `typeof` which returns a string at runtime.
     TypeOf(Ident),
+    /// A conditional type: `T extends U ? TrueType : FalseType`.
+    /// Resolved at compile time when all type parameters are concrete.
+    /// Lowers to the resolved branch type.
+    Conditional {
+        /// The type being checked (e.g., `T`).
+        check_type: Box<TypeAnnotation>,
+        /// The constraint type (e.g., `string`).
+        extends_type: Box<TypeAnnotation>,
+        /// The type when the check succeeds.
+        true_type: Box<TypeAnnotation>,
+        /// The type when the check fails.
+        false_type: Box<TypeAnnotation>,
+    },
+    /// `infer R` — binds a type variable during conditional type pattern matching.
+    /// Only valid inside the `extends` clause of a conditional type.
+    Infer(Ident),
 }
 
 /// An identifier with its source span.

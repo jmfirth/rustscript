@@ -393,6 +393,24 @@ impl Printer {
                 self.write("typeof ");
                 self.write(&ident.name);
             }
+            TypeKind::Conditional {
+                check_type,
+                extends_type,
+                true_type,
+                false_type,
+            } => {
+                self.print_type_annotation(check_type);
+                self.write(" extends ");
+                self.print_type_annotation(extends_type);
+                self.write(" ? ");
+                self.print_type_annotation(true_type);
+                self.write(" : ");
+                self.print_type_annotation(false_type);
+            }
+            TypeKind::Infer(ident) => {
+                self.write("infer ");
+                self.write(&ident.name);
+            }
         }
     }
 

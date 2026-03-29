@@ -852,13 +852,12 @@ impl Transform {
     /// Check whether a type alias annotation is a built-in utility type application.
     ///
     /// Returns the utility type name if recognized: `Partial`, `Required`,
-    /// `Readonly`, `Record`, `Pick`, or `Omit`.
+    /// `Readonly`, `Record`, `Pick`, `Omit`, `ReturnType`, or `Parameters`.
     fn identify_utility_type(ann: &ast::TypeAnnotation) -> Option<&str> {
         if let ast::TypeKind::Generic(ident, _) = &ann.kind {
             match ident.name.as_str() {
-                "Partial" | "Required" | "Readonly" | "Record" | "Pick" | "Omit" => {
-                    Some(&ident.name)
-                }
+                "Partial" | "Required" | "Readonly" | "Record" | "Pick" | "Omit" | "ReturnType"
+                | "Parameters" => Some(&ident.name),
                 _ => None,
             }
         } else {
@@ -891,6 +890,8 @@ impl Transform {
     ///
     /// Resolves `Partial<User>`, `Pick<User, "name">`, etc. by looking up the
     /// source type's fields and generating a transformed field list.
+    #[allow(clippy::too_many_lines)]
+    // Each utility type variant has distinct validation and transformation logic; splitting would fragment the dispatch
     fn register_utility_type_def(
         &mut self,
         td: &ast::TypeDef,
@@ -904,6 +905,14 @@ impl Transform {
 
         // Record<K, V> does not reference a source type — register as empty struct
         if utility_name == "Record" {
+            self.type_registry
+                .register(td.name.name.clone(), Vec::new());
+            return;
+        }
+
+        // ReturnType<T> and Parameters<T> extract parts of function types.
+        // They don't reference struct fields — register as empty and resolve during lowering.
+        if utility_name == "ReturnType" || utility_name == "Parameters" {
             self.type_registry
                 .register(td.name.name.clone(), Vec::new());
             return;
@@ -1011,7 +1020,9 @@ impl Transform {
     /// Lower a utility type application to a Rust struct or type alias.
     ///
     /// Handles `Partial<T>`, `Required<T>`, `Readonly<T>`, `Record<K, V>`,
-    /// `Pick<T, K>`, and `Omit<T, K>`.
+    /// `Pick<T, K>`, `Omit<T, K>`, `ReturnType<T>`, and `Parameters<T>`.
+    #[allow(clippy::too_many_lines)]
+    // Each utility type variant produces a different IR shape; splitting the dispatch would obscure the grammar
     fn lower_utility_type(
         &self,
         td: &ast::TypeDef,
@@ -1056,6 +1067,43 @@ impl Transform {
                     Box::new(RustType::Named("HashMap".to_owned())),
                     vec![key_rust, value_rust],
                 ),
+                span: Some(td.span),
+            });
+        }
+
+        // ReturnType<T> → extract function return type
+        // Parameters<T> → extract function parameter types as tuple
+        if utility_name == "ReturnType" || utility_name == "Parameters" {
+            let mut diags = Vec::new();
+            let generic_names = collect_generic_param_names(td.type_params.as_ref());
+            let arg_ty = args.first().map_or(Type::Error, |a| {
+                resolve::resolve_type_annotation_with_generics(
+                    a,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                )
+            });
+            for d in diags {
+                ctx.emit_diagnostic(d);
+            }
+
+            let result_ty = match (&arg_ty, utility_name) {
+                (Type::Function(_, ret), "ReturnType") => (**ret).clone(),
+                (Type::Function(params, _), "Parameters") => Type::Tuple(params.clone()),
+                _ => {
+                    ctx.emit_diagnostic(Diagnostic::error(format!(
+                        "`{utility_name}` requires a function type argument"
+                    )));
+                    Type::Error
+                }
+            };
+
+            let rust_ty = rsc_typeck::bridge::type_to_rust_type(&result_ty);
+            return RustItem::TypeAlias(RustTypeAlias {
+                public: false,
+                name: td.name.name.clone(),
+                ty: rust_ty,
                 span: Some(td.span),
             });
         }
@@ -2667,7 +2715,9 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::IndexSignature(_)
                         | ast::TypeKind::StringLiteral(_)
                         | ast::TypeKind::KeyOf(_)
-                        | ast::TypeKind::TypeOf(_) => vec![],
+                        | ast::TypeKind::TypeOf(_)
+                        | ast::TypeKind::Conditional { .. }
+                        | ast::TypeKind::Infer(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

@@ -162,6 +162,28 @@ pub fn resolve_type_annotation(
             // registry-aware resolution handle them.
             Type::Error
         }
+        ast::TypeKind::Conditional {
+            check_type,
+            extends_type,
+            true_type,
+            false_type,
+        } => {
+            let check = resolve_type_annotation(check_type, diagnostics);
+            let extends = resolve_type_annotation(extends_type, diagnostics);
+            if type_satisfies_constraint(&check, &extends) {
+                resolve_type_annotation(true_type, diagnostics)
+            } else {
+                resolve_type_annotation(false_type, diagnostics)
+            }
+        }
+        ast::TypeKind::Infer(_) => {
+            // infer outside a conditional type — cannot resolve
+            diagnostics.push(Diagnostic::error(
+                "`infer` is only valid inside the `extends` clause of a conditional type"
+                    .to_owned(),
+            ));
+            Type::Error
+        }
     }
 }
 
@@ -344,6 +366,352 @@ pub fn resolve_type_annotation_with_generics(
             // The lowering pass resolves typeof by looking up the variable's type.
             Type::Error
         }
+        ast::TypeKind::Conditional {
+            check_type,
+            extends_type,
+            true_type,
+            false_type,
+        } => resolve_conditional_type(
+            check_type,
+            extends_type,
+            true_type,
+            false_type,
+            registry,
+            generic_param_names,
+            diagnostics,
+        ),
+        ast::TypeKind::Infer(_) => {
+            // infer outside a conditional type — cannot resolve
+            diagnostics.push(Diagnostic::error(
+                "`infer` is only valid inside the `extends` clause of a conditional type"
+                    .to_owned(),
+            ));
+            Type::Error
+        }
+    }
+}
+
+/// Check whether `check` satisfies the `extends` constraint.
+///
+/// Simple subtype checks used for conditional type resolution:
+/// - Any type extends itself (structural equality).
+/// - Any type extends `any` (represented as a named type "any").
+/// - `never` extends everything.
+/// - `T | null` extends `T | null` if the non-null part matches.
+/// - Function types match structurally (parameter/return type matching with infer ignored).
+fn type_satisfies_constraint(check: &Type, constraint: &Type) -> bool {
+    // Same type always satisfies
+    if check == constraint {
+        return true;
+    }
+
+    // `any` matches everything
+    if let Type::Named(name) = constraint
+        && name == "any"
+    {
+        return true;
+    }
+
+    // `never` extends everything (it's the bottom type)
+    if let Type::Named(name) = check
+        && name == "never"
+    {
+        return true;
+    }
+
+    // String extends string, etc. — already handled by equality above.
+    // Check generic compatibility: Vec<T> extends Vec<U> if T extends U
+    if let (Type::Generic(name1, args1), Type::Generic(name2, args2)) = (check, constraint)
+        && name1 == name2
+        && args1.len() == args2.len()
+    {
+        return args1
+            .iter()
+            .zip(args2.iter())
+            .all(|(a, b)| type_satisfies_constraint(a, b));
+    }
+
+    // Function types: (A) -> B extends (C) -> D if args match and return matches
+    // (simplified — not full contravariance)
+    if let (Type::Function(params1, ret1), Type::Function(params2, ret2)) = (check, constraint)
+        && params1.len() == params2.len()
+    {
+        let params_match = params1
+            .iter()
+            .zip(params2.iter())
+            .all(|(a, b)| type_satisfies_constraint(a, b) || *b == Type::Error);
+        let ret_match = type_satisfies_constraint(ret1, ret2) || **ret2 == Type::Error;
+        return params_match && ret_match;
+    }
+
+    false
+}
+
+/// Try to match `check_type` against `extends_pattern`, extracting `infer` bindings.
+///
+/// Returns `Some(bindings)` if the match succeeds, where bindings maps infer
+/// variable names to their resolved types. Returns `None` if the match fails.
+fn match_with_infer(
+    check_type: &Type,
+    extends_ast: &ast::TypeAnnotation,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<std::collections::HashMap<String, Type>> {
+    let mut bindings = std::collections::HashMap::new();
+    if match_type_pattern(
+        check_type,
+        extends_ast,
+        &mut bindings,
+        registry,
+        generic_param_names,
+        diagnostics,
+    ) {
+        Some(bindings)
+    } else {
+        None
+    }
+}
+
+/// Recursively match a concrete type against an AST type pattern, binding `infer` variables.
+fn match_type_pattern(
+    concrete: &Type,
+    pattern: &ast::TypeAnnotation,
+    bindings: &mut std::collections::HashMap<String, Type>,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    match &pattern.kind {
+        ast::TypeKind::Infer(ident) => {
+            // Bind this infer variable to the concrete type
+            bindings.insert(ident.name.clone(), concrete.clone());
+            true
+        }
+        ast::TypeKind::Function(param_patterns, return_pattern) => {
+            // Match function type pattern: (...args: P) => R
+            if let Type::Function(concrete_params, concrete_ret) = concrete {
+                // Match return type
+                let ret_match = match_type_pattern(
+                    concrete_ret,
+                    return_pattern,
+                    bindings,
+                    registry,
+                    generic_param_names,
+                    diagnostics,
+                );
+                // Match parameter types (simplified: check count and each param)
+                let params_match = if param_patterns.len() == concrete_params.len() {
+                    param_patterns
+                        .iter()
+                        .zip(concrete_params.iter())
+                        .all(|(pat, conc)| {
+                            match_type_pattern(
+                                conc,
+                                pat,
+                                bindings,
+                                registry,
+                                generic_param_names,
+                                diagnostics,
+                            )
+                        })
+                } else if param_patterns.len() == 1 {
+                    // Single param pattern could match a tuple of params via `infer P`
+                    if let ast::TypeKind::Infer(ident) = &param_patterns[0].kind {
+                        bindings.insert(ident.name.clone(), Type::Tuple(concrete_params.clone()));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                ret_match && params_match
+            } else {
+                false
+            }
+        }
+        ast::TypeKind::Generic(ident, arg_patterns) => {
+            // Match generic type: Array<infer T>, etc.
+            let rust_name = map_collection_type_name(&ident.name);
+            if let Type::Generic(concrete_name, concrete_args) = concrete
+                && &rust_name == concrete_name
+                && arg_patterns.len() == concrete_args.len()
+            {
+                return arg_patterns
+                    .iter()
+                    .zip(concrete_args.iter())
+                    .all(|(pat, conc)| {
+                        match_type_pattern(
+                            conc,
+                            pat,
+                            bindings,
+                            registry,
+                            generic_param_names,
+                            diagnostics,
+                        )
+                    });
+            }
+            false
+        }
+        ast::TypeKind::Named(ident) if ident.name == "any" => {
+            // `any` matches everything in extends position
+            true
+        }
+        _ => {
+            // For non-pattern types, resolve and compare structurally
+            let resolved = resolve_type_annotation_with_generics(
+                pattern,
+                registry,
+                generic_param_names,
+                diagnostics,
+            );
+            type_satisfies_constraint(concrete, &resolved)
+        }
+    }
+}
+
+/// Resolve a conditional type with full registry and generic context.
+///
+/// Evaluates `CheckType extends ExtendsType ? TrueType : FalseType` by:
+/// 1. Checking for `infer` bindings in the extends clause
+/// 2. Performing the extends check (possibly with infer pattern matching)
+/// 3. Resolving the appropriate branch, substituting any infer bindings
+#[allow(clippy::too_many_arguments)]
+fn resolve_conditional_type(
+    check_type: &ast::TypeAnnotation,
+    extends_type: &ast::TypeAnnotation,
+    true_type: &ast::TypeAnnotation,
+    false_type: &ast::TypeAnnotation,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    let check = resolve_type_annotation_with_generics(
+        check_type,
+        registry,
+        generic_param_names,
+        diagnostics,
+    );
+
+    // If check type is still a type variable (unresolved generic), fall back to true branch
+    if let Type::TypeVar(_) = &check {
+        return resolve_type_annotation_with_generics(
+            true_type,
+            registry,
+            generic_param_names,
+            diagnostics,
+        );
+    }
+
+    // Check if extends clause contains `infer` patterns
+    let has_infer = ast_contains_infer(extends_type);
+
+    if has_infer {
+        // Try to match with infer pattern extraction
+        if let Some(bindings) = match_with_infer(
+            &check,
+            extends_type,
+            registry,
+            generic_param_names,
+            diagnostics,
+        ) {
+            // Resolve true branch, substituting infer bindings
+            resolve_type_with_infer_bindings(
+                true_type,
+                &bindings,
+                registry,
+                generic_param_names,
+                diagnostics,
+            )
+        } else {
+            // Match failed — resolve false branch
+            resolve_type_annotation_with_generics(
+                false_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            )
+        }
+    } else {
+        // No infer — simple extends check
+        let extends = resolve_type_annotation_with_generics(
+            extends_type,
+            registry,
+            generic_param_names,
+            diagnostics,
+        );
+        if type_satisfies_constraint(&check, &extends) {
+            resolve_type_annotation_with_generics(
+                true_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            )
+        } else {
+            resolve_type_annotation_with_generics(
+                false_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            )
+        }
+    }
+}
+
+/// Check whether an AST type annotation contains any `infer` nodes.
+fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
+    match &ann.kind {
+        ast::TypeKind::Infer(_) => true,
+        ast::TypeKind::Function(params, ret) => {
+            params.iter().any(ast_contains_infer) || ast_contains_infer(ret)
+        }
+        ast::TypeKind::Generic(_, args) => args.iter().any(ast_contains_infer),
+        ast::TypeKind::Union(members) | ast::TypeKind::Intersection(members) => {
+            members.iter().any(ast_contains_infer)
+        }
+        ast::TypeKind::Tuple(types) => types.iter().any(ast_contains_infer),
+        ast::TypeKind::Conditional {
+            check_type,
+            extends_type,
+            true_type,
+            false_type,
+        } => {
+            ast_contains_infer(check_type)
+                || ast_contains_infer(extends_type)
+                || ast_contains_infer(true_type)
+                || ast_contains_infer(false_type)
+        }
+        ast::TypeKind::KeyOf(inner) | ast::TypeKind::Shared(inner) => ast_contains_infer(inner),
+        ast::TypeKind::IndexSignature(sig) => {
+            ast_contains_infer(&sig.key_type) || ast_contains_infer(&sig.value_type)
+        }
+        ast::TypeKind::Named(_)
+        | ast::TypeKind::Void
+        | ast::TypeKind::Inferred
+        | ast::TypeKind::StringLiteral(_)
+        | ast::TypeKind::TypeOf(_) => false,
+    }
+}
+
+/// Resolve a type annotation, substituting any `infer` variable references
+/// with their bound values from the bindings map.
+fn resolve_type_with_infer_bindings(
+    ann: &ast::TypeAnnotation,
+    bindings: &std::collections::HashMap<String, Type>,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    match &ann.kind {
+        // If this is a named type that matches an infer binding, use the binding
+        ast::TypeKind::Named(ident) if bindings.contains_key(&ident.name) => {
+            bindings[&ident.name].clone()
+        }
+        // For `infer R` in the result position, look up the binding
+        ast::TypeKind::Infer(ident) => bindings.get(&ident.name).cloned().unwrap_or(Type::Error),
+        // For all other types, resolve normally
+        _ => resolve_type_annotation_with_generics(ann, registry, generic_param_names, diagnostics),
     }
 }
 
@@ -902,5 +1270,140 @@ mod tests {
         let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
         // typeof requires variable scope info — returns Error even with registry
         assert_eq!(ty, Type::Error);
+    }
+
+    // ---- Conditional types ----
+
+    #[test]
+    fn test_resolve_conditional_true_branch_same_type() {
+        // string extends string ? bool : i32 → bool
+        let ann = TypeAnnotation {
+            kind: TypeKind::Conditional {
+                check_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 0, 6)),
+                    span: span(0, 6),
+                }),
+                extends_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 15, 21)),
+                    span: span(15, 21),
+                }),
+                true_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("bool", 24, 28)),
+                    span: span(24, 28),
+                }),
+                false_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 31, 34)),
+                    span: span(31, 34),
+                }),
+            },
+            span: span(0, 34),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Primitive(PrimitiveType::Bool));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_conditional_false_branch_different_type() {
+        // i32 extends string ? bool : f64 → f64
+        let ann = TypeAnnotation {
+            kind: TypeKind::Conditional {
+                check_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                extends_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 12, 18)),
+                    span: span(12, 18),
+                }),
+                true_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("bool", 21, 25)),
+                    span: span(21, 25),
+                }),
+                false_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("f64", 28, 31)),
+                    span: span(28, 31),
+                }),
+            },
+            span: span(0, 31),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Primitive(PrimitiveType::F64));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_type_satisfies_constraint_same_type() {
+        assert!(type_satisfies_constraint(&Type::String, &Type::String));
+    }
+
+    #[test]
+    fn test_type_satisfies_constraint_any_matches_all() {
+        assert!(type_satisfies_constraint(
+            &Type::Primitive(PrimitiveType::I32),
+            &Type::Named("any".to_owned())
+        ));
+    }
+
+    #[test]
+    fn test_type_satisfies_constraint_different_types() {
+        assert!(!type_satisfies_constraint(
+            &Type::Primitive(PrimitiveType::I32),
+            &Type::String
+        ));
+    }
+
+    #[test]
+    fn test_type_satisfies_constraint_never_extends_all() {
+        assert!(type_satisfies_constraint(
+            &Type::Named("never".to_owned()),
+            &Type::String
+        ));
+    }
+
+    #[test]
+    fn test_resolve_infer_outside_conditional_emits_diagnostic() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Infer(ident("R", 6, 7)),
+            span: span(0, 7),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Error);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("infer"));
+    }
+
+    #[test]
+    fn test_resolve_conditional_with_registry() {
+        // i32 extends i32 ? string : bool → string
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::Conditional {
+                check_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 0, 3)),
+                    span: span(0, 3),
+                }),
+                extends_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("i32", 12, 15)),
+                    span: span(12, 15),
+                }),
+                true_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 18, 24)),
+                    span: span(18, 24),
+                }),
+                false_type: Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("bool", 27, 31)),
+                    span: span(27, 31),
+                }),
+            },
+            span: span(0, 31),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert_eq!(ty, Type::String);
+        assert!(diags.is_empty());
     }
 }

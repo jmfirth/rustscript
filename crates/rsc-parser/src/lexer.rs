@@ -841,6 +841,7 @@ impl<'a> Lexer<'a> {
             "rust" => TokenKind::Rust,
             "derives" => TokenKind::Derives,
             "yield" => TokenKind::Yield,
+            "infer" => TokenKind::Infer,
             "as" => TokenKind::As,
             "typeof" => TokenKind::TypeOf,
             "keyof" => TokenKind::KeyOf,

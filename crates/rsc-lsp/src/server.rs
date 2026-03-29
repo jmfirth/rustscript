@@ -1141,6 +1141,19 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         TypeKind::StringLiteral(value) => format!("\"{value}\""),
         TypeKind::KeyOf(inner) => format!("keyof {}", format_type(inner)),
         TypeKind::TypeOf(ident) => format!("typeof {}", ident.name),
+        TypeKind::Conditional {
+            check_type,
+            extends_type,
+            true_type,
+            false_type,
+        } => format!(
+            "{} extends {} ? {} : {}",
+            format_type(check_type),
+            format_type(extends_type),
+            format_type(true_type),
+            format_type(false_type)
+        ),
+        TypeKind::Infer(ident) => format!("infer {}", ident.name),
     }
 }
 

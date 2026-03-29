@@ -298,6 +298,7 @@ impl<'src> Parser<'src> {
             TokenKind::Abstract => "`abstract`",
             TokenKind::Override => "`override`",
             TokenKind::Satisfies => "`satisfies`",
+            TokenKind::Infer => "`infer`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -1811,11 +1812,28 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a type annotation: `void`, a named type, a generic type, a union type,
-    /// or an intersection type.
+    /// an intersection type, or a conditional type.
     ///
     /// Handles `void`, `i32`, `Container<T>`, `Map<string, u32>`, `T | null`,
-    /// `Serializable & Printable`, etc.
+    /// `Serializable & Printable`, `T extends U ? A : B`, etc.
     fn parse_type_annotation(&mut self) -> Option<TypeAnnotation> {
+        let base = self.parse_non_conditional_type()?;
+
+        // Check for conditional type: `T extends U ? TrueType : FalseType`
+        // Conditional types bind loosely — they wrap function types and unions.
+        if self.check(&TokenKind::Extends) {
+            return self.parse_conditional_type(base);
+        }
+
+        Some(base)
+    }
+
+    /// Parse a type annotation that is NOT a conditional type.
+    ///
+    /// Used for positions where conditional types should not be consumed
+    /// (e.g., function return types, generic arguments). This prevents
+    /// `(A) => B extends C ? D : E` from being parsed as `(A) => (B extends C ? D : E)`.
+    fn parse_non_conditional_type(&mut self) -> Option<TypeAnnotation> {
         let base = self.parse_base_type_annotation()?;
 
         // Check for union type: `T | null`
@@ -1853,6 +1871,31 @@ impl<'src> Parser<'src> {
         }
 
         Some(base)
+    }
+
+    /// Parse a conditional type after the check type has been parsed.
+    ///
+    /// Called when `extends` is the next token. Parses the constraint type,
+    /// `?`, true branch, `:`, and false branch.
+    /// Syntax: `CheckType extends ConstraintType ? TrueType : FalseType`
+    fn parse_conditional_type(&mut self, check_type: TypeAnnotation) -> Option<TypeAnnotation> {
+        let start_span = check_type.span;
+        self.advance(); // consume `extends`
+        let extends_type = self.parse_base_type_annotation()?;
+        self.expect(&TokenKind::Question)?;
+        let true_type = self.parse_type_annotation()?;
+        self.expect(&TokenKind::Colon)?;
+        let false_type = self.parse_type_annotation()?;
+        let span = start_span.merge(false_type.span);
+        Some(TypeAnnotation {
+            kind: TypeKind::Conditional {
+                check_type: Box::new(check_type),
+                extends_type: Box::new(extends_type),
+                true_type: Box::new(true_type),
+                false_type: Box::new(false_type),
+            },
+            span,
+        })
     }
 
     /// Parse a base (non-union) type annotation: `void`, named, generic, `null`, or function type.
@@ -2012,6 +2055,17 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+            TokenKind::Infer => {
+                // infer R — bind a type variable in a conditional type extends clause
+                let start = token.span;
+                self.advance(); // consume `infer`
+                let ident = self.parse_ident()?;
+                let span = start.merge(ident.span);
+                Some(TypeAnnotation {
+                    kind: TypeKind::Infer(ident),
+                    span,
+                })
+            }
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error(format!(
@@ -2051,7 +2105,9 @@ impl<'src> Parser<'src> {
 
         self.expect(&TokenKind::RParen)?;
         self.expect(&TokenKind::FatArrow)?;
-        let return_type = self.parse_type_annotation()?;
+        // Use non-conditional parse so `(A) => B extends C ? D : E`
+        // is parsed as `((A) => B) extends C ? D : E`, not `(A) => (B extends ...)`
+        let return_type = self.parse_non_conditional_type()?;
         let span = start.merge(return_type.span);
 
         Some(TypeAnnotation {
@@ -9095,6 +9151,83 @@ type Shape =
                 assert_eq!(ident.name, "config");
             }
             _ => panic!("expected TypeOf, got: {:?}", f.params[0].type_ann.kind),
+        }
+    }
+
+    // ---- Conditional types and infer ----
+
+    #[test]
+    fn test_parser_conditional_type_simple() {
+        let source = "type X = string extends string ? bool : i32";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Conditional {
+                check_type,
+                extends_type,
+                true_type,
+                false_type,
+            } => {
+                assert!(matches!(&check_type.kind, TypeKind::Named(i) if i.name == "string"));
+                assert!(matches!(&extends_type.kind, TypeKind::Named(i) if i.name == "string"));
+                assert!(matches!(&true_type.kind, TypeKind::Named(i) if i.name == "bool"));
+                assert!(matches!(&false_type.kind, TypeKind::Named(i) if i.name == "i32"));
+            }
+            other => panic!("expected Conditional, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_conditional_type_with_infer() {
+        let source = "type X = (i32) => bool extends (i32) => infer R ? R : string";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Conditional {
+                check_type,
+                extends_type,
+                true_type,
+                false_type,
+            } => {
+                // Check type should be a function type
+                assert!(matches!(&check_type.kind, TypeKind::Function(_, _)));
+                // Extends type should be a function type with infer in return position
+                match &extends_type.kind {
+                    TypeKind::Function(_, ret) => {
+                        assert!(matches!(&ret.kind, TypeKind::Infer(i) if i.name == "R"));
+                    }
+                    other => panic!("expected Function extends type, got: {other:?}"),
+                }
+                // True type references the inferred variable
+                assert!(matches!(&true_type.kind, TypeKind::Named(i) if i.name == "R"));
+                // False type
+                assert!(matches!(&false_type.kind, TypeKind::Named(i) if i.name == "string"));
+            }
+            other => panic!("expected Conditional, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_infer_keyword_in_type_position() {
+        let source = "type X = i32 extends infer T ? T : string";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Conditional { extends_type, .. } => {
+                assert!(matches!(&extends_type.kind, TypeKind::Infer(i) if i.name == "T"));
+            }
+            other => panic!("expected Conditional, got: {other:?}"),
         }
     }
 }
