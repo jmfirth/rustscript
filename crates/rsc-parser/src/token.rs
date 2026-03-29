@@ -106,6 +106,8 @@ pub(crate) enum TokenKind {
     Rust,
     /// `derives` (explicit derive macros on types, enums, and classes)
     Derives,
+    /// `yield` (yield a value from a generator function)
+    Yield,
 
     // Operators
     /// `+`

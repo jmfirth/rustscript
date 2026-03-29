@@ -574,6 +574,16 @@ impl Transform {
                     )
                 }
             }
+            ast::ExprKind::Yield(_) => {
+                // Yield expressions are handled at the function level during generator
+                // lowering (state machine transformation). If we reach here, it means
+                // yield appeared in a non-generator context — emit a placeholder that
+                // will produce a clear compile error in the generated Rust.
+                RustExpr::new(
+                    RustExprKind::Ident("compile_error!(\"yield outside generator\")".to_owned()),
+                    expr.span,
+                )
+            }
         }
     }
 
@@ -595,6 +605,23 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Check for generator function calls — rewrite to StructName::new(args)
+        if let Some(struct_name) = self.generator_structs.get(&call.callee.name) {
+            let args: Vec<RustExpr> = call
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: struct_name.clone(),
+                    method: "new".to_owned(),
+                    args,
+                },
+                span,
+            );
+        }
+
         // Check for builtin free functions (e.g., `spawn`)
         if let Some(lowering_fn) = self.builtins.lookup_function(&call.callee.name).copied() {
             let lowered_args: Vec<RustExpr> = call

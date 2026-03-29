@@ -593,7 +593,8 @@ impl UseMap {
             | ast::ExprKind::SpreadArg(inner)
             | ast::ExprKind::NonNullAssert(inner)
             | ast::ExprKind::TypeOf(inner)
-            | ast::ExprKind::Cast(inner, _) => {
+            | ast::ExprKind::Cast(inner, _)
+            | ast::ExprKind::Yield(inner) => {
                 Self::collect_expr_uses(
                     inner,
                     stmt_index,
@@ -1260,7 +1261,8 @@ fn collect_param_usage_expr(
         | ast::ExprKind::NonNullAssert(inner)
         | ast::ExprKind::TypeOf(inner)
         | ast::ExprKind::Cast(inner, _)
-        | ast::ExprKind::Satisfies(inner, _) => {
+        | ast::ExprKind::Satisfies(inner, _)
+        | ast::ExprKind::Yield(inner) => {
             collect_param_usage_expr(inner, param_set, is_ref_call, result);
         }
         ast::ExprKind::LogicalAssign(la) => {
@@ -1397,7 +1399,8 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::NonNullAssert(inner)
         | ast::ExprKind::TypeOf(inner)
         | ast::ExprKind::Cast(inner, _)
-        | ast::ExprKind::Satisfies(inner, _) => {
+        | ast::ExprKind::Satisfies(inner, _)
+        | ast::ExprKind::Yield(inner) => {
             collect_idents_in_expr(inner, names);
         }
         ast::ExprKind::LogicalAssign(la) => {

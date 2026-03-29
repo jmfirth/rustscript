@@ -578,7 +578,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::EnumVariant { .. }
         | RustExprKind::None
         | RustExprKind::SelfRef
-        | RustExprKind::SelfFieldAccess { .. } => {}
+        | RustExprKind::SelfFieldAccess { .. }
+        | RustExprKind::Raw(_) => {}
         RustExprKind::UnwrapOr { expr, default } => {
             scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             scan_expr_for_collections(default, needs_hashmap, needs_hashset);

@@ -308,15 +308,18 @@ pub struct RustImplBlock {
 
 /// A trait impl block: `impl TraitName for TypeName { ... }`.
 ///
-/// Produced by lowering a class that `implements` an interface.
+/// Produced by lowering a class that `implements` an interface,
+/// or by lowering a generator function into an `Iterator` impl.
 #[derive(Debug, Clone)]
 pub struct RustTraitImplBlock {
-    /// The trait name (e.g., `Describable`).
+    /// The trait name (e.g., `Describable`, `Iterator`).
     pub trait_name: String,
-    /// The implementing type name (e.g., `User`).
+    /// The implementing type name (e.g., `User`, `RangeIter`).
     pub type_name: String,
     /// Generic type parameters on the impl block.
     pub type_params: Vec<RustTypeParam>,
+    /// Associated types in the trait impl (e.g., `type Item = i32;`).
+    pub associated_types: Vec<(String, RustType)>,
     /// The methods implementing the trait.
     pub methods: Vec<RustMethod>,
     /// The source span, if derived from source.
@@ -1221,6 +1224,9 @@ pub enum RustExprKind {
         /// The field index (0-based).
         index: usize,
     },
+    /// Raw Rust code emitted verbatim.
+    /// Used for generator state machine bodies and other compiler-generated code.
+    Raw(String),
 }
 
 /// A single intermediate iterator operation in a chain.

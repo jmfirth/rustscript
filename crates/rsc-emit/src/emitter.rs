@@ -538,6 +538,19 @@ impl Emitter {
         self.writeln(" {");
         self.push_indent();
 
+        // Emit associated types (e.g., `type Item = i32;`)
+        for (name, ty) in &ti.associated_types {
+            self.write_indent();
+            self.write("type ");
+            self.write(name);
+            self.write(" = ");
+            self.write(&ty.to_string());
+            self.writeln(";");
+        }
+        if !ti.associated_types.is_empty() && !ti.methods.is_empty() {
+            self.newline();
+        }
+
         for (i, method) in ti.methods.iter().enumerate() {
             if i > 0 {
                 self.newline();
@@ -1588,6 +1601,9 @@ impl Emitter {
             RustExprKind::TupleField { object, index } => {
                 self.emit_expr(object);
                 self.write(&format!(".{index}"));
+            }
+            RustExprKind::Raw(code) => {
+                self.write(code);
             }
         }
     }
@@ -4400,6 +4416,7 @@ fn main() {
                 trait_name: "Describable".to_owned(),
                 type_name: "User".to_owned(),
                 type_params: vec![],
+                associated_types: vec![],
                 methods: vec![RustMethod {
                     is_async: false,
                     name: "describe".to_owned(),

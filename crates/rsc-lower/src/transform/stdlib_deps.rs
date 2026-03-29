@@ -184,6 +184,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("main"),
                     type_params: None,
                     params: vec![],

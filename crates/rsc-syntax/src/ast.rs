@@ -200,10 +200,15 @@ pub struct ReturnTypeAnnotation {
 /// Corresponds to `RustScript` `function name<T>(params): ReturnType { body }`.
 /// Lowers to a Rust `fn` item. Generic type parameters are optional.
 /// `async function` declarations lower to `async fn` in Rust.
+/// `function*` declarations lower to a state machine struct implementing `Iterator`.
 #[derive(Debug, Clone)]
 pub struct FnDecl {
     /// Whether this is an `async function`.
     pub is_async: bool,
+    /// Whether this is a generator function (`function*`).
+    /// Generator functions use `yield` to produce values and lower to
+    /// a state machine struct that implements `Iterator`.
+    pub is_generator: bool,
     /// The function name.
     pub name: Ident,
     /// Optional generic type parameters: `<T, U extends Clone>`.
@@ -1043,6 +1048,10 @@ pub enum ExprKind {
     /// For `HashMap` types, lowers to `obj.insert(key, value)`.
     /// For other types, lowers to standard Rust index assignment.
     IndexAssign(IndexAssignExpr),
+    /// A `yield` expression: `yield expr`.
+    /// Only valid inside generator functions (`function*`).
+    /// Lowers to a state transition in the generated Iterator state machine.
+    Yield(Box<Expr>),
 }
 
 /// Logical assignment operators.
@@ -1440,6 +1449,7 @@ mod tests {
     fn test_fn_decl_with_two_params_field_access() {
         let decl = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("add", 0, 3),
             type_params: None,
             params: vec![

@@ -20,10 +20,11 @@ use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
 use rsc_syntax::rust_ir::{
-    ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
-    RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustItem,
-    RustParam, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeAlias,
-    RustTypeParam, RustUnaryOp, RustUseDecl,
+    ParamMode, RustAttribute, RustBinaryOp, RustBlock, RustCompoundAssignOp, RustConstItem,
+    RustEnumDef, RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl,
+    RustImplBlock, RustItem, RustMethod, RustParam, RustSelfParam, RustStmt, RustStructDef,
+    RustTraitDef, RustTraitImplBlock, RustTraitMethod, RustType, RustTypeAlias, RustTypeParam,
+    RustUnaryOp, RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -160,6 +161,9 @@ pub(crate) struct Transform {
     /// External function signatures from rustdoc JSON, keyed by
     /// `"crate::function"` or `"crate::Type::method"`.
     external_signatures: HashMap<String, ExternalFnInfo>,
+    /// Map from generator function name to its iterator struct name.
+    /// Used to rewrite call sites: `range(0, 5)` → `RangeIter::new(0, 5)`.
+    generator_structs: HashMap<String, String>,
 }
 
 impl Transform {
@@ -175,6 +179,7 @@ impl Transform {
             imported_types: HashSet::new(),
             extended_classes: HashSet::new(),
             external_signatures: HashMap::new(),
+            generator_structs: HashMap::new(),
         }
     }
 
@@ -390,6 +395,17 @@ impl Transform {
             }
         }
 
+        // Pre-pass: register generator functions so call sites can be rewritten
+        for item in &module.items {
+            if let ast::ItemKind::Function(f) = &item.kind
+                && f.is_generator
+            {
+                let struct_name = generator_struct_name(&f.name.name);
+                self.generator_structs
+                    .insert(f.name.name.clone(), struct_name);
+            }
+        }
+
         // Pre-pass: collect function signatures for throws detection
         for item in &module.items {
             if let ast::ItemKind::Function(f) = &item.kind {
@@ -415,12 +431,17 @@ impl Transform {
             let exported = item.exported;
             match &item.kind {
                 ast::ItemKind::Function(f) => {
-                    if f.is_async {
-                        needs_async_runtime = true;
+                    if f.is_generator {
+                        let gen_items = self.lower_generator(f, &mut ctx, exported);
+                        items.extend(gen_items);
+                    } else {
+                        if f.is_async {
+                            needs_async_runtime = true;
+                        }
+                        let mut lowered = self.lower_fn(f, &mut ctx);
+                        lowered.public = exported;
+                        items.push(RustItem::Function(lowered));
                     }
-                    let mut lowered = self.lower_fn(f, &mut ctx);
-                    lowered.public = exported;
-                    items.push(RustItem::Function(lowered));
                 }
                 ast::ItemKind::TypeDef(td) => {
                     // Utility type alias: type X = Partial<Y>, Record<K,V>, etc.
@@ -1881,6 +1902,691 @@ impl Transform {
             span: Some(f.span),
         }
     }
+
+    /// Lower a generator function (`function*`) to a state machine struct + Iterator impl.
+    ///
+    /// Produces:
+    /// 1. A struct with fields for parameters, local variables, and `_state: u32`
+    /// 2. An `impl StructName` block with `fn new(params) -> Self`
+    /// 3. An `impl Iterator for StructName` block with `type Item` and `fn next(&mut self)`
+    #[allow(clippy::too_many_lines)]
+    // Generator lowering builds three IR items (struct, impl, trait impl); splitting would fragment the logic
+    fn lower_generator(
+        &self,
+        f: &ast::FnDecl,
+        ctx: &mut LoweringContext,
+        exported: bool,
+    ) -> Vec<RustItem> {
+        let struct_name = generator_struct_name(&f.name.name);
+        let mut items = Vec::new();
+
+        // Determine the yield type from the return type annotation
+        let mut diags = Vec::new();
+        let yield_type = f
+            .return_type
+            .as_ref()
+            .and_then(|rt| rt.type_ann.as_ref())
+            .map_or(RustType::Unit, |ta| {
+                resolve::resolve_type_annotation_to_rust_type(ta, &mut diags)
+            });
+
+        // Collect parameter names and types
+        let param_fields: Vec<(String, RustType)> = f
+            .params
+            .iter()
+            .map(|p| {
+                let ty = resolve::resolve_type_annotation_to_rust_type(&p.type_ann, &mut diags);
+                (p.name.name.clone(), ty)
+            })
+            .collect();
+
+        // Collect local variable names used across yield points
+        let local_vars = collect_generator_locals(&f.body, &param_fields);
+
+        // Build struct fields: params + locals + _state
+        let mut fields: Vec<RustFieldDef> = Vec::new();
+        for (name, ty) in &param_fields {
+            fields.push(RustFieldDef {
+                public: false,
+                name: name.clone(),
+                ty: ty.clone(),
+                doc_comment: None,
+                span: Some(f.span),
+            });
+        }
+        for (name, ty) in &local_vars {
+            fields.push(RustFieldDef {
+                public: false,
+                name: name.clone(),
+                ty: ty.clone(),
+                doc_comment: None,
+                span: Some(f.span),
+            });
+        }
+        fields.push(RustFieldDef {
+            public: false,
+            name: "_state".to_owned(),
+            ty: RustType::U32,
+            doc_comment: None,
+            span: None,
+        });
+
+        // Emit the struct definition
+        items.push(RustItem::Struct(RustStructDef {
+            public: exported,
+            name: struct_name.clone(),
+            type_params: vec![],
+            fields,
+            derives: vec![],
+            doc_comment: f.doc_comment.clone(),
+            span: Some(f.span),
+        }));
+
+        // Build the `new` constructor: fn new(params) -> Self
+        let new_params: Vec<RustParam> = param_fields
+            .iter()
+            .map(|(name, ty)| RustParam {
+                name: name.clone(),
+                ty: ty.clone(),
+                mode: ParamMode::Owned,
+                span: Some(f.span),
+            })
+            .collect();
+
+        // Build struct literal fields for `new`
+        let mut new_field_inits = String::new();
+        for (name, _) in &param_fields {
+            if !new_field_inits.is_empty() {
+                new_field_inits.push_str(", ");
+            }
+            new_field_inits.push_str(name);
+        }
+        for (name, ty) in &local_vars {
+            if !new_field_inits.is_empty() {
+                new_field_inits.push_str(", ");
+            }
+            new_field_inits.push_str(name);
+            new_field_inits.push_str(": ");
+            new_field_inits.push_str(&default_value_for_type(ty));
+        }
+        if !new_field_inits.is_empty() {
+            new_field_inits.push_str(", ");
+        }
+        new_field_inits.push_str("_state: 0");
+
+        let new_body_code = format!("Self {{ {new_field_inits} }}");
+        let new_body = RustBlock {
+            stmts: vec![],
+            expr: Some(Box::new(RustExpr::synthetic(RustExprKind::Raw(
+                new_body_code,
+            )))),
+        };
+
+        let new_method = RustMethod {
+            is_async: false,
+            name: "new".to_owned(),
+            self_param: None,
+            params: new_params,
+            return_type: Some(RustType::Named("Self".to_owned())),
+            body: new_body,
+            doc_comment: None,
+            span: Some(f.span),
+        };
+
+        items.push(RustItem::Impl(RustImplBlock {
+            type_name: struct_name.clone(),
+            type_params: vec![],
+            associated_consts: vec![],
+            methods: vec![new_method],
+            span: Some(f.span),
+        }));
+
+        // Build the state machine body for `fn next(&mut self) -> Option<Item>`
+        let next_body_code = build_state_machine_body(f, ctx, self, &yield_type);
+        let next_body = RustBlock {
+            stmts: vec![],
+            expr: Some(Box::new(RustExpr::synthetic(RustExprKind::Raw(
+                next_body_code,
+            )))),
+        };
+
+        let next_method = RustMethod {
+            is_async: false,
+            name: "next".to_owned(),
+            self_param: Some(RustSelfParam::RefMut),
+            params: vec![],
+            return_type: Some(RustType::Option(Box::new(yield_type.clone()))),
+            body: next_body,
+            doc_comment: None,
+            span: Some(f.span),
+        };
+
+        items.push(RustItem::TraitImpl(RustTraitImplBlock {
+            trait_name: "Iterator".to_owned(),
+            type_name: struct_name,
+            type_params: vec![],
+            associated_types: vec![("Item".to_owned(), yield_type)],
+            methods: vec![next_method],
+            span: Some(f.span),
+        }));
+
+        items
+    }
+}
+
+/// Generate the struct name for a generator function.
+///
+/// Capitalizes the first letter and appends `Iter`:
+/// `range` → `RangeIter`, `fibonacci` → `FibonacciIter`.
+fn generator_struct_name(fn_name: &str) -> String {
+    let mut chars = fn_name.chars();
+    let first = chars
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    format!("{first}{}Iter", chars.as_str())
+}
+
+/// Collect local variable declarations from a generator function body.
+///
+/// Scans the body for `let`/`const` declarations and returns their names
+/// with resolved types. These become fields in the state machine struct.
+fn collect_generator_locals(
+    body: &ast::Block,
+    params: &[(String, RustType)],
+) -> Vec<(String, RustType)> {
+    let param_names: HashSet<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+    let mut locals = Vec::new();
+    collect_locals_from_stmts(&body.stmts, &param_names, params, &mut locals);
+    locals
+}
+
+/// Recursively collect local variables from statements.
+fn collect_locals_from_stmts(
+    stmts: &[ast::Stmt],
+    param_names: &HashSet<&str>,
+    params: &[(String, RustType)],
+    locals: &mut Vec<(String, RustType)>,
+) {
+    for stmt in stmts {
+        match stmt {
+            ast::Stmt::VarDecl(vd) => {
+                if !param_names.contains(vd.name.name.as_str())
+                    && !locals.iter().any(|(n, _)| n == &vd.name.name)
+                {
+                    let ty = if let Some(ta) = vd.type_ann.as_ref() {
+                        let mut diags = Vec::new();
+                        resolve::resolve_type_annotation_to_rust_type(ta, &mut diags)
+                    } else {
+                        // Infer type from initializer: if init is an identifier,
+                        // look up its type from params or existing locals
+                        infer_generator_local_type(&vd.init, params, locals)
+                    };
+                    locals.push((vd.name.name.clone(), ty));
+                }
+            }
+            ast::Stmt::While(w) => {
+                collect_locals_from_stmts(&w.body.stmts, param_names, params, locals);
+            }
+            ast::Stmt::If(if_stmt) => {
+                collect_locals_from_stmts(&if_stmt.then_block.stmts, param_names, params, locals);
+                if let Some(ast::ElseClause::Block(ref blk)) = if_stmt.else_clause {
+                    collect_locals_from_stmts(&blk.stmts, param_names, params, locals);
+                }
+            }
+            ast::Stmt::For(for_of) => {
+                collect_locals_from_stmts(&for_of.body.stmts, param_names, params, locals);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Infer the type of a generator local variable from its initializer expression.
+fn infer_generator_local_type(
+    init: &ast::Expr,
+    params: &[(String, RustType)],
+    locals: &[(String, RustType)],
+) -> RustType {
+    match &init.kind {
+        ast::ExprKind::Ident(ident) => {
+            // Look up in params first, then locals
+            if let Some((_, ty)) = params.iter().find(|(n, _)| n == &ident.name) {
+                return ty.clone();
+            }
+            if let Some((_, ty)) = locals.iter().find(|(n, _)| n == &ident.name) {
+                return ty.clone();
+            }
+            RustType::I32
+        }
+        ast::ExprKind::FloatLit(_) => RustType::F64,
+        ast::ExprKind::BoolLit(_) => RustType::Bool,
+        ast::ExprKind::StringLit(_) => RustType::String,
+        _ => RustType::I32,
+    }
+}
+
+/// Get a default value literal for a given type (used in generator `new()` constructors).
+fn default_value_for_type(ty: &RustType) -> String {
+    match ty {
+        RustType::I8
+        | RustType::I16
+        | RustType::I32
+        | RustType::I64
+        | RustType::U8
+        | RustType::U16
+        | RustType::U32
+        | RustType::U64 => "0".to_owned(),
+        RustType::F32 | RustType::F64 => "0.0".to_owned(),
+        RustType::Bool => "false".to_owned(),
+        RustType::String => "String::new()".to_owned(),
+        RustType::Unit => "()".to_owned(),
+        _ => "Default::default()".to_owned(),
+    }
+}
+
+/// Build the state machine body for a generator's `next()` method.
+///
+/// Analyzes the generator function body and transforms it into a `loop { match self._state { ... } }`
+/// state machine. Handles the MVP case of a single while loop with yield inside.
+fn build_state_machine_body(
+    f: &ast::FnDecl,
+    _ctx: &mut LoweringContext,
+    transform: &Transform,
+    _yield_type: &RustType,
+) -> String {
+    // Analyze the body to find yield points and build state transitions.
+    // MVP handles two patterns:
+    // 1. Single while loop with yield inside
+    // 2. Sequential statements with yields
+
+    let states = analyze_generator_body(&f.body.stmts, transform);
+    format_state_machine(&states)
+}
+
+/// A state in the generator state machine.
+struct GeneratorState {
+    /// The state number.
+    index: u32,
+    /// The Rust code for this state's body.
+    code: String,
+}
+
+/// Analyze generator body statements and produce state machine states.
+fn analyze_generator_body(stmts: &[ast::Stmt], transform: &Transform) -> Vec<GeneratorState> {
+    // Check for the common pattern: while loop with yield inside
+    if has_while_with_yield(stmts) {
+        return analyze_while_yield_pattern(stmts, transform);
+    }
+
+    // Fallback: sequential yields
+    analyze_sequential_pattern(stmts, transform)
+}
+
+/// Check if any statement is a while loop containing a yield.
+fn has_while_with_yield(stmts: &[ast::Stmt]) -> bool {
+    for stmt in stmts {
+        if let ast::Stmt::While(w) = stmt
+            && body_contains_yield(&w.body)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a block contains a yield expression.
+fn body_contains_yield(body: &ast::Block) -> bool {
+    for stmt in &body.stmts {
+        if stmt_contains_yield(stmt) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a statement contains a yield expression.
+fn stmt_contains_yield(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Expr(expr) => expr_contains_yield(expr),
+        ast::Stmt::If(if_stmt) => {
+            body_contains_yield(&if_stmt.then_block)
+                || if_stmt.else_clause.as_ref().is_some_and(|ec| match ec {
+                    ast::ElseClause::Block(blk) => body_contains_yield(blk),
+                    ast::ElseClause::ElseIf(elif) => body_contains_yield(&elif.then_block),
+                })
+        }
+        ast::Stmt::While(w) => body_contains_yield(&w.body),
+        _ => false,
+    }
+}
+
+/// Check if an expression contains a yield.
+fn expr_contains_yield(expr: &ast::Expr) -> bool {
+    matches!(expr.kind, ast::ExprKind::Yield(_))
+}
+
+/// Analyze the common pattern: init statements + while loop with yield.
+///
+/// Pattern:
+/// ```text
+/// let i = start;         // init statements (state 0 preamble)
+/// while (i < end) {      // condition check
+///   yield i;             // yield → return Some(i), go to state 1
+///   i += 1;              // post-yield code (state 1)
+/// }
+/// ```
+#[allow(clippy::too_many_lines)]
+// State machine construction for while-yield pattern; splitting would fragment coherent logic
+fn analyze_while_yield_pattern(stmts: &[ast::Stmt], transform: &Transform) -> Vec<GeneratorState> {
+    let mut states = Vec::new();
+    let mut pre_while_code = String::new();
+    let mut while_found = false;
+
+    for stmt in stmts {
+        if let ast::Stmt::While(w) = stmt
+            && body_contains_yield(&w.body)
+        {
+            while_found = true;
+            let condition = emit_expr_to_string(&w.condition, transform);
+
+            // Split while body at yield points
+            let mut pre_yield = Vec::new();
+            let mut yielded = String::new();
+            let mut post_yield = Vec::new();
+            let mut found_yield = false;
+
+            for body_stmt in &w.body.stmts {
+                if found_yield {
+                    post_yield.push(body_stmt);
+                } else if let ast::Stmt::Expr(expr) = body_stmt
+                    && let ast::ExprKind::Yield(ref inner) = expr.kind
+                {
+                    yielded = emit_expr_to_string(inner, transform);
+                    found_yield = true;
+                } else {
+                    pre_yield.push(body_stmt);
+                }
+            }
+
+            let pre_yield_code = pre_yield
+                .iter()
+                .map(|s| emit_stmt_to_string(s, transform))
+                .collect::<Vec<_>>()
+                .join("\n                        ");
+
+            let pre_code = if pre_yield_code.is_empty() {
+                String::new()
+            } else {
+                format!("{pre_yield_code}\n                        ")
+            };
+
+            let yield_body = format!(
+                "if {condition} {{\n                        \
+                 {pre_code}self._state = 1;\n                        \
+                 return Some({yielded});\n                    \
+                 }} else {{\n                        \
+                 return None;\n                    \
+                 }}"
+            );
+
+            if pre_while_code.is_empty() {
+                // No init code — condition is state 0 directly
+                states.push(GeneratorState {
+                    index: 0,
+                    code: yield_body,
+                });
+                push_post_yield_state(&mut states, 1, 0, &post_yield, transform);
+            } else {
+                // Init code in state 0, condition in state 1
+                states.push(GeneratorState {
+                    index: 0,
+                    code: format!(
+                        "{pre_while_code}\n                        \
+                         self._state = 1;\n                        \
+                         continue;"
+                    ),
+                });
+                states.push(GeneratorState {
+                    index: 1,
+                    code: yield_body.replace("self._state = 1", "self._state = 2"),
+                });
+                push_post_yield_state(&mut states, 2, 1, &post_yield, transform);
+            }
+
+            continue;
+        }
+
+        if !while_found {
+            let code = emit_stmt_to_string(stmt, transform);
+            if !pre_while_code.is_empty() {
+                pre_while_code.push_str("\n                        ");
+            }
+            pre_while_code.push_str(&code);
+        }
+    }
+
+    if states.is_empty() {
+        states.push(GeneratorState {
+            index: 0,
+            code: "return None;".to_owned(),
+        });
+    }
+
+    states
+}
+
+/// Push a post-yield state that executes code then transitions back to loop start.
+fn push_post_yield_state(
+    states: &mut Vec<GeneratorState>,
+    state_idx: u32,
+    loop_state: u32,
+    post_yield: &[&ast::Stmt],
+    transform: &Transform,
+) {
+    let post_code = post_yield
+        .iter()
+        .map(|s| emit_stmt_to_string(s, transform))
+        .collect::<Vec<_>>()
+        .join("\n                        ");
+
+    let code = if post_code.is_empty() {
+        format!("self._state = {loop_state};\n                        continue;")
+    } else {
+        format!(
+            "{post_code}\n                        \
+             self._state = {loop_state};\n                        \
+             continue;"
+        )
+    };
+
+    states.push(GeneratorState {
+        index: state_idx,
+        code,
+    });
+}
+
+/// Analyze sequential yield pattern (no loop).
+fn analyze_sequential_pattern(stmts: &[ast::Stmt], transform: &Transform) -> Vec<GeneratorState> {
+    let mut states = Vec::new();
+    let mut current_code = String::new();
+    let mut state_idx = 0u32;
+
+    for stmt in stmts {
+        if let ast::Stmt::Expr(expr) = stmt
+            && let ast::ExprKind::Yield(ref inner) = expr.kind
+        {
+            let yield_val = emit_expr_to_string(inner, transform);
+            let next_state = state_idx + 1;
+
+            let code = if current_code.is_empty() {
+                format!(
+                    "self._state = {next_state};\n                        \
+                         return Some({yield_val});"
+                )
+            } else {
+                format!(
+                    "{current_code}\n                        \
+                         self._state = {next_state};\n                        \
+                         return Some({yield_val});"
+                )
+            };
+
+            states.push(GeneratorState {
+                index: state_idx,
+                code,
+            });
+
+            state_idx = next_state;
+            current_code = String::new();
+            continue;
+        }
+
+        let code = emit_stmt_to_string(stmt, transform);
+        if !current_code.is_empty() {
+            current_code.push_str("\n                        ");
+        }
+        current_code.push_str(&code);
+    }
+
+    // Final state returns None (generator exhausted)
+    let final_code = if current_code.is_empty() {
+        "return None;".to_owned()
+    } else {
+        format!("{current_code}\n                        return None;")
+    };
+    states.push(GeneratorState {
+        index: state_idx,
+        code: final_code,
+    });
+
+    states
+}
+
+/// Format a list of states into a loop/match state machine body.
+fn format_state_machine(states: &[GeneratorState]) -> String {
+    use std::fmt::Write;
+    let mut arms = String::new();
+    for state in states {
+        let _ = write!(
+            arms,
+            "\n                    {} => {{\n                        {}\n                    }}",
+            state.index, state.code,
+        );
+    }
+
+    format!(
+        "loop {{\n                match self._state {{{arms}\n                    _ => return None,\n                }}\n            }}"
+    )
+}
+
+/// Emit a simple expression as a Rust string.
+///
+/// This is a lightweight emitter used only for generator state machine bodies.
+/// It handles the common cases found in generator expressions.
+#[allow(clippy::only_used_in_recursion)]
+// The transform parameter is threaded for potential future use (e.g., generator call rewriting)
+fn emit_expr_to_string(expr: &ast::Expr, transform: &Transform) -> String {
+    match &expr.kind {
+        ast::ExprKind::Ident(ident) => format!("self.{}", ident.name),
+        ast::ExprKind::IntLit(v) => v.to_string(),
+        ast::ExprKind::FloatLit(v) => format!("{v:?}"),
+        ast::ExprKind::BoolLit(b) => b.to_string(),
+        ast::ExprKind::StringLit(s) => format!("\"{s}\".to_string()"),
+        ast::ExprKind::Binary(bin) => {
+            let left = emit_expr_to_string(&bin.left, transform);
+            let right = emit_expr_to_string(&bin.right, transform);
+            let op = match bin.op {
+                ast::BinaryOp::Sub => "-",
+                ast::BinaryOp::Mul => "*",
+                ast::BinaryOp::Div => "/",
+                ast::BinaryOp::Mod => "%",
+                ast::BinaryOp::Eq => "==",
+                ast::BinaryOp::Ne => "!=",
+                ast::BinaryOp::Lt => "<",
+                ast::BinaryOp::Gt => ">",
+                ast::BinaryOp::Le => "<=",
+                ast::BinaryOp::Ge => ">=",
+                ast::BinaryOp::And => "&&",
+                ast::BinaryOp::Or => "||",
+                // Add and unsupported bitwise/shift ops default to "+"
+                ast::BinaryOp::Add
+                | ast::BinaryOp::Pow
+                | ast::BinaryOp::BitAnd
+                | ast::BinaryOp::BitOr
+                | ast::BinaryOp::BitXor
+                | ast::BinaryOp::Shl
+                | ast::BinaryOp::Shr => "+",
+            };
+            format!("{left} {op} {right}")
+        }
+        ast::ExprKind::Unary(u) => {
+            let operand = emit_expr_to_string(&u.operand, transform);
+            match u.op {
+                ast::UnaryOp::Neg => format!("-{operand}"),
+                ast::UnaryOp::Not | ast::UnaryOp::BitNot => format!("!{operand}"),
+            }
+        }
+        ast::ExprKind::Assign(assign) => {
+            let value = emit_expr_to_string(&assign.value, transform);
+            format!("self.{} = {value}", assign.target.name)
+        }
+        ast::ExprKind::Call(call) => {
+            let args: Vec<String> = call
+                .args
+                .iter()
+                .map(|a| emit_expr_to_string(a, transform))
+                .collect();
+            format!("{}({})", call.callee.name, args.join(", "))
+        }
+        ast::ExprKind::Paren(inner) => {
+            format!("({})", emit_expr_to_string(inner, transform))
+        }
+        _ => "/* unsupported expr */".to_owned(),
+    }
+}
+
+/// Emit a simple statement as a Rust string for generator state machine bodies.
+fn emit_stmt_to_string(stmt: &ast::Stmt, transform: &Transform) -> String {
+    match stmt {
+        ast::Stmt::Expr(expr) => {
+            // Check for compound assignments like `x += 1`
+            if let ast::ExprKind::Assign(ref assign) = expr.kind {
+                let value = emit_expr_to_string(&assign.value, transform);
+                // Check for compound assignment pattern: x = x + val
+                if let ast::ExprKind::Binary(ref bin) = assign.value.kind
+                    && let ast::ExprKind::Ident(ref lhs_ident) = bin.left.kind
+                    && lhs_ident.name == assign.target.name
+                {
+                    let rhs = emit_expr_to_string(&bin.right, transform);
+                    let op = match bin.op {
+                        ast::BinaryOp::Add => "+=",
+                        ast::BinaryOp::Sub => "-=",
+                        ast::BinaryOp::Mul => "*=",
+                        ast::BinaryOp::Div => "/=",
+                        ast::BinaryOp::Mod => "%=",
+                        _ => return format!("self.{} = {value};", assign.target.name),
+                    };
+                    return format!("self.{} {op} {rhs};", assign.target.name);
+                }
+                return format!("self.{} = {value};", assign.target.name);
+            }
+            let code = emit_expr_to_string(expr, transform);
+            format!("{code};")
+        }
+        ast::Stmt::VarDecl(vd) => {
+            let init = emit_expr_to_string(&vd.init, transform);
+            format!("self.{} = {init};", vd.name.name)
+        }
+        ast::Stmt::Return(ret) => {
+            if let Some(ref val) = ret.value {
+                format!("return Some({});", emit_expr_to_string(val, transform))
+            } else {
+                "return None;".to_owned()
+            }
+        }
+        _ => "/* unsupported stmt */".to_owned(),
+    }
 }
 
 /// Map a `RustScript` binary operator to a Rust binary operator.
@@ -2245,6 +2951,7 @@ mod tests {
     ) -> FnDecl {
         FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident(name, 0, name.len() as u32),
             type_params: None,
             params,
@@ -2660,6 +3367,7 @@ mod tests {
         // }
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("fib", 0, 3),
             type_params: None,
             params: vec![make_param("n", "i32")],
@@ -2775,6 +3483,7 @@ mod tests {
         // }
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
@@ -2849,6 +3558,7 @@ mod tests {
         // }
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("example", 0, 7),
             type_params: None,
             params: vec![make_param("name", "string")],
@@ -2935,6 +3645,7 @@ mod tests {
         // }
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("counter", 0, 7),
             type_params: None,
             params: vec![],
@@ -3450,6 +4161,7 @@ mod tests {
     fn test_lower_generic_fn_produces_type_params() {
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("id", 0, 2),
             type_params: Some(ast::TypeParams {
                 params: vec![ast::TypeParam {
@@ -3504,6 +4216,7 @@ mod tests {
     fn test_lower_constrained_generic_produces_bounds() {
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("merge", 0, 5),
             type_params: Some(ast::TypeParams {
                 params: vec![ast::TypeParam {
@@ -4148,6 +4861,7 @@ mod tests {
     fn test_lower_option_return_type() {
         let module = make_module(vec![fn_item(FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
@@ -4228,6 +4942,7 @@ mod tests {
     fn test_lower_return_some_wrapping() {
         let module = make_module(vec![fn_item(FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("find", 0, 4),
             type_params: None,
             params: vec![],
@@ -4408,6 +5123,7 @@ mod tests {
     fn test_lower_throws_function_produces_result_return_type() {
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("divide", 0, 6),
             type_params: None,
             params: vec![make_param("a", "f64"), make_param("b", "f64")],
@@ -4454,6 +5170,7 @@ mod tests {
     fn test_lower_return_in_throws_function_wraps_in_ok() {
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("get", 0, 3),
             type_params: None,
             params: vec![],
@@ -4505,6 +5222,7 @@ mod tests {
     fn test_lower_throw_expression_produces_return_err() {
         let f = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("fail", 0, 4),
             type_params: None,
             params: vec![],
@@ -4556,6 +5274,7 @@ mod tests {
     fn test_lower_call_to_throws_function_inserts_question_mark() {
         let inner_fn = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("inner", 0, 5),
             type_params: None,
             params: vec![],
@@ -4583,6 +5302,7 @@ mod tests {
 
         let outer_fn = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("outer", 0, 5),
             type_params: None,
             params: vec![],
@@ -4857,6 +5577,7 @@ mod tests {
                 Item {
                     kind: ItemKind::Function(FnDecl {
                         is_async: false,
+                        is_generator: false,
                         name: ident("process", 65, 72),
                         type_params: None,
                         params: vec![Param {
@@ -6754,6 +7475,7 @@ async function main() {
         };
         let throws_fn = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("main_throws", 0, 11),
             type_params: None,
             params: vec![],
@@ -6893,6 +7615,7 @@ async function main() {
         };
         let throws_fn = FnDecl {
             is_async: false,
+            is_generator: false,
             name: ident("start_server", 0, 12),
             type_params: None,
             params: vec![],

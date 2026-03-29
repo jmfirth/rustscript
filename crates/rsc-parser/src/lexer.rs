@@ -840,6 +840,7 @@ impl<'a> Lexer<'a> {
             "await" => TokenKind::Await,
             "rust" => TokenKind::Rust,
             "derives" => TokenKind::Derives,
+            "yield" => TokenKind::Yield,
             "as" => TokenKind::As,
             "typeof" => TokenKind::TypeOf,
             "keyof" => TokenKind::KeyOf,

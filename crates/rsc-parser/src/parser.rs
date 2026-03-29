@@ -197,6 +197,8 @@ impl<'src> Parser<'src> {
     }
 
     /// Produce a human-readable description of a token kind for diagnostics.
+    #[allow(clippy::too_many_lines)]
+    // Token description covers all keyword and operator variants; splitting would obscure the mapping
     fn describe_kind(kind: &TokenKind) -> &'static str {
         match kind {
             TokenKind::IntLit(_) => "integer literal",
@@ -271,6 +273,7 @@ impl<'src> Parser<'src> {
             TokenKind::Finally => "`finally`",
             TokenKind::Rust => "`rust`",
             TokenKind::Derives => "`derives`",
+            TokenKind::Yield => "`yield`",
             TokenKind::Pipe => "`|`",
             TokenKind::QuestionDot => "`?.`",
             TokenKind::QuestionQuestion => "`??`",
@@ -734,6 +737,9 @@ impl<'src> Parser<'src> {
         let fn_token = self.advance(); // consume `function`
         let start = async_span.unwrap_or(fn_token.span);
 
+        // Check for generator syntax: `function*`
+        let is_generator = self.eat(&TokenKind::Star);
+
         // Function name
         let name = self.parse_ident()?;
 
@@ -766,6 +772,7 @@ impl<'src> Parser<'src> {
         let span = start.merge(body.span);
         Some(FnDecl {
             is_async,
+            is_generator,
             name,
             type_params,
             params,
@@ -3332,6 +3339,15 @@ impl<'src> Parser<'src> {
                 let span = await_token.span.merge(value.span);
                 Some(Expr {
                     kind: ExprKind::Await(Box::new(value)),
+                    span,
+                })
+            }
+            TokenKind::Yield => {
+                let yield_token = self.advance();
+                let value = self.parse_unary()?;
+                let span = yield_token.span.merge(value.span);
+                Some(Expr {
+                    kind: ExprKind::Yield(Box::new(value)),
                     span,
                 })
             }

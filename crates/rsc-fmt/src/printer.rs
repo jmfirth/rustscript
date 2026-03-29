@@ -237,7 +237,11 @@ impl Printer {
         if f.is_async {
             self.write("async ");
         }
-        self.write("function ");
+        if f.is_generator {
+            self.write("function* ");
+        } else {
+            self.write("function ");
+        }
         self.write(&f.name.name);
         self.print_optional_type_params(f.type_params.as_ref());
         self.write("(");
@@ -1033,6 +1037,10 @@ impl Printer {
                 self.print_type_annotation(ty);
             }
             ExprKind::IndexAssign(ia) => self.print_index_assign_expr(ia),
+            ExprKind::Yield(inner) => {
+                self.write("yield ");
+                self.print_expr(inner);
+            }
         }
     }
 
@@ -1327,6 +1335,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("foo"),
                     type_params: None,
                     params: vec![],
@@ -1356,6 +1365,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("foo"),
                     type_params: None,
                     params: vec![],
@@ -1419,6 +1429,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("foo"),
                     type_params: None,
                     params: vec![
@@ -1474,6 +1485,7 @@ mod tests {
                 Item {
                     kind: ItemKind::Function(FnDecl {
                         is_async: false,
+                        is_generator: false,
                         name: ident("foo"),
                         type_params: None,
                         params: vec![],
@@ -1491,6 +1503,7 @@ mod tests {
                 Item {
                     kind: ItemKind::Function(FnDecl {
                         is_async: false,
+                        is_generator: false,
                         name: ident("bar"),
                         type_params: None,
                         params: vec![],
@@ -1521,6 +1534,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("x"),
                     type_params: None,
                     params: vec![],
@@ -1598,6 +1612,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("foo"),
                     type_params: None,
                     params: vec![Param {
@@ -1686,6 +1701,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: true,
+                    is_generator: false,
                     name: ident("fetch_data"),
                     type_params: None,
                     params: vec![],
@@ -1719,6 +1735,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::Function(FnDecl {
                     is_async: false,
+                    is_generator: false,
                     name: ident("foo"),
                     type_params: None,
                     params: vec![],

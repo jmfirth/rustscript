@@ -426,6 +426,7 @@ impl Transform {
                     trait_name,
                     type_name: cls.name.name.clone(),
                     type_params: type_params.clone(),
+                    associated_types: vec![],
                     methods,
                     span: Some(cls.span),
                 }));
@@ -612,6 +613,7 @@ impl Transform {
             trait_name,
             type_name: cls.name.name.clone(),
             type_params: type_params.to_vec(),
+            associated_types: vec![],
             methods: self_impl_methods,
             span: Some(cls.span),
         }));
