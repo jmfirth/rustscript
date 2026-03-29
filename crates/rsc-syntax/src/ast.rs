@@ -223,7 +223,8 @@ pub struct FnDecl {
 /// A type definition: `type Name<T> = { field: Type, ... }`.
 ///
 /// Lowers to a Rust `struct` with `pub` fields. Generic type parameters
-/// are optional.
+/// are optional. When an index signature is present with no regular fields,
+/// lowers to a `HashMap` type alias instead.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
     /// The type name.
@@ -232,12 +233,32 @@ pub struct TypeDef {
     pub type_params: Option<TypeParams>,
     /// The fields of the type definition.
     pub fields: Vec<FieldDef>,
+    /// Optional index signature: `[key: KeyType]: ValueType`.
+    /// When present with no regular fields, the type lowers to `HashMap<K, V>`.
+    pub index_signature: Option<IndexSignature>,
     /// Explicit derive macros requested via `derives Serialize, Deserialize`.
     /// Merged with auto-inferred derives during lowering.
     pub derives: Vec<Ident>,
     /// `JSDoc` comment attached to this type definition, if any.
     pub doc_comment: Option<String>,
     /// The span covering the entire type definition.
+    pub span: Span,
+}
+
+/// An index signature in a type definition: `[key: KeyType]: ValueType`.
+///
+/// Corresponds to TypeScript's index signature syntax. When used as the sole
+/// member of a type definition, lowers to `HashMap<KeyType, ValueType>`.
+/// Example: `type Config = { [key: string]: string }` → `type Config = HashMap<String, String>;`
+#[derive(Debug, Clone)]
+pub struct IndexSignature {
+    /// The key parameter name (e.g., `key` in `[key: string]`).
+    pub key_name: Ident,
+    /// The key type (e.g., `string`).
+    pub key_type: TypeAnnotation,
+    /// The value type (e.g., `string`).
+    pub value_type: TypeAnnotation,
+    /// The span covering the entire index signature.
     pub span: Span,
 }
 
@@ -593,6 +614,10 @@ pub enum TypeKind {
     /// A tuple type: `[string, i32, bool]` in `RustScript`.
     /// Lowers to `(String, i32, bool)` in Rust.
     Tuple(Vec<TypeAnnotation>),
+    /// An index signature type: `{ [key: string]: T }`.
+    /// Lowers to `HashMap<KeyType, ValueType>` in Rust.
+    /// Used for inline index signature types in variable declarations and parameters.
+    IndexSignature(Box<IndexSignature>),
 }
 
 /// An identifier with its source span.
@@ -998,6 +1023,10 @@ pub enum ExprKind {
     /// Compile-time only — produces no runtime code.
     /// The expression passes through unchanged during lowering.
     Satisfies(Box<Expr>, TypeAnnotation),
+    /// Index assignment: `obj["key"] = value`.
+    /// For `HashMap` types, lowers to `obj.insert(key, value)`.
+    /// For other types, lowers to standard Rust index assignment.
+    IndexAssign(IndexAssignExpr),
 }
 
 /// Logical assignment operators.
@@ -1289,6 +1318,20 @@ pub struct IndexExpr {
     pub object: Box<Expr>,
     /// The index expression.
     pub index: Box<Expr>,
+}
+
+/// Index assignment expression: `obj["key"] = value`.
+///
+/// For `HashMap` types, lowers to `obj.insert(key, value)`.
+/// For other indexed types, lowers to standard Rust index assignment.
+#[derive(Debug, Clone)]
+pub struct IndexAssignExpr {
+    /// The object being indexed.
+    pub object: Box<Expr>,
+    /// The index expression.
+    pub index: Box<Expr>,
+    /// The value being assigned.
+    pub value: Box<Expr>,
 }
 
 /// Optional chaining expression: `expr?.field` or `expr?.method(args)`.

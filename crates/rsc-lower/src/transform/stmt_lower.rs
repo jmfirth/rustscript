@@ -19,6 +19,7 @@ use crate::context::LoweringContext;
 use crate::ownership::UseMap;
 
 use super::async_lower::block_contains_await;
+use super::expr_lower::is_hashmap_type;
 use super::{
     Transform, capitalize_first, element_type_is_copy, extract_named_type, is_default_literal_type,
 };
@@ -139,6 +140,9 @@ impl Transform {
     }
 
     /// Lower a variable declaration.
+    #[allow(clippy::too_many_lines)]
+    // Variable declaration lowering handles HashMap init, tuple construction, enum construction,
+    // union wrapping, type inference, and mutability — splitting would fragment the logic.
     fn lower_var_decl(
         &self,
         decl: &ast::VarDecl,
@@ -181,9 +185,23 @@ impl Transform {
         let struct_type_name = extract_named_type(&ty);
         ctx.set_struct_type_name(struct_type_name);
 
+        // Check for HashMap initialization: `const config: { [key: string]: string } = {}`
+        // When the type is a HashMap and the init is an empty struct literal, emit `HashMap::new()`.
+        let init = if is_hashmap_type(&ty)
+            && matches!(&decl.init.kind, ast::ExprKind::StructLit(slit) if slit.fields.is_empty() && slit.spread.is_none())
+        {
+            RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: "HashMap".to_owned(),
+                    method: "new".to_owned(),
+                    args: vec![],
+                },
+                decl.init.span,
+            )
+        }
         // Check for tuple construction: `const pair: [string, i32] = ["hello", 42]`
         // When the type is a tuple and the init is an array literal, lower as a tuple expression.
-        let init = if let (RustType::Tuple(_), ast::ExprKind::ArrayLit(elements)) =
+        else if let (RustType::Tuple(_), ast::ExprKind::ArrayLit(elements)) =
             (&ty, &decl.init.kind)
         {
             let lowered: Vec<RustExpr> = elements

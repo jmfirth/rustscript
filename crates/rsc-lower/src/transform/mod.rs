@@ -22,8 +22,8 @@ use rsc_syntax::external_fn::{ExternalFnInfo, ExternalReturnType};
 use rsc_syntax::rust_ir::{
     ParamMode, RustAttribute, RustBinaryOp, RustCompoundAssignOp, RustConstItem, RustEnumDef,
     RustEnumVariant, RustExpr, RustExprKind, RustFieldDef, RustFile, RustFnDecl, RustItem,
-    RustParam, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeParam,
-    RustUnaryOp, RustUseDecl,
+    RustParam, RustStmt, RustStructDef, RustTraitDef, RustTraitMethod, RustType, RustTypeAlias,
+    RustTypeParam, RustUnaryOp, RustUseDecl,
 };
 
 use crate::CrateDependency;
@@ -423,9 +423,16 @@ impl Transform {
                     items.push(RustItem::Function(lowered));
                 }
                 ast::ItemKind::TypeDef(td) => {
-                    let mut lowered = self.lower_type_def(td, &mut ctx);
-                    lowered.public = exported;
-                    items.push(RustItem::Struct(lowered));
+                    // Pure index signature (no regular fields) → type alias to HashMap
+                    if td.fields.is_empty() && td.index_signature.is_some() {
+                        let mut alias = self.lower_index_signature_type_alias(td, &mut ctx);
+                        alias.public = exported;
+                        items.push(RustItem::TypeAlias(alias));
+                    } else {
+                        let mut lowered = self.lower_type_def(td, &mut ctx);
+                        lowered.public = exported;
+                        items.push(RustItem::Struct(lowered));
+                    }
                 }
                 ast::ItemKind::EnumDef(ed) => {
                     let mut lowered = self.lower_enum_def(ed, &mut ctx);
@@ -610,6 +617,51 @@ impl Transform {
             fields,
             derives,
             doc_comment: td.doc_comment.clone(),
+            span: Some(td.span),
+        }
+    }
+
+    /// Lower a pure index signature type definition to a type alias.
+    ///
+    /// `type Config = { [key: string]: string }` → `type Config = HashMap<String, String>;`
+    fn lower_index_signature_type_alias(
+        &self,
+        td: &ast::TypeDef,
+        ctx: &mut LoweringContext,
+    ) -> RustTypeAlias {
+        let mut diags = Vec::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+        let sig = td
+            .index_signature
+            .as_ref()
+            .expect("called only when index_signature is Some");
+
+        let key_ty = resolve::resolve_type_annotation_with_generics(
+            &sig.key_type,
+            &self.type_registry,
+            &generic_names,
+            &mut diags,
+        );
+        let value_ty = resolve::resolve_type_annotation_with_generics(
+            &sig.value_type,
+            &self.type_registry,
+            &generic_names,
+            &mut diags,
+        );
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        let key_rust = rsc_typeck::bridge::type_to_rust_type(&key_ty);
+        let value_rust = rsc_typeck::bridge::type_to_rust_type(&value_ty);
+
+        RustTypeAlias {
+            public: false,
+            name: td.name.name.clone(),
+            ty: RustType::Generic(
+                Box::new(RustType::Named("HashMap".to_owned())),
+                vec![key_rust, value_rust],
+            ),
             span: Some(td.span),
         }
     }
@@ -1461,7 +1513,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Function(_, _)
                         | ast::TypeKind::Inferred
                         | ast::TypeKind::Shared(_)
-                        | ast::TypeKind::Tuple(_) => vec![],
+                        | ast::TypeKind::Tuple(_)
+                        | ast::TypeKind::IndexSignature(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
@@ -2776,6 +2829,7 @@ mod tests {
                     span: span(0, 6),
                 },
             ],
+            index_signature: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 50),
@@ -2829,6 +2883,7 @@ mod tests {
                     span: span(0, 4),
                 },
             ],
+            index_signature: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 30),
@@ -3084,6 +3139,7 @@ mod tests {
                 },
                 span: span(0, 8),
             }],
+            index_signature: None,
             derives: vec![],
             doc_comment: None,
             span: span(0, 30),
@@ -6608,6 +6664,127 @@ async function main() {
         assert!(
             !needs_serde,
             "needs_serde should be false without Serialize/Deserialize"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Index signatures
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_pure_index_signature_produces_type_alias() {
+        let source = r#"type Config = { [key: string]: string }"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::TypeAlias(ta) = &file.items[0] else {
+            panic!("expected TypeAlias item, got {:?}", file.items[0]);
+        };
+        assert_eq!(ta.name, "Config");
+        assert_eq!(ta.ty.to_string(), "HashMap<String, String>");
+    }
+
+    #[test]
+    fn test_lower_index_signature_numeric_keys() {
+        let source = r#"type Scores = { [id: i32]: string }"#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::TypeAlias(ta) = &file.items[0] else {
+            panic!("expected TypeAlias item, got {:?}", file.items[0]);
+        };
+        assert_eq!(ta.name, "Scores");
+        assert_eq!(ta.ty.to_string(), "HashMap<i32, String>");
+    }
+
+    #[test]
+    fn test_lower_hashmap_init_from_empty_object() {
+        let source = r#"
+            function main() {
+                const config: { [key: string]: string } = {};
+            }
+        "#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        // The function body should contain a let statement with HashMap::new()
+        let RustItem::Function(f) = &file.items[0] else {
+            panic!("expected Function item");
+        };
+        let RustStmt::Let(let_stmt) = &f.body.stmts[0] else {
+            panic!("expected Let statement");
+        };
+        assert_eq!(let_stmt.name, "config");
+        assert!(
+            matches!(
+                &let_stmt.init.kind,
+                RustExprKind::StaticCall {
+                    type_name,
+                    method,
+                    ..
+                } if type_name == "HashMap" && method == "new"
+            ),
+            "expected HashMap::new(), got {:?}",
+            let_stmt.init.kind
+        );
+    }
+
+    #[test]
+    fn test_lower_hashmap_insert_from_index_assign() {
+        let source = r#"
+            function main() {
+                let config: { [key: string]: string } = {};
+                config["debug"] = "true";
+            }
+        "#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(f) = &file.items[0] else {
+            panic!("expected Function item");
+        };
+        // Second statement should be the insert call
+        let RustStmt::Semi(insert_expr) = &f.body.stmts[1] else {
+            panic!("expected Semi statement, got {:?}", &f.body.stmts[1]);
+        };
+        assert!(
+            matches!(
+                &insert_expr.kind,
+                RustExprKind::MethodCall { method, .. } if method == "insert"
+            ),
+            "expected .insert() call, got {:?}",
+            insert_expr.kind
+        );
+    }
+
+    #[test]
+    fn test_lower_hashmap_index_read() {
+        let source = r#"
+            function main() {
+                const config: { [key: string]: string } = {};
+                const val = config["debug"];
+            }
+        "#;
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(f) = &file.items[0] else {
+            panic!("expected Function item");
+        };
+        // Second statement should have an Index expression (HashMap supports Index trait)
+        let RustStmt::Let(let_stmt) = &f.body.stmts[1] else {
+            panic!("expected Let statement");
+        };
+        assert_eq!(let_stmt.name, "val");
+        assert!(
+            matches!(&let_stmt.init.kind, RustExprKind::Index { .. }),
+            "expected Index expression, got {:?}",
+            let_stmt.init.kind
         );
     }
 }

@@ -12,12 +12,13 @@ use rsc_syntax::ast::{
     ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt,
     DestructureField, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
-    ImportDecl, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
-    LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock,
-    TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock, InterfaceDef,
+    InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module,
+    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
+    ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
+    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
+    VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -890,8 +891,9 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 // Struct type def: type Name = { field: Type, ... }
+                // or index signature: type Name = { [key: string]: string }
                 self.expect(&TokenKind::LBrace)?;
-                let fields = self.parse_field_def_list();
+                let (fields, index_signature) = self.parse_field_def_list();
                 let close = self.expect(&TokenKind::RBrace)?;
                 let derives = self.parse_derives_clause();
                 let span = if derives.is_empty() {
@@ -903,6 +905,7 @@ impl<'src> Parser<'src> {
                     name,
                     type_params,
                     fields,
+                    index_signature,
                     derives,
                     doc_comment,
                     span,
@@ -1072,14 +1075,29 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a comma-separated list of field definitions: `name: Type, ...`.
-    fn parse_field_def_list(&mut self) -> Vec<FieldDef> {
+    fn parse_field_def_list(&mut self) -> (Vec<FieldDef>, Option<IndexSignature>) {
         let mut fields = Vec::new();
+        let mut index_sig = None;
 
         if self.check(&TokenKind::RBrace) || self.at_end() {
-            return fields;
+            return (fields, index_sig);
         }
 
         loop {
+            // Check for index signature: `[key: KeyType]: ValueType`
+            if self.check(&TokenKind::LBracket) {
+                if let Some(sig) = self.parse_index_signature() {
+                    index_sig = Some(sig);
+                    // Allow trailing comma after index signature
+                    self.eat(&TokenKind::Comma);
+                    if self.check(&TokenKind::RBrace) || self.at_end() {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+
             let field_start = self.current_token().span;
             let Some(name) = self.parse_ident() else {
                 break;
@@ -1107,7 +1125,31 @@ impl<'src> Parser<'src> {
             }
         }
 
-        fields
+        (fields, index_sig)
+    }
+
+    /// Parse an index signature: `[key: KeyType]: ValueType`.
+    ///
+    /// Called when `[` is seen in a type definition body. Returns `None` if
+    /// the pattern doesn't match the index signature syntax.
+    fn parse_index_signature(&mut self) -> Option<IndexSignature> {
+        let start = self.current_token().span;
+        self.advance(); // consume `[`
+
+        let key_name = self.parse_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let key_type = self.parse_type_annotation()?;
+        self.expect(&TokenKind::RBracket)?;
+        self.expect(&TokenKind::Colon)?;
+        let value_type = self.parse_type_annotation()?;
+
+        let span = start.merge(value_type.span);
+        Some(IndexSignature {
+            key_name,
+            key_type,
+            value_type,
+            span,
+        })
     }
 
     // ---------------------------------------------------------------
@@ -1780,6 +1822,8 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a base (non-union) type annotation: `void`, named, generic, `null`, or function type.
+    #[allow(clippy::too_many_lines)]
+    // Base type annotation parsing covers all token kinds that start a type; splitting would obscure the match
     fn parse_base_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let token = self.current_token().clone();
         match &token.kind {
@@ -1873,6 +1917,34 @@ impl<'src> Parser<'src> {
                         kind: TypeKind::Named(ident),
                         span: start_span,
                     })
+                }
+            }
+            TokenKind::LBrace => {
+                // Inline index signature type: `{ [key: string]: T }`
+                let start = token.span;
+                self.advance(); // consume `{`
+                if self.check(&TokenKind::LBracket) {
+                    let sig = self.parse_index_signature()?;
+                    // Allow trailing comma
+                    self.eat(&TokenKind::Comma);
+                    let close = self.expect(&TokenKind::RBrace)?;
+                    let span = start.merge(close.span);
+                    Some(TypeAnnotation {
+                        kind: TypeKind::IndexSignature(Box::new(sig)),
+                        span,
+                    })
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "expected index signature `[key: Type]: Type` in type annotation",
+                        )
+                        .with_label(
+                            self.current_token().span,
+                            self.file_id,
+                            "expected `[`",
+                        ),
+                    );
+                    None
                 }
             }
             _ => {
@@ -2778,6 +2850,20 @@ impl<'src> Parser<'src> {
                     span,
                 });
             }
+            // Index assignment: `obj["key"] = value` (e.g., `config["debug"] = "true"`)
+            if let ExprKind::Index(idx) = expr.kind {
+                self.advance(); // consume `=`
+                let value = self.parse_assignment()?;
+                let span = idx.object.span.merge(value.span);
+                return Some(Expr {
+                    kind: ExprKind::IndexAssign(IndexAssignExpr {
+                        object: idx.object,
+                        index: idx.index,
+                        value: Box::new(value),
+                    }),
+                    span,
+                });
+            }
             // Assignment to non-identifier — emit diagnostic
             let eq_token = self.advance();
             self.diagnostics
@@ -3392,6 +3478,11 @@ impl<'src> Parser<'src> {
         // Current token is `{`. Check pos+1 and pos+2.
         let after_brace = self.tokens.get(self.pos + 1).map(|t| &t.kind);
         let after_ident = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+
+        // `{ }` — empty struct/object literal
+        if matches!(after_brace, Some(TokenKind::RBrace)) {
+            return true;
+        }
 
         // `{ ident: expr, ... }` — standard struct literal
         if matches!(
@@ -8750,6 +8841,106 @@ type Shape =
                 assert_eq!(td.derives[0].name, "Serialize");
             }
             _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Index signature parsing
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_pure_index_signature_type_def() {
+        let source = "type Config = { [key: string]: string }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Config");
+                assert!(td.fields.is_empty(), "expected no regular fields");
+                let sig = td
+                    .index_signature
+                    .as_ref()
+                    .expect("expected index signature");
+                assert_eq!(sig.key_name.name, "key");
+                assert!(
+                    matches!(sig.key_type.kind, TypeKind::Named(ref ident) if ident.name == "string")
+                );
+                assert!(
+                    matches!(sig.value_type.kind, TypeKind::Named(ref ident) if ident.name == "string")
+                );
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_index_signature_with_numeric_key() {
+        let source = "type Scores = { [id: i32]: string }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Scores");
+                let sig = td
+                    .index_signature
+                    .as_ref()
+                    .expect("expected index signature");
+                assert_eq!(sig.key_name.name, "id");
+                assert!(
+                    matches!(sig.key_type.kind, TypeKind::Named(ref ident) if ident.name == "i32")
+                );
+                assert!(
+                    matches!(sig.value_type.kind, TypeKind::Named(ref ident) if ident.name == "string")
+                );
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_inline_index_signature_type_annotation() {
+        let source = r#"
+            function foo(config: { [key: string]: i32 }): void {
+            }
+        "#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert!(!f.params.is_empty(), "expected at least one param");
+                let param_type = &f.params[0].type_ann;
+                assert!(
+                    matches!(param_type.kind, TypeKind::IndexSignature(_)),
+                    "expected IndexSignature type, got {:?}",
+                    param_type.kind
+                );
+            }
+            _ => panic!("expected Function"),
+        }
+    }
+
+    #[test]
+    fn test_parser_index_assign_expression() {
+        let source = r#"
+            function main() {
+                let config: { [key: string]: string } = {};
+                config["debug"] = "true";
+            }
+        "#;
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                // First statement: let config = {}
+                assert!(matches!(f.body.stmts[0], Stmt::VarDecl(_)));
+                // Second statement: config["debug"] = "true" (IndexAssign)
+                if let Stmt::Expr(ref expr) = f.body.stmts[1] {
+                    assert!(
+                        matches!(expr.kind, ExprKind::IndexAssign(_)),
+                        "expected IndexAssign, got {:?}",
+                        expr.kind
+                    );
+                } else {
+                    panic!("expected Expr statement, got {:?}", f.body.stmts[1]);
+                }
+            }
+            _ => panic!("expected Function"),
         }
     }
 }

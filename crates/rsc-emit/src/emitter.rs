@@ -10,7 +10,7 @@ use rsc_syntax::rust_ir::{
     RustForInStmt, RustIfLetStmt, RustIfStmt, RustImplBlock, RustItem, RustLetElseStmt,
     RustMatchResultStmt, RustMatchStmt, RustMethod, RustPattern, RustSelfParam, RustStmt,
     RustStructDef, RustTestItem, RustTestModule, RustTraitDef, RustTraitImplBlock,
-    RustTryFinallyStmt, RustType, RustTypeParam, RustWhileLetStmt, SpreadOp,
+    RustTryFinallyStmt, RustType, RustTypeAlias, RustTypeParam, RustWhileLetStmt, SpreadOp,
 };
 use rsc_syntax::span::Span;
 
@@ -179,6 +179,7 @@ impl Emitter {
             RustItem::TraitImpl(ti) => self.emit_trait_impl_block(ti),
             RustItem::RawRust(code) => self.emit_raw_rust(code, false),
             RustItem::Const(c) => self.emit_const_item(c),
+            RustItem::TypeAlias(ta) => self.emit_type_alias(ta),
         }
     }
 
@@ -195,6 +196,20 @@ impl Emitter {
         self.write(&c.ty.to_string());
         self.write(" = ");
         self.emit_expr(&c.init);
+        self.writeln(";");
+    }
+
+    /// Emit a type alias declaration: `type Name = Type;`.
+    fn emit_type_alias(&mut self, ta: &RustTypeAlias) {
+        self.set_span(ta.span);
+        self.write_indent();
+        if ta.public {
+            self.write("pub ");
+        }
+        self.write("type ");
+        self.write(&ta.name);
+        self.write(" = ");
+        self.write(&ta.ty.to_string());
         self.writeln(";");
     }
 
@@ -1314,6 +1329,17 @@ impl Emitter {
                 self.write("[");
                 self.emit_expr(index);
                 self.write("]");
+            }
+            RustExprKind::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
+                self.emit_expr(object);
+                self.write("[");
+                self.emit_expr(index);
+                self.write("] = ");
+                self.emit_expr(value);
             }
             RustExprKind::None => {
                 self.write("None");

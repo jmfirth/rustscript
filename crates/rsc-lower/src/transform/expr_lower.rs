@@ -205,29 +205,52 @@ impl Transform {
                     );
                 }
 
+                // Check if the object is a HashMap-typed variable.
+                // HashMap uses string/typed keys, not usize indices.
+                let is_hashmap = if let ast::ExprKind::Ident(ident) = &index_expr.object.kind {
+                    ctx.lookup_variable(&ident.name)
+                        .is_some_and(|info| is_hashmap_type(&info.ty))
+                } else {
+                    false
+                };
+
                 let object = self.lower_expr(&index_expr.object, ctx, use_map, stmt_index);
                 let index = self.lower_expr(&index_expr.index, ctx, use_map, stmt_index);
 
-                // Rust arrays/Vecs require usize for indexing. When the index
-                // is a non-literal expression (e.g., a variable of type i64),
-                // wrap it in `as usize` to satisfy the type requirement.
-                // Literal integers are left as-is since Rust infers usize.
-                let index = if matches!(index.kind, RustExprKind::IntLit(_)) {
-                    index
+                if is_hashmap {
+                    // HashMap read: `map["key"]` → `map[&"key".to_string()]`
+                    // Rust's HashMap Index trait accepts &K, and for String keys
+                    // it also accepts &str via Borrow trait. String literals work
+                    // directly as &str. For non-literal keys, pass as-is.
+                    RustExpr::new(
+                        RustExprKind::Index {
+                            object: Box::new(object),
+                            index: Box::new(index),
+                        },
+                        expr.span,
+                    )
                 } else {
-                    RustExpr::synthetic(RustExprKind::Cast(
-                        Box::new(index),
-                        RustType::Named("usize".to_owned()),
-                    ))
-                };
+                    // Rust arrays/Vecs require usize for indexing. When the index
+                    // is a non-literal expression (e.g., a variable of type i64),
+                    // wrap it in `as usize` to satisfy the type requirement.
+                    // Literal integers are left as-is since Rust infers usize.
+                    let index = if matches!(index.kind, RustExprKind::IntLit(_)) {
+                        index
+                    } else {
+                        RustExpr::synthetic(RustExprKind::Cast(
+                            Box::new(index),
+                            RustType::Named("usize".to_owned()),
+                        ))
+                    };
 
-                RustExpr::new(
-                    RustExprKind::Index {
-                        object: Box::new(object),
-                        index: Box::new(index),
-                    },
-                    expr.span,
-                )
+                    RustExpr::new(
+                        RustExprKind::Index {
+                            object: Box::new(object),
+                            index: Box::new(index),
+                        },
+                        expr.span,
+                    )
+                }
             }
             ast::ExprKind::NullLit => RustExpr::new(RustExprKind::None, expr.span),
             ast::ExprKind::OptionalChain(chain) => {
@@ -500,6 +523,56 @@ impl Transform {
             ast::ExprKind::Satisfies(inner, _) => {
                 // `satisfies` is a compile-time assertion — strip it entirely
                 self.lower_expr(inner, ctx, use_map, stmt_index)
+            }
+            ast::ExprKind::IndexAssign(ia) => {
+                // Check if the object is a HashMap-typed variable.
+                let is_hashmap = if let ast::ExprKind::Ident(ident) = &ia.object.kind {
+                    ctx.lookup_variable(&ident.name)
+                        .is_some_and(|info| is_hashmap_type(&info.ty))
+                } else {
+                    false
+                };
+
+                let object = self.lower_expr(&ia.object, ctx, use_map, stmt_index);
+                let index = self.lower_expr(&ia.index, ctx, use_map, stmt_index);
+                let value = self.lower_expr(&ia.value, ctx, use_map, stmt_index);
+
+                if is_hashmap {
+                    // HashMap write: `map["key"] = value` → `map.insert(key, value)`
+                    // If key is a string literal, convert to `.to_string()` for owned String key
+                    let key = if matches!(&index.kind, RustExprKind::StringLit(_)) {
+                        RustExpr::synthetic(RustExprKind::ToString(Box::new(index)))
+                    } else {
+                        index
+                    };
+                    RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(object),
+                            method: "insert".to_owned(),
+                            type_args: vec![],
+                            args: vec![key, value],
+                        },
+                        expr.span,
+                    )
+                } else {
+                    // Standard index assignment: `arr[i] = value` → `arr[i] = value`
+                    let index = if matches!(index.kind, RustExprKind::IntLit(_)) {
+                        index
+                    } else {
+                        RustExpr::synthetic(RustExprKind::Cast(
+                            Box::new(index),
+                            RustType::Named("usize".to_owned()),
+                        ))
+                    };
+                    RustExpr::new(
+                        RustExprKind::IndexAssign {
+                            object: Box::new(object),
+                            index: Box::new(index),
+                            value: Box::new(value),
+                        },
+                        expr.span,
+                    )
+                }
             }
         }
     }
@@ -1448,4 +1521,15 @@ impl Transform {
             }
         }
     }
+}
+
+/// Check whether a `RustType` is a `HashMap` type.
+///
+/// Returns `true` for `Generic(Named("HashMap"), _)` which is the lowered form
+/// of index signature types and `Map<K, V>` / `new Map()`.
+pub(super) fn is_hashmap_type(ty: &RustType) -> bool {
+    matches!(
+        ty,
+        RustType::Generic(base, _) if matches!(base.as_ref(), RustType::Named(name) if name == "HashMap")
+    )
 }

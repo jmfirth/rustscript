@@ -145,6 +145,11 @@ pub fn resolve_type_annotation(
                 .collect();
             Type::Tuple(resolved)
         }
+        ast::TypeKind::IndexSignature(sig) => {
+            let key_ty = resolve_type_annotation(&sig.key_type, diagnostics);
+            let value_ty = resolve_type_annotation(&sig.value_type, diagnostics);
+            Type::Generic("HashMap".to_owned(), vec![key_ty, value_ty])
+        }
     }
 }
 
@@ -168,6 +173,8 @@ pub fn resolve_type_annotation_with_registry(
 /// (e.g., `["T", "U"]` inside `function foo<T, U>(...)`). Names matching a
 /// generic parameter resolve to `Type::TypeVar` rather than being looked up
 /// in the registry.
+#[allow(clippy::too_many_lines)]
+// Type annotation resolution covers all TypeKind variants; splitting would obscure the match
 pub fn resolve_type_annotation_with_generics(
     ann: &ast::TypeAnnotation,
     registry: &crate::registry::TypeRegistry,
@@ -271,6 +278,21 @@ pub fn resolve_type_annotation_with_generics(
                 })
                 .collect();
             Type::Tuple(resolved)
+        }
+        ast::TypeKind::IndexSignature(sig) => {
+            let key_ty = resolve_type_annotation_with_generics(
+                &sig.key_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            );
+            let value_ty = resolve_type_annotation_with_generics(
+                &sig.value_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            );
+            Type::Generic("HashMap".to_owned(), vec![key_ty, value_ty])
         }
     }
 }

@@ -78,6 +78,26 @@ pub enum RustItem {
     /// A module-level `const` declaration: `const NAME: Type = value;`.
     /// Produced by lowering top-level `const` declarations in `RustScript`.
     Const(RustConstItem),
+    /// A type alias: `type Name = Type;`.
+    /// Produced by lowering pure index signature types:
+    /// `type Config = { [key: string]: string }` → `type Config = HashMap<String, String>;`
+    TypeAlias(RustTypeAlias),
+}
+
+/// A Rust type alias: `type Name = Type;`.
+///
+/// Produced by lowering pure index signature type definitions:
+/// `type Config = { [key: string]: string }` → `type Config = HashMap<String, String>;`
+#[derive(Debug, Clone)]
+pub struct RustTypeAlias {
+    /// Whether this type alias is `pub`.
+    pub public: bool,
+    /// The alias name.
+    pub name: String,
+    /// The aliased type.
+    pub ty: RustType,
+    /// The source span, if derived from source.
+    pub span: Option<Span>,
 }
 
 /// A Rust `const` item at module level.
@@ -1020,6 +1040,16 @@ pub enum RustExprKind {
         object: Box<RustExpr>,
         /// The index expression.
         index: Box<RustExpr>,
+    },
+    /// Index assignment: `expr[index] = value`.
+    /// Produced by lowering `RustScript` index assignment expressions on non-HashMap types.
+    IndexAssign {
+        /// The object being indexed.
+        object: Box<RustExpr>,
+        /// The index expression.
+        index: Box<RustExpr>,
+        /// The value being assigned.
+        value: Box<RustExpr>,
     },
     /// `None` — from `null` literal. Lowers to Rust `None`.
     None,

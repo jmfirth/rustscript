@@ -110,6 +110,9 @@ fn scan_item_for_collections(item: &RustItem, needs_hashmap: &mut bool, needs_ha
             scan_type_for_collections(&c.ty, needs_hashmap, needs_hashset);
             scan_expr_for_collections(&c.init, needs_hashmap, needs_hashset);
         }
+        RustItem::TypeAlias(ta) => {
+            scan_type_for_collections(&ta.ty, needs_hashmap, needs_hashset);
+        }
     }
 }
 
@@ -176,6 +179,9 @@ fn scan_item_for_arc_mutex(item: &RustItem, needs_arc_mutex: &mut bool) {
         RustItem::Const(c) => {
             scan_type_for_arc_mutex(&c.ty, needs_arc_mutex);
             scan_expr_for_arc_mutex(&c.init, needs_arc_mutex);
+        }
+        RustItem::TypeAlias(ta) => {
+            scan_type_for_arc_mutex(&ta.ty, needs_arc_mutex);
         }
     }
 }
@@ -510,6 +516,15 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         RustExprKind::Index { object, index } => {
             scan_expr_for_collections(object, needs_hashmap, needs_hashset);
             scan_expr_for_collections(index, needs_hashmap, needs_hashset);
+        }
+        RustExprKind::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
+            scan_expr_for_collections(object, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(index, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(value, needs_hashmap, needs_hashset);
         }
         RustExprKind::Binary { left, right, .. } => {
             scan_expr_for_collections(left, needs_hashmap, needs_hashset);

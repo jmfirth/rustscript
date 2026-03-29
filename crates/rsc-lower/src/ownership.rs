@@ -518,6 +518,32 @@ impl UseMap {
                     uses,
                 );
             }
+            ast::ExprKind::IndexAssign(ia) => {
+                Self::collect_expr_uses(
+                    &ia.object,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &ia.index,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                Self::collect_expr_uses(
+                    &ia.value,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+            }
             ast::ExprKind::OptionalChain(chain) => {
                 Self::collect_expr_uses(
                     &chain.object,
@@ -1205,6 +1231,11 @@ fn collect_param_usage_expr(
             collect_param_usage_expr(&fa.object, param_set, is_ref_call, result);
             collect_param_usage_expr(&fa.value, param_set, is_ref_call, result);
         }
+        ast::ExprKind::IndexAssign(ia) => {
+            collect_param_usage_expr(&ia.object, param_set, is_ref_call, result);
+            collect_param_usage_expr(&ia.index, param_set, is_ref_call, result);
+            collect_param_usage_expr(&ia.value, param_set, is_ref_call, result);
+        }
         ast::ExprKind::OptionalChain(chain) => {
             collect_param_usage_expr(&chain.object, param_set, is_ref_call, result);
             if let ast::OptionalAccess::Method(_, args) = &chain.access {
@@ -1341,6 +1372,11 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         ast::ExprKind::FieldAssign(fa) => {
             collect_idents_in_expr(&fa.object, names);
             collect_idents_in_expr(&fa.value, names);
+        }
+        ast::ExprKind::IndexAssign(ia) => {
+            collect_idents_in_expr(&ia.object, names);
+            collect_idents_in_expr(&ia.index, names);
+            collect_idents_in_expr(&ia.value, names);
         }
         ast::ExprKind::OptionalChain(chain) => {
             collect_idents_in_expr(&chain.object, names);

@@ -8,8 +8,8 @@ use rsc_syntax::ast::{
     ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef,
     ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
     DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind, FieldAccessExpr,
-    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexExpr,
-    InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
+    FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr,
+    IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
     MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
     Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt,
     TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
@@ -367,6 +367,15 @@ impl Printer {
                 }
                 self.write("]");
             }
+            TypeKind::IndexSignature(sig) => {
+                self.write("{ [");
+                self.write(&sig.key_name.name);
+                self.write(": ");
+                self.print_type_annotation(&sig.key_type);
+                self.write("]: ");
+                self.print_type_annotation(&sig.value_type);
+                self.write(" }");
+            }
         }
     }
 
@@ -379,6 +388,15 @@ impl Printer {
         self.indent();
         for field in &t.fields {
             self.print_field_def(field);
+            self.writeln(",");
+        }
+        if let Some(sig) = &t.index_signature {
+            self.write("[");
+            self.write(&sig.key_name.name);
+            self.write(": ");
+            self.print_type_annotation(&sig.key_type);
+            self.write("]: ");
+            self.print_type_annotation(&sig.value_type);
             self.writeln(",");
         }
         self.dedent();
@@ -994,6 +1012,7 @@ impl Printer {
                 self.write(" satisfies ");
                 self.print_type_annotation(ty);
             }
+            ExprKind::IndexAssign(ia) => self.print_index_assign_expr(ia),
         }
     }
 
@@ -1168,6 +1187,15 @@ impl Printer {
         self.write("[");
         self.print_expr(&idx.index);
         self.write("]");
+    }
+
+    /// Print an index assignment expression: `obj["key"] = value`.
+    fn print_index_assign_expr(&mut self, ia: &IndexAssignExpr) {
+        self.print_expr(&ia.object);
+        self.write("[");
+        self.print_expr(&ia.index);
+        self.write("] = ");
+        self.print_expr(&ia.value);
     }
 
     /// Print an optional chain expression.

@@ -4492,3 +4492,87 @@ fn test_snapshot_derives_deduplicates() {
         "Clone should appear only once in derives, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Index Signatures
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_pure_index_signature_type_alias() {
+    let source = "type Config = { [key: string]: string }";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("type Config = HashMap<String, String>;"),
+        "expected type alias for HashMap, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("use std::collections::HashMap;"),
+        "expected HashMap import, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_index_signature_numeric_keys() {
+    let source = "type Scores = { [id: i32]: string }";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("type Scores = HashMap<i32, String>;"),
+        "expected type alias for HashMap<i32, String>, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_hashmap_init_and_insert() {
+    let source = r#"
+function main() {
+    let config: { [key: string]: string } = {};
+    config["debug"] = "true";
+    config["verbose"] = "false";
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("HashMap::new()"),
+        "expected HashMap::new() init, got:\n{actual}"
+    );
+    assert!(
+        actual.contains(".insert("),
+        "expected .insert() call for index assignment, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_hashmap_index_read() {
+    let source = r#"
+function main() {
+    let config: { [key: string]: string } = {};
+    const val = config["debug"];
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    // HashMap index access: config["debug".to_string()] is valid Rust
+    // because HashMap<String, V> accepts String keys via Index trait
+    assert!(
+        actual.contains("config["),
+        "expected index access on HashMap, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_inline_index_signature_param() {
+    let source = r#"
+function getConfig(settings: { [key: string]: string }): string {
+    return settings["key"];
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("HashMap<String, String>"),
+        "expected HashMap<String, String> param type, got:\n{actual}"
+    );
+}

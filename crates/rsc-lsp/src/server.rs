@@ -1130,6 +1130,14 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             let types_str: Vec<String> = types.iter().map(format_type).collect();
             format!("[{}]", types_str.join(", "))
         }
+        TypeKind::IndexSignature(sig) => {
+            format!(
+                "{{ [{}:  {}]: {} }}",
+                sig.key_name.name,
+                format_type(&sig.key_type),
+                format_type(&sig.value_type)
+            )
+        }
     }
 }
 
