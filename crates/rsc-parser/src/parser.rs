@@ -2126,8 +2126,20 @@ impl<'src> Parser<'src> {
 
         if !self.check(&TokenKind::RBracket) && !self.at_end() {
             loop {
-                let ty = self.parse_type_annotation()?;
-                types.push(ty);
+                // Check for spread element: `...T`
+                if self.check(&TokenKind::DotDotDot) {
+                    let spread_start = self.current_token().span;
+                    self.advance(); // consume `...`
+                    let inner = self.parse_type_annotation()?;
+                    let spread_span = spread_start.merge(inner.span);
+                    types.push(TypeAnnotation {
+                        kind: TypeKind::TupleSpread(Box::new(inner)),
+                        span: spread_span,
+                    });
+                } else {
+                    let ty = self.parse_type_annotation()?;
+                    types.push(ty);
+                }
 
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -9228,6 +9240,89 @@ type Shape =
                 assert!(matches!(&extends_type.kind, TypeKind::Infer(i) if i.name == "T"));
             }
             other => panic!("expected Conditional, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Variadic tuple spread parsing tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_tuple_spread_single_element() {
+        let module = parse_ok("type X = [...Pair, bool]");
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+                match &types[0].kind {
+                    TypeKind::TupleSpread(inner) => {
+                        assert!(matches!(&inner.kind, TypeKind::Named(i) if i.name == "Pair"));
+                    }
+                    other => panic!("expected TupleSpread, got: {other:?}"),
+                }
+                assert!(matches!(&types[1].kind, TypeKind::Named(i) if i.name == "bool"));
+            }
+            other => panic!("expected Tuple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_spread_prepend() {
+        let module = parse_ok("type X = [i32, ...T]");
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+                assert!(matches!(&types[0].kind, TypeKind::Named(i) if i.name == "i32"));
+                match &types[1].kind {
+                    TypeKind::TupleSpread(inner) => {
+                        assert!(matches!(&inner.kind, TypeKind::Named(i) if i.name == "T"));
+                    }
+                    other => panic!("expected TupleSpread, got: {other:?}"),
+                }
+            }
+            other => panic!("expected Tuple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_spread_multiple_spreads() {
+        let module = parse_ok("type X = [...A, ...B]");
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+                assert!(matches!(&types[0].kind, TypeKind::TupleSpread(_)));
+                assert!(matches!(&types[1].kind, TypeKind::TupleSpread(_)));
+            }
+            other => panic!("expected Tuple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_tuple_spread_in_middle() {
+        let module = parse_ok("type X = [bool, ...Middle, f64]");
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 3);
+                assert!(matches!(&types[0].kind, TypeKind::Named(i) if i.name == "bool"));
+                assert!(matches!(&types[1].kind, TypeKind::TupleSpread(_)));
+                assert!(matches!(&types[2].kind, TypeKind::Named(i) if i.name == "f64"));
+            }
+            other => panic!("expected Tuple, got: {other:?}"),
         }
     }
 }

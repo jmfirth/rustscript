@@ -313,6 +313,8 @@ impl Printer {
     }
 
     /// Print a type annotation.
+    #[allow(clippy::too_many_lines)]
+    // Match arms for all TypeKind variants; splitting would obscure the type printing
     fn print_type_annotation(&mut self, ty: &TypeAnnotation) {
         match &ty.kind {
             TypeKind::Named(ident) => self.write(&ident.name),
@@ -410,6 +412,10 @@ impl Printer {
             TypeKind::Infer(ident) => {
                 self.write("infer ");
                 self.write(&ident.name);
+            }
+            TypeKind::TupleSpread(inner) => {
+                self.write("...");
+                self.print_type_annotation(inner);
             }
         }
     }
