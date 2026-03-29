@@ -12,7 +12,7 @@
 mod test_utils;
 
 use rsc_driver::compile_source;
-use test_utils::compile_diagnostics;
+use test_utils::{compile_diagnostics, compile_to_rust};
 
 // ===========================================================================
 // Helper: compile and assert no errors (does not panic on error, returns bool)
@@ -1393,4 +1393,71 @@ function main() {{
     // Must not crash or hang — may produce a diagnostic about depth
     let result = compile_source(&source, "test.rts");
     let _ = result.has_errors;
+}
+
+// ---------------------------------------------------------------------------
+// T110: for-in loops
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_conformance_for_in_map_keys() {
+    let source = r#"
+function main() {
+  const map: Map<string, i32> = new Map();
+  for (const k in map) {
+    console.log(k);
+  }
+}"#;
+    assert!(
+        compiles_ok(source),
+        "for-in on Map should compile without errors"
+    );
+}
+
+#[test]
+fn test_conformance_for_in_body_accesses_value() {
+    let source = r#"
+function main() {
+  const map: Map<string, i32> = new Map();
+  for (const k in map) {
+    console.log(k);
+  }
+}"#;
+    assert!(
+        compiles_ok(source),
+        "for-in with body accessing key should compile"
+    );
+}
+
+#[test]
+fn test_conformance_for_in_parses_distinctly_from_for_of() {
+    // for-in should parse as ForIn, for-of as For
+    let source_in = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  for (const k in m) {
+    console.log(k);
+  }
+}"#;
+    let source_of = r#"
+function main() {
+  const items: Array<i32> = [1, 2, 3];
+  for (const n of items) {
+    console.log(n);
+  }
+}"#;
+    assert!(compiles_ok(source_in), "for-in should compile");
+    assert!(compiles_ok(source_of), "for-of should compile");
+
+    // Both compile but produce different Rust output
+    let result_in = compile_to_rust(source_in);
+    let result_of = compile_to_rust(source_of);
+    assert!(
+        result_in.contains(".keys()"),
+        "for-in should emit .keys(): {result_in}"
+    );
+    assert!(
+        !result_of.contains(".keys()"),
+        "for-of should NOT emit .keys(): {result_of}"
+    );
 }

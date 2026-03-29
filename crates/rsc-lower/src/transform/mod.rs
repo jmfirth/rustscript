@@ -369,6 +369,9 @@ impl Transform {
                 ast::Stmt::For(f) => {
                     self.scan_stmts_for_unions(&f.body.stmts, generic_names);
                 }
+                ast::Stmt::ForIn(f) => {
+                    self.scan_stmts_for_unions(&f.body.stmts, generic_names);
+                }
                 _ => {}
             }
         }
@@ -2376,6 +2379,9 @@ fn collect_locals_from_stmts(
             }
             ast::Stmt::For(for_of) => {
                 collect_locals_from_stmts(&for_of.body.stmts, param_names, params, locals);
+            }
+            ast::Stmt::ForIn(for_in) => {
+                collect_locals_from_stmts(&for_in.body.stmts, param_names, params, locals);
             }
             _ => {}
         }

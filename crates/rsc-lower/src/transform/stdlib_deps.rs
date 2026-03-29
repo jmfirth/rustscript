@@ -58,6 +58,7 @@ fn stmt_uses_json(stmt: &ast::Stmt) -> bool {
         ast::Stmt::While(w) => expr_uses_json(&w.condition) || block_uses_json(&w.body),
         ast::Stmt::DoWhile(dw) => block_uses_json(&dw.body) || expr_uses_json(&dw.condition),
         ast::Stmt::For(f) => expr_uses_json(&f.iterable) || block_uses_json(&f.body),
+        ast::Stmt::ForIn(f) => expr_uses_json(&f.iterable) || block_uses_json(&f.body),
         ast::Stmt::TryCatch(tc) => {
             block_uses_json(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_uses_json)
@@ -114,6 +115,9 @@ fn stmt_uses_math_random(stmt: &ast::Stmt) -> bool {
             block_uses_math_random(&dw.body) || expr_uses_math_random(&dw.condition)
         }
         ast::Stmt::For(f) => expr_uses_math_random(&f.iterable) || block_uses_math_random(&f.body),
+        ast::Stmt::ForIn(f) => {
+            expr_uses_math_random(&f.iterable) || block_uses_math_random(&f.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_uses_math_random(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_uses_math_random)

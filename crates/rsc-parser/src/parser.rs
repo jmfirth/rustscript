@@ -11,14 +11,14 @@ use rsc_syntax::ast::{
     Block, BreakStmt, CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember,
     ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, Decorator,
     DestructureField, DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr,
-    ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident,
-    IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock, InterfaceDef,
-    InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module,
-    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
-    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, VarBinding,
-    VarDecl, Visibility, WhileStmt,
+    ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForInStmt, ForOfStmt,
+    Ident, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock,
+    InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
+    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    VarBinding, VarDecl, Visibility, WhileStmt,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -2376,7 +2376,7 @@ impl<'src> Parser<'src> {
             TokenKind::Return => self.parse_return_stmt().map(Stmt::Return),
             TokenKind::Switch => self.parse_switch_stmt().map(Stmt::Switch),
             TokenKind::Try => self.parse_try_catch_stmt().map(Stmt::TryCatch),
-            TokenKind::For => self.parse_for_of_stmt().map(Stmt::For),
+            TokenKind::For => self.parse_for_stmt(),
             TokenKind::Break => Some(Stmt::Break(self.parse_break_stmt())),
             TokenKind::Continue => Some(Stmt::Continue(self.parse_continue_stmt())),
             TokenKind::Rust => self.parse_rust_block_stmt(),
@@ -2544,12 +2544,15 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a for-of statement: `for (const/let IDENT of EXPR) BLOCK`.
-    fn parse_for_of_stmt(&mut self) -> Option<ForOfStmt> {
+    /// Parse a for loop statement, dispatching to `for...of` or `for...in`.
+    ///
+    /// `for (const/let IDENT of EXPR) BLOCK` → `Stmt::For`
+    /// `for (const/let IDENT in EXPR) BLOCK` → `Stmt::ForIn`
+    fn parse_for_stmt(&mut self) -> Option<Stmt> {
         let for_token = self.advance(); // consume `for`
         let start = for_token.span;
 
-        // Check for `for await (...)` — async iteration syntax
+        // Check for `for await (...)` — async iteration syntax (only valid with `of`)
         let is_await = self.current_token().kind == TokenKind::Await;
         if is_await {
             self.advance(); // consume `await`
@@ -2570,7 +2573,7 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 self.diagnostics.push(
-                    Diagnostic::error("expected `const` or `let` in for-of loop").with_label(
+                    Diagnostic::error("expected `const` or `let` in for loop").with_label(
                         binding_token.span,
                         self.file_id,
                         "expected `const` or `let`",
@@ -2585,18 +2588,24 @@ impl<'src> Parser<'src> {
             return None;
         };
 
-        // Expect contextual keyword `of`
-        if !self.eat_contextual_keyword("of") {
+        // Distinguish `of` vs `in` contextual keyword
+        let is_for_in = self.check_contextual_keyword("in");
+        let is_for_of = self.check_contextual_keyword("of");
+
+        if !is_for_in && !is_for_of {
             let current = self.current_token().clone();
             self.diagnostics.push(
-                Diagnostic::error("expected `of` in for-of loop").with_label(
+                Diagnostic::error("expected `of` or `in` in for loop").with_label(
                     current.span,
                     self.file_id,
-                    "expected `of`",
+                    "expected `of` or `in`",
                 ),
             );
             return None;
         }
+
+        // Consume the `of` or `in` keyword
+        self.advance();
 
         let Some(iterable) = self.parse_expr() else {
             self.synchronize();
@@ -2608,14 +2617,24 @@ impl<'src> Parser<'src> {
         let body = self.parse_block()?;
         let body_span = body.span;
 
-        Some(ForOfStmt {
-            binding,
-            variable,
-            iterable,
-            body,
-            is_await,
-            span: start.merge(body_span),
-        })
+        if is_for_in {
+            Some(Stmt::ForIn(ForInStmt {
+                binding,
+                variable,
+                iterable,
+                body,
+                span: start.merge(body_span),
+            }))
+        } else {
+            Some(Stmt::For(ForOfStmt {
+                binding,
+                variable,
+                iterable,
+                body,
+                is_await,
+                span: start.merge(body_span),
+            }))
+        }
     }
 
     /// Parse a `break;` statement.
@@ -9548,5 +9567,73 @@ type Shape =
             }
             other => panic!("expected Tuple, got: {other:?}"),
         }
+    }
+
+    // T110-1: Parse `for (const k in obj) { ... }` → ForInStmt
+    #[test]
+    fn test_parser_for_in_const_produces_for_in_stmt() {
+        let source = r#"function main() {
+  for (const k in obj) {
+    console.log(k);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForIn(for_in) => {
+                assert_eq!(for_in.binding, VarBinding::Const);
+                assert_eq!(for_in.variable.name, "k");
+                match &for_in.iterable.kind {
+                    ExprKind::Ident(ident) => assert_eq!(ident.name, "obj"),
+                    other => panic!("expected Ident, got: {other:?}"),
+                }
+                assert!(!for_in.body.stmts.is_empty());
+            }
+            other => panic!("expected ForIn, got: {other:?}"),
+        }
+    }
+
+    // T110-2: Parse `for (let k in obj) { ... }` → ForInStmt with Let binding
+    #[test]
+    fn test_parser_for_in_let_produces_for_in_stmt() {
+        let source = r#"function main() {
+  for (let k in obj) {
+    console.log(k);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForIn(for_in) => {
+                assert_eq!(for_in.binding, VarBinding::Let);
+                assert_eq!(for_in.variable.name, "k");
+            }
+            other => panic!("expected ForIn, got: {other:?}"),
+        }
+    }
+
+    // T110-3: for-in and for-of parse to different AST nodes
+    #[test]
+    fn test_parser_for_in_vs_for_of_distinct_ast_nodes() {
+        let source_in = r#"function main() {
+  for (const k in obj) { console.log(k); }
+}"#;
+        let source_of = r#"function main() {
+  for (const k of items) { console.log(k); }
+}"#;
+
+        let module_in = parse_ok(source_in);
+        let module_of = parse_ok(source_of);
+
+        let stmt_in = first_stmt(first_fn(&module_in));
+        let stmt_of = first_stmt(first_fn(&module_of));
+
+        assert!(
+            matches!(stmt_in, Stmt::ForIn(_)),
+            "for-in should produce ForIn"
+        );
+        assert!(matches!(stmt_of, Stmt::For(_)), "for-of should produce For");
     }
 }
