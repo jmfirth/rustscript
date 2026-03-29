@@ -291,6 +291,7 @@ impl<'src> Parser<'src> {
             TokenKind::Tilde => "`~`",
             TokenKind::As => "`as`",
             TokenKind::TypeOf => "`typeof`",
+            TokenKind::KeyOf => "`keyof`",
             TokenKind::Abstract => "`abstract`",
             TokenKind::Override => "`override`",
             TokenKind::Satisfies => "`satisfies`",
@@ -1980,6 +1981,28 @@ impl<'src> Parser<'src> {
                 Some(TypeAnnotation {
                     kind: TypeKind::StringLiteral(value),
                     span: token.span,
+                })
+            }
+            TokenKind::KeyOf => {
+                // keyof T — produces a union of string literal types for the keys of T
+                let start = token.span;
+                self.advance(); // consume `keyof`
+                let inner = self.parse_base_type_annotation()?;
+                let span = start.merge(inner.span);
+                Some(TypeAnnotation {
+                    kind: TypeKind::KeyOf(Box::new(inner)),
+                    span,
+                })
+            }
+            TokenKind::TypeOf => {
+                // typeof x in type position — resolves to the declared type of x
+                let start = token.span;
+                self.advance(); // consume `typeof`
+                let ident = self.parse_ident()?;
+                let span = start.merge(ident.span);
+                Some(TypeAnnotation {
+                    kind: TypeKind::TypeOf(ident),
+                    span,
                 })
             }
             _ => {
@@ -8976,6 +8999,86 @@ type Shape =
                 }
             }
             _ => panic!("expected Function"),
+        }
+    }
+
+    // ---- keyof and typeof type operators ----
+
+    #[test]
+    fn test_parser_keyof_type_alias() {
+        let module = parse_ok("type User = { name: string, age: u32 }\ntype UserKey = keyof User");
+        assert_eq!(module.items.len(), 2);
+        match &module.items[1].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "UserKey");
+                let alias = td.type_alias.as_ref().expect("expected type_alias");
+                match &alias.kind {
+                    TypeKind::KeyOf(inner) => {
+                        if let TypeKind::Named(ident) = &inner.kind {
+                            assert_eq!(ident.name, "User");
+                        } else {
+                            panic!("expected Named inside KeyOf, got: {:?}", inner.kind);
+                        }
+                    }
+                    _ => panic!("expected KeyOf, got: {:?}", alias.kind),
+                }
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_keyof_in_param_type() {
+        let module = parse_ok(
+            "type User = { name: string }\nfunction f(key: keyof User): string { return key; }",
+        );
+        let f = match &module.items[1].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &f.params[0].type_ann.kind {
+            TypeKind::KeyOf(inner) => {
+                if let TypeKind::Named(ident) = &inner.kind {
+                    assert_eq!(ident.name, "User");
+                } else {
+                    panic!("expected Named inside KeyOf");
+                }
+            }
+            _ => panic!("expected KeyOf, got: {:?}", f.params[0].type_ann.kind),
+        }
+    }
+
+    #[test]
+    fn test_parser_typeof_type_alias() {
+        let module = parse_ok("function f() { const x: i32 = 42; }\ntype Config = typeof config");
+        assert_eq!(module.items.len(), 2);
+        match &module.items[1].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Config");
+                let alias = td.type_alias.as_ref().expect("expected type_alias");
+                match &alias.kind {
+                    TypeKind::TypeOf(ident) => {
+                        assert_eq!(ident.name, "config");
+                    }
+                    _ => panic!("expected TypeOf, got: {:?}", alias.kind),
+                }
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parser_typeof_in_param_type() {
+        let module = parse_ok("function f(c: typeof config): void { }");
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected Function"),
+        };
+        match &f.params[0].type_ann.kind {
+            TypeKind::TypeOf(ident) => {
+                assert_eq!(ident.name, "config");
+            }
+            _ => panic!("expected TypeOf, got: {:?}", f.params[0].type_ann.kind),
         }
     }
 }

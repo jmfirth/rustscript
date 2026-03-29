@@ -433,6 +433,29 @@ impl Transform {
                                 _ => {}
                             }
                             items.push(lowered);
+                        } else if let ast::TypeKind::KeyOf(ref inner) = alias.kind {
+                            // keyof T — generate a simple enum with field names as variants
+                            if let Some(enum_def) =
+                                self.lower_keyof_type(td, inner, exported, &mut ctx)
+                            {
+                                items.push(RustItem::Enum(enum_def));
+                            }
+                        } else if let ast::TypeKind::TypeOf(ref ident) = alias.kind {
+                            // typeof x — resolve to the variable's declared type
+                            if let Some(var_info) = ctx.lookup_variable(&ident.name) {
+                                let rust_ty = var_info.ty.clone();
+                                items.push(RustItem::TypeAlias(RustTypeAlias {
+                                    public: exported,
+                                    name: td.name.name.clone(),
+                                    ty: rust_ty,
+                                    span: Some(td.span),
+                                }));
+                            } else {
+                                ctx.emit_diagnostic(Diagnostic::error(format!(
+                                    "`typeof` refers to unknown variable `{}`",
+                                    ident.name
+                                )));
+                            }
                         } else {
                             // Non-utility type alias: type X = SomeType
                             let mut diags = Vec::new();
@@ -593,6 +616,38 @@ impl Transform {
                 self.register_utility_type_def(td, alias, ctx);
                 return;
             }
+            // keyof T — register as a simple enum with field name variants
+            if let ast::TypeKind::KeyOf(ref inner) = alias.kind {
+                if let ast::TypeKind::Named(ref ident) = inner.kind {
+                    if let Some(reg_type) = self.type_registry.lookup(&ident.name) {
+                        let field_names: Vec<String> = match &reg_type.kind {
+                            rsc_typeck::registry::TypeDefKind::Struct(fields) => fields
+                                .iter()
+                                .map(|(name, _)| capitalize_first(name))
+                                .collect(),
+                            rsc_typeck::registry::TypeDefKind::Class { fields, .. } => fields
+                                .iter()
+                                .map(|(name, _)| capitalize_first(name))
+                                .collect(),
+                            _ => {
+                                ctx.emit_diagnostic(Diagnostic::error(format!(
+                                    "`keyof` requires a struct or class type, but `{}` is an enum or interface",
+                                    ident.name
+                                )));
+                                Vec::new()
+                            }
+                        };
+                        self.type_registry
+                            .register_simple_enum(td.name.name.clone(), field_names);
+                    } else {
+                        ctx.emit_diagnostic(Diagnostic::error(format!(
+                            "`keyof` requires a known type, but `{}` is not defined",
+                            ident.name
+                        )));
+                    }
+                }
+                return;
+            }
             // Non-utility type alias — register as empty struct
             // (the actual lowering will produce a type alias)
             self.type_registry
@@ -663,6 +718,68 @@ impl Transform {
             derives,
             doc_comment: td.doc_comment.clone(),
             span: Some(td.span),
+        }
+    }
+
+    /// Lower a `keyof T` type alias to a simple enum.
+    ///
+    /// `type UserKey = keyof User` where User has fields `name`, `age`, `email`
+    /// → `enum UserKey { Name, Age, Email }` with standard simple-enum derives.
+    fn lower_keyof_type(
+        &self,
+        td: &ast::TypeDef,
+        inner: &ast::TypeAnnotation,
+        exported: bool,
+        ctx: &mut LoweringContext,
+    ) -> Option<RustEnumDef> {
+        if let ast::TypeKind::Named(ref ident) = inner.kind {
+            if let Some(reg_type) = self.type_registry.lookup(&ident.name) {
+                let field_names: Vec<String> = match &reg_type.kind {
+                    rsc_typeck::registry::TypeDefKind::Struct(fields) => {
+                        fields.iter().map(|(name, _)| name.clone()).collect()
+                    }
+                    rsc_typeck::registry::TypeDefKind::Class { fields, .. } => {
+                        fields.iter().map(|(name, _)| name.clone()).collect()
+                    }
+                    _ => {
+                        ctx.emit_diagnostic(Diagnostic::error(format!(
+                            "`keyof` requires a struct or class type, but `{}` is an enum or interface",
+                            ident.name
+                        )));
+                        return None;
+                    }
+                };
+                let variants: Vec<RustEnumVariant> = field_names
+                    .iter()
+                    .map(|name| RustEnumVariant {
+                        name: capitalize_first(name),
+                        fields: vec![],
+                        tuple_types: vec![],
+                        span: None,
+                    })
+                    .collect();
+                let derives =
+                    merge_derives(derive_inference::infer_enum_derives(&variants), &td.derives);
+                Some(RustEnumDef {
+                    public: exported,
+                    name: td.name.name.clone(),
+                    variants,
+                    derives,
+                    doc_comment: td.doc_comment.clone(),
+                    span: Some(td.span),
+                })
+            } else {
+                ctx.emit_diagnostic(Diagnostic::error(format!(
+                    "`keyof` requires a known type, but `{}` is not defined",
+                    ident.name
+                )));
+                None
+            }
+        } else {
+            ctx.emit_diagnostic(Diagnostic::error(
+                "`keyof` requires a named type".to_owned(),
+            ));
+            None
         }
     }
 
@@ -1504,6 +1621,10 @@ impl Transform {
             ctx.emit_diagnostic(d);
         }
 
+        // Register the const variable in the lowering context so that
+        // `typeof x` can resolve to this variable's type.
+        ctx.declare_variable(decl.name.name.clone(), ty.clone());
+
         let use_map = UseMap::empty();
         let init = self.lower_expr(&decl.init, ctx, &use_map, 0);
 
@@ -1838,7 +1959,9 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Shared(_)
                         | ast::TypeKind::Tuple(_)
                         | ast::TypeKind::IndexSignature(_)
-                        | ast::TypeKind::StringLiteral(_) => vec![],
+                        | ast::TypeKind::StringLiteral(_)
+                        | ast::TypeKind::KeyOf(_)
+                        | ast::TypeKind::TypeOf(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
@@ -7320,5 +7443,112 @@ type Bad = Pick<User, "nonexistent">"#;
             Transform::extract_string_literal_fields(&ann),
             vec!["name", "age"]
         );
+    }
+
+    // ---- keyof type operator ----
+
+    #[test]
+    fn test_lower_keyof_produces_simple_enum() {
+        let output = compile_and_emit(
+            "type User = { name: string, age: u32, email: string }\ntype UserKey = keyof User",
+        );
+        assert!(
+            output.contains("enum UserKey"),
+            "expected enum UserKey in output: {output}"
+        );
+        assert!(
+            output.contains("Name"),
+            "expected Name variant in output: {output}"
+        );
+        assert!(
+            output.contains("Age"),
+            "expected Age variant in output: {output}"
+        );
+        assert!(
+            output.contains("Email"),
+            "expected Email variant in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_keyof_enum_has_derives() {
+        let output =
+            compile_and_emit("type Point = { x: f64, y: f64 }\ntype PointKey = keyof Point");
+        assert!(
+            output.contains("enum PointKey"),
+            "expected enum PointKey in output: {output}"
+        );
+        // Simple enums get at least Debug + Clone derives
+        assert!(
+            output.contains("derive"),
+            "expected derive attribute in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_keyof_with_two_fields() {
+        let output = compile_and_emit(
+            "type Config = { debug: bool, verbose: bool }\ntype ConfigKey = keyof Config",
+        );
+        assert!(
+            output.contains("enum ConfigKey"),
+            "expected enum ConfigKey in output: {output}"
+        );
+        assert!(
+            output.contains("Debug"),
+            "expected Debug variant in output: {output}"
+        );
+        assert!(
+            output.contains("Verbose"),
+            "expected Verbose variant in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_typeof_resolves_variable_type() {
+        // typeof works for top-level const declarations with explicit type annotations
+        let output = compile_and_emit("const x: i32 = 42;\ntype XType = typeof x");
+        assert!(
+            output.contains("type XType = i32"),
+            "expected type alias to i32 in output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_keyof_produces_correct_ir_structure() {
+        let ir = lower_source("type User = { name: string, age: u32 }\ntype UserKey = keyof User");
+        // Should have a struct for User and an enum for UserKey
+        let has_user_struct = ir
+            .items
+            .iter()
+            .any(|item| matches!(item, RustItem::Struct(s) if s.name == "User"));
+        let has_key_enum = ir.items.iter().any(|item| {
+            if let RustItem::Enum(e) = item {
+                e.name == "UserKey"
+                    && e.variants.len() == 2
+                    && e.variants[0].name == "Name"
+                    && e.variants[1].name == "Age"
+            } else {
+                false
+            }
+        });
+        assert!(has_user_struct, "expected User struct in IR");
+        assert!(
+            has_key_enum,
+            "expected UserKey enum with Name, Age variants in IR"
+        );
+    }
+
+    #[test]
+    fn test_lower_typeof_produces_type_alias_ir() {
+        let ir = lower_source("const x: i32 = 42;\ntype XType = typeof x");
+        let has_alias = ir.items.iter().any(|item| {
+            if let RustItem::TypeAlias(a) = item {
+                a.name == "XType" && a.ty == RustType::I32
+            } else {
+                false
+            }
+        });
+        assert!(has_alias, "expected XType type alias to i32 in IR");
     }
 }

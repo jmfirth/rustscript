@@ -1139,6 +1139,8 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             )
         }
         TypeKind::StringLiteral(value) => format!("\"{value}\""),
+        TypeKind::KeyOf(inner) => format!("keyof {}", format_type(inner)),
+        TypeKind::TypeOf(ident) => format!("typeof {}", ident.name),
     }
 }
 

@@ -381,6 +381,14 @@ impl Printer {
                 self.write(value);
                 self.write("\"");
             }
+            TypeKind::KeyOf(inner) => {
+                self.write("keyof ");
+                self.print_type_annotation(inner);
+            }
+            TypeKind::TypeOf(ident) => {
+                self.write("typeof ");
+                self.write(&ident.name);
+            }
         }
     }
 

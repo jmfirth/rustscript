@@ -627,6 +627,13 @@ pub enum TypeKind {
     /// `Pick<User, "name" | "age">` or `Omit<User, "email">`.
     /// The string is the literal value (field name).
     StringLiteral(String),
+    /// `keyof T` — a type operator that produces a union of string literal types
+    /// representing the keys of the referenced type.
+    /// Lowers to a simple enum with variants for each field name.
+    KeyOf(Box<TypeAnnotation>),
+    /// `typeof x` in type position — resolves to the declared type of a variable.
+    /// Distinct from expression-level `typeof` which returns a string at runtime.
+    TypeOf(Ident),
 }
 
 /// An identifier with its source span.

@@ -842,6 +842,7 @@ impl<'a> Lexer<'a> {
             "derives" => TokenKind::Derives,
             "as" => TokenKind::As,
             "typeof" => TokenKind::TypeOf,
+            "keyof" => TokenKind::KeyOf,
             "abstract" => TokenKind::Abstract,
             "override" => TokenKind::Override,
             "satisfies" => TokenKind::Satisfies,
@@ -1960,5 +1961,13 @@ mod tests {
                 .any(|t| matches!(&t.kind, TokenKind::Ident(n) if n.starts_with('#'))),
             "bare # should not produce a hash-ident"
         );
+    }
+
+    // 77. `keyof` is tokenized as a keyword
+    #[test]
+    fn test_lexer_keyof_keyword() {
+        let tokens = tokenize("keyof User");
+        assert_eq!(tokens[0].kind, TokenKind::KeyOf);
+        assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "User"));
     }
 }

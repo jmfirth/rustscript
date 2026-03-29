@@ -174,6 +174,8 @@ pub(crate) enum TokenKind {
     As,
     /// `typeof` (type query operator)
     TypeOf,
+    /// `keyof` (key extraction type operator)
+    KeyOf,
     /// `??=` (nullish assignment operator)
     QuestionQuestionEq,
     /// `||=` (logical OR assignment operator)

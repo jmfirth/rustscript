@@ -156,6 +156,12 @@ pub fn resolve_type_annotation(
             // type — they're consumed by the utility type lowering pass.
             Type::Error
         }
+        ast::TypeKind::KeyOf(_) | ast::TypeKind::TypeOf(_) => {
+            // keyof and typeof require the type registry to resolve.
+            // Without registry context, treat as error and let the
+            // registry-aware resolution handle them.
+            Type::Error
+        }
     }
 }
 
@@ -304,6 +310,38 @@ pub fn resolve_type_annotation_with_generics(
             // String literal types are used in utility type arguments
             // (e.g., Pick<User, "name" | "age">). They don't resolve to a runtime
             // type — they're consumed by the utility type lowering pass.
+            Type::Error
+        }
+        ast::TypeKind::KeyOf(inner) => {
+            // keyof T — resolve T, look up its fields, return a Named type
+            // that matches the generated enum name. The actual enum generation
+            // happens during lowering; here we just resolve to the named type.
+            // The lowering pass generates an enum named "{T}Key" with the field
+            // names as variants.
+            if let ast::TypeKind::Named(ref ident) = inner.kind {
+                if registry.lookup(&ident.name).is_some() {
+                    // The lowering pass will generate a simple enum for this keyof.
+                    // Resolve to a Named type matching the generated enum name.
+                    Type::Named(format!("{}Key", ident.name))
+                } else {
+                    diagnostics.push(Diagnostic::error(format!(
+                        "`keyof` requires a known type, but `{}` is not defined",
+                        ident.name
+                    )));
+                    Type::Error
+                }
+            } else {
+                diagnostics.push(Diagnostic::error(
+                    "`keyof` requires a named type".to_owned(),
+                ));
+                Type::Error
+            }
+        }
+        ast::TypeKind::TypeOf(_) => {
+            // typeof x — resolution happens during lowering where variable
+            // scope information is available. At type-resolution time, we
+            // cannot look up variable types, so this is handled as a pass-through.
+            // The lowering pass resolves typeof by looking up the variable's type.
             Type::Error
         }
     }
@@ -779,5 +817,90 @@ mod tests {
             }
             other => panic!("expected Union, got {other:?}"),
         }
+    }
+
+    // ---- keyof type operator ----
+
+    #[test]
+    fn test_resolve_keyof_with_registry_known_type() {
+        let mut registry = crate::registry::TypeRegistry::new();
+        registry.register(
+            "User".to_owned(),
+            vec![
+                ("name".to_owned(), Type::String),
+                ("age".to_owned(), Type::Primitive(PrimitiveType::U32)),
+            ],
+        );
+
+        let ann = TypeAnnotation {
+            kind: TypeKind::KeyOf(Box::new(TypeAnnotation {
+                kind: TypeKind::Named(ident("User", 6, 10)),
+                span: span(6, 10),
+            })),
+            span: span(0, 10),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert!(diags.is_empty());
+        assert_eq!(ty, Type::Named("UserKey".to_owned()));
+    }
+
+    #[test]
+    fn test_resolve_keyof_unknown_type_emits_diagnostic() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::KeyOf(Box::new(TypeAnnotation {
+                kind: TypeKind::Named(ident("Unknown", 6, 13)),
+                span: span(6, 13),
+            })),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        assert_eq!(ty, Type::Error);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("keyof"));
+    }
+
+    #[test]
+    fn test_resolve_keyof_without_registry_returns_error() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::KeyOf(Box::new(TypeAnnotation {
+                kind: TypeKind::Named(ident("User", 6, 10)),
+                span: span(6, 10),
+            })),
+            span: span(0, 10),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        // Without registry, keyof returns Error
+        assert_eq!(ty, Type::Error);
+    }
+
+    // ---- typeof type operator ----
+
+    #[test]
+    fn test_resolve_typeof_returns_error_at_type_level() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::TypeOf(ident("config", 7, 13)),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        // typeof requires variable scope info — returns Error at type-resolution time
+        assert_eq!(ty, Type::Error);
+    }
+
+    #[test]
+    fn test_resolve_typeof_with_registry_returns_error() {
+        let registry = crate::registry::TypeRegistry::new();
+        let ann = TypeAnnotation {
+            kind: TypeKind::TypeOf(ident("config", 7, 13)),
+            span: span(0, 13),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation_with_registry(&ann, &registry, &mut diags);
+        // typeof requires variable scope info — returns Error even with registry
+        assert_eq!(ty, Type::Error);
     }
 }
