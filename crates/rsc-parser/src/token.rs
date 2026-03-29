@@ -110,6 +110,8 @@ pub(crate) enum TokenKind {
     Yield,
     /// `infer` (bind a type variable in conditional type extends clause)
     Infer,
+    /// `@` (decorator prefix, lowers to Rust `#[...]` attributes)
+    At,
 
     // Operators
     /// `+`

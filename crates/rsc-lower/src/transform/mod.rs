@@ -119,6 +119,7 @@ impl UnionRegistry {
                 name: name.to_owned(),
                 variants: enum_variants,
                 derives,
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             }));
@@ -164,6 +165,49 @@ pub(crate) struct Transform {
     /// Map from generator function name to its iterator struct name.
     /// Used to rewrite call sites: `range(0, 5)` → `RangeIter::new(0, 5)`.
     generator_structs: HashMap<String, String>,
+}
+
+/// Convert a `RustScript` decorator to a Rust attribute.
+///
+/// Handles the special mapping `@tokio_test` → `#[tokio::test]`.
+/// All other decorators map directly: `@name(args)` → `#[name(args)]`.
+fn lower_decorator(decorator: &ast::Decorator) -> RustAttribute {
+    // Special mapping: @tokio_test → #[tokio::test]
+    let path = if decorator.name == "tokio_test" {
+        "tokio::test".to_owned()
+    } else {
+        decorator.name.clone()
+    };
+    RustAttribute {
+        path,
+        args: decorator.args.clone(),
+    }
+}
+
+/// Lower a list of decorators to Rust attributes, splitting out `@derive(...)` decorators.
+///
+/// Returns `(attributes, extra_derives)` where:
+/// - `attributes` are non-derive attributes to add to the IR item
+/// - `extra_derives` are derive macro names extracted from `@derive(...)` decorators
+fn lower_decorators(decorators: &[ast::Decorator]) -> (Vec<RustAttribute>, Vec<String>) {
+    let mut attributes = Vec::new();
+    let mut extra_derives = Vec::new();
+    for decorator in decorators {
+        if decorator.name == "derive" {
+            // Extract derive names from args
+            if let Some(ref args) = decorator.args {
+                for name in args.split(',') {
+                    let trimmed = name.trim();
+                    if !trimmed.is_empty() {
+                        extra_derives.push(trimmed.to_owned());
+                    }
+                }
+            }
+        } else {
+            attributes.push(lower_decorator(decorator));
+        }
+    }
+    (attributes, extra_derives)
 }
 
 impl Transform {
@@ -429,6 +473,8 @@ impl Transform {
 
         for item in &module.items {
             let exported = item.exported;
+            let (decorator_attrs, decorator_derives) = lower_decorators(&item.decorators);
+            let items_before = items.len();
             match &item.kind {
                 ast::ItemKind::Function(f) => {
                     if f.is_generator {
@@ -440,6 +486,7 @@ impl Transform {
                         }
                         let mut lowered = self.lower_fn(f, &mut ctx);
                         lowered.public = exported;
+                        lowered.attributes.extend(decorator_attrs.iter().cloned());
                         items.push(RustItem::Function(lowered));
                     }
                 }
@@ -562,6 +609,33 @@ impl Transform {
                 }
                 // Test blocks are handled separately by collect_test_module
                 ast::ItemKind::TestBlock(_) => {}
+            }
+
+            // Apply decorator-derived attributes and derives to the first newly-lowered
+            // item (the primary lowered item). Function attributes are already applied
+            // above in the Function arm.
+            if (!decorator_attrs.is_empty() || !decorator_derives.is_empty())
+                && let Some(new_item) = items[items_before..].first_mut()
+            {
+                match new_item {
+                    RustItem::Struct(s) => {
+                        s.attributes.extend(decorator_attrs);
+                        for d in &decorator_derives {
+                            if !s.derives.contains(d) {
+                                s.derives.push(d.clone());
+                            }
+                        }
+                    }
+                    RustItem::Enum(e) => {
+                        e.attributes.extend(decorator_attrs);
+                        for d in &decorator_derives {
+                            if !e.derives.contains(d) {
+                                e.derives.push(d.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -737,6 +811,7 @@ impl Transform {
             type_params,
             fields,
             derives,
+            attributes: vec![],
             doc_comment: td.doc_comment.clone(),
             span: Some(td.span),
         }
@@ -786,6 +861,7 @@ impl Transform {
                     name: td.name.name.clone(),
                     variants,
                     derives,
+                    attributes: vec![],
                     doc_comment: td.doc_comment.clone(),
                     span: Some(td.span),
                 })
@@ -1170,6 +1246,7 @@ impl Transform {
             type_params,
             fields,
             derives,
+            attributes: vec![],
             doc_comment: td.doc_comment.clone(),
             span: Some(td.span),
         })
@@ -1513,6 +1590,7 @@ impl Transform {
             name: ed.name.name.clone(),
             variants,
             derives,
+            attributes: vec![],
             doc_comment: ed.doc_comment.clone(),
             span: Some(ed.span),
         }
@@ -2026,6 +2104,7 @@ impl Transform {
             type_params: vec![],
             fields,
             derives: vec![],
+            attributes: vec![],
             doc_comment: f.doc_comment.clone(),
             span: Some(f.span),
         }));
@@ -2982,6 +3061,7 @@ mod tests {
         Item {
             kind: ItemKind::Function(f),
             exported: false,
+            decorators: vec![],
             span: item_span,
         }
     }
@@ -4047,6 +4127,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::TypeDef(td),
                 exported: false,
+                decorators: vec![],
                 span: span(0, 50),
             }],
             span: span(0, 50),
@@ -4137,6 +4218,7 @@ mod tests {
                 Item {
                     kind: ItemKind::TypeDef(td),
                     exported: false,
+                    decorators: vec![],
                     span: span(0, 30),
                 },
                 fn_item(make_fn("main", vec![], None, body)),
@@ -4360,6 +4442,7 @@ mod tests {
         let module = make_module(vec![Item {
             kind: ItemKind::TypeDef(td),
             exported: false,
+            decorators: vec![],
             span: span(0, 30),
         }]);
         let mut transform = Transform::new(false);
@@ -4590,6 +4673,7 @@ mod tests {
                     span: span(0, 50),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: span(0, 50),
             }],
             span: span(0, 50),
@@ -4660,6 +4744,7 @@ mod tests {
                     span: span(0, 80),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: span(0, 80),
             }],
             span: span(0, 80),
@@ -5520,6 +5605,7 @@ mod tests {
                     span: span(0, 37),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: span(0, 37),
             }],
             span: span(0, 37),
@@ -5565,6 +5651,7 @@ mod tests {
                     span: span(0, 28),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: span(0, 28),
             }],
             span: span(0, 28),
@@ -5606,6 +5693,7 @@ mod tests {
                         span: span(0, 37),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: span(0, 37),
                 },
                 Item {
@@ -5622,6 +5710,7 @@ mod tests {
                         span: span(40, 62),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: span(40, 62),
                 },
                 Item {
@@ -5679,6 +5768,7 @@ mod tests {
                         span: span(65, 150),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: span(65, 150),
                 },
             ],

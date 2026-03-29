@@ -220,6 +220,7 @@ impl Transform {
             type_params: type_params.clone(),
             fields,
             derives,
+            attributes: vec![],
             doc_comment: cls.doc_comment.clone(),
             span: Some(cls.span),
         }));

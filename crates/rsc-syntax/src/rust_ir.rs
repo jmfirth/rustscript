@@ -188,6 +188,9 @@ pub struct RustStructDef {
     pub fields: Vec<RustFieldDef>,
     /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
     pub derives: Vec<String>,
+    /// Outer attributes on the struct (e.g., `#[serde(rename_all = "camelCase")]`).
+    /// Populated from `@decorator` syntax in `RustScript` source.
+    pub attributes: Vec<RustAttribute>,
     /// Doc comment from `JSDoc`, if any.
     pub doc_comment: Option<String>,
     /// The source span, if derived from source.
@@ -225,6 +228,9 @@ pub struct RustEnumDef {
     pub variants: Vec<RustEnumVariant>,
     /// Derive macros to apply: `#[derive(Debug, Clone, ...)]`.
     pub derives: Vec<String>,
+    /// Outer attributes on the enum (e.g., `#[serde(tag = "type")]`).
+    /// Populated from `@decorator` syntax in `RustScript` source.
+    pub attributes: Vec<RustAttribute>,
     /// Doc comment from `JSDoc`, if any.
     pub doc_comment: Option<String>,
     /// The source span, if derived from source.

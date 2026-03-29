@@ -23,11 +23,28 @@ pub struct Module {
     pub span: Span,
 }
 
+/// A decorator on an item: `@name` or `@name(args)`.
+///
+/// Decorators map directly to Rust attributes (`#[...]`). For example,
+/// `@derive(Clone, Debug)` lowers to `#[derive(Clone, Debug)]` and
+/// `@test` lowers to `#[test]`. The special mapping `@tokio_test` produces
+/// `#[tokio::test]`.
+#[derive(Debug, Clone)]
+pub struct Decorator {
+    /// The decorator name (e.g., `"derive"`, `"test"`, `"cfg"`).
+    pub name: String,
+    /// Optional parenthesized arguments, passed through as a raw string.
+    /// For example, `@derive(Clone, Debug)` has args `Some("Clone, Debug")`.
+    pub args: Option<String>,
+    /// The span covering the entire decorator.
+    pub span: Span,
+}
+
 /// A top-level item in a `RustScript` module.
 ///
 /// Wraps an [`ItemKind`] with metadata common to all items (export status,
-/// source span). Supports function declarations, type definitions, enums,
-/// interfaces, classes, imports, and re-exports.
+/// decorators, source span). Supports function declarations, type definitions,
+/// enums, interfaces, classes, imports, and re-exports.
 #[derive(Debug, Clone)]
 pub struct Item {
     /// The kind of item.
@@ -35,6 +52,9 @@ pub struct Item {
     /// Whether this item is exported (`export` keyword). Defaults to `false`
     /// until the module system is implemented (Task 024).
     pub exported: bool,
+    /// Decorators applied to this item (`@name` or `@name(args)`).
+    /// Each decorator lowers to a Rust attribute (`#[...]`).
+    pub decorators: Vec<Decorator>,
     /// The span covering the entire item.
     pub span: Span,
 }

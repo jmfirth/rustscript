@@ -278,6 +278,18 @@ impl Emitter {
         if let Some(ref doc) = s.doc_comment {
             self.emit_doc_comment(doc);
         }
+        // Emit attributes from decorators (before derives)
+        for attr in &s.attributes {
+            self.write_indent();
+            self.write("#[");
+            self.write(&attr.path);
+            if let Some(ref args) = attr.args {
+                self.write("(");
+                self.write(args);
+                self.write(")");
+            }
+            self.writeln("]");
+        }
         if !s.derives.is_empty() {
             self.write_indent();
             self.write("#[derive(");
@@ -320,6 +332,18 @@ impl Emitter {
         self.set_span(e.span);
         if let Some(ref doc) = e.doc_comment {
             self.emit_doc_comment(doc);
+        }
+        // Emit attributes from decorators (before derives)
+        for attr in &e.attributes {
+            self.write_indent();
+            self.write("#[");
+            self.write(&attr.path);
+            if let Some(ref args) = attr.args {
+                self.write("(");
+                self.write(args);
+                self.write(")");
+            }
+            self.writeln("]");
         }
         if !e.derives.is_empty() {
             self.write_indent();
@@ -2940,6 +2964,7 @@ fn main() {
                     },
                 ],
                 derives: vec![],
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             })],
@@ -3244,6 +3269,7 @@ fn main() {
                     span: None,
                 }],
                 derives: vec![],
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             })],
@@ -3307,6 +3333,7 @@ fn main() {
                     },
                 ],
                 derives: vec![],
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             })],
@@ -3365,6 +3392,7 @@ fn main() {
                     },
                 ],
                 derives: vec![],
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             })],
@@ -4340,6 +4368,7 @@ fn main() {
                     span: None,
                 }],
                 derives: vec![],
+                attributes: vec![],
                 doc_comment: None,
                 span: None,
             })],

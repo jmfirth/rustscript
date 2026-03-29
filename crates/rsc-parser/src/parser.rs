@@ -9,7 +9,7 @@
 use rsc_syntax::ast::{
     ArrayDestructureElement, ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, BinaryOp,
     Block, BreakStmt, CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember,
-    ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt,
+    ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, Decorator,
     DestructureField, DestructureStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForOfStmt, Ident, IfStmt,
     ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock, InterfaceDef,
@@ -299,6 +299,7 @@ impl<'src> Parser<'src> {
             TokenKind::Override => "`override`",
             TokenKind::Satisfies => "`satisfies`",
             TokenKind::Infer => "`infer`",
+            TokenKind::At => "`@`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -327,7 +328,8 @@ impl<'src> Parser<'src> {
                 | TokenKind::Throw
                 | TokenKind::Interface
                 | TokenKind::Class
-                | TokenKind::Abstract => return,
+                | TokenKind::Abstract
+                | TokenKind::At => return,
                 TokenKind::Semicolon => {
                     self.advance();
                     return;
@@ -352,8 +354,11 @@ impl<'src> Parser<'src> {
             // Consume any JSDoc tokens before the next item so that
             // `pending_doc` is set for the subsequent `parse_item`.
             self.consume_jsdoc_tokens();
+            // Parse any decorators before the item.
+            let decorators = self.parse_decorators();
             let before = self.pos;
-            if let Some(item) = self.parse_item() {
+            if let Some(mut item) = self.parse_item() {
+                item.decorators = decorators;
                 items.push(item);
             }
             // Safety: guarantee forward progress to prevent infinite loops
@@ -368,6 +373,86 @@ impl<'src> Parser<'src> {
             items,
             span: start_span.merge(end_span),
         }
+    }
+
+    /// Parse zero or more decorators: `@name` or `@name(args)`.
+    ///
+    /// Decorators are parsed greedily before any item declaration. Each decorator
+    /// maps to a Rust attribute (`#[...]`) during lowering.
+    fn parse_decorators(&mut self) -> Vec<Decorator> {
+        let mut decorators = Vec::new();
+        while self.check(&TokenKind::At) {
+            let at_token = self.advance(); // consume `@`
+            let start = at_token.span;
+
+            // Expect an identifier for the decorator name
+            let name = if let TokenKind::Ident(name) = self.peek().clone() {
+                self.advance();
+                name
+            } else {
+                self.diagnostics.push(
+                    Diagnostic::error("expected decorator name after `@`").with_label(
+                        self.current_token().span,
+                        self.file_id,
+                        "expected identifier",
+                    ),
+                );
+                break;
+            };
+
+            // Optionally parse parenthesized arguments as a raw string
+            let args = if self.check(&TokenKind::LParen) {
+                self.advance(); // consume `(`
+                let args_start = self.pos;
+                let mut depth = 1_u32;
+                // Collect tokens until the matching close paren
+                while depth > 0 && !self.at_end() {
+                    match self.peek() {
+                        TokenKind::LParen => {
+                            depth += 1;
+                            self.advance();
+                        }
+                        TokenKind::RParen => {
+                            depth -= 1;
+                            if depth > 0 {
+                                self.advance();
+                            }
+                        }
+                        _ => {
+                            self.advance();
+                        }
+                    }
+                }
+                // Extract the raw text between the parens from the source
+                let args_end = self.pos;
+                let args_text = if args_start < args_end {
+                    let start_byte = self.tokens[args_start].span.start.0 as usize;
+                    let end_byte = self.tokens[args_end.min(self.tokens.len() - 1)]
+                        .span
+                        .start
+                        .0 as usize;
+                    self.source[start_byte..end_byte].trim().to_owned()
+                } else {
+                    String::new()
+                };
+                self.eat(&TokenKind::RParen); // consume `)`
+                if args_text.is_empty() {
+                    None
+                } else {
+                    Some(args_text)
+                }
+            } else {
+                None
+            };
+
+            let end = self.previous_span();
+            decorators.push(Decorator {
+                name,
+                args,
+                span: start.merge(end),
+            });
+        }
+        decorators
     }
 
     /// Parse a top-level item: function, type definition, interface, import, or export.
@@ -393,6 +478,7 @@ impl<'src> Parser<'src> {
                         Item {
                             kind: ItemKind::Function(f),
                             exported: false,
+                            decorators: vec![],
                             span,
                         }
                     })
@@ -402,6 +488,7 @@ impl<'src> Parser<'src> {
                 Item {
                     kind: ItemKind::Function(f),
                     exported: false,
+                    decorators: vec![],
                     span,
                 }
             }),
@@ -411,6 +498,7 @@ impl<'src> Parser<'src> {
                 Item {
                     kind: ItemKind::Interface(iface),
                     exported: false,
+                    decorators: vec![],
                     span,
                 }
             }),
@@ -419,6 +507,7 @@ impl<'src> Parser<'src> {
                 Item {
                     kind: ItemKind::Class(cls),
                     exported: false,
+                    decorators: vec![],
                     span,
                 }
             }),
@@ -434,6 +523,7 @@ impl<'src> Parser<'src> {
                         Item {
                             kind: ItemKind::Class(cls),
                             exported: false,
+                            decorators: vec![],
                             span,
                         }
                     })
@@ -514,6 +604,7 @@ impl<'src> Parser<'src> {
                 span,
             }),
             exported: false,
+            decorators: vec![],
             span,
         })
     }
@@ -551,6 +642,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::Function(f),
                     exported: true,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -560,6 +652,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::Function(f),
                     exported: true,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -575,6 +668,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::Class(cls),
                     exported: true,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -590,6 +684,7 @@ impl<'src> Parser<'src> {
                     Some(Item {
                         kind: ItemKind::Class(cls),
                         exported: true,
+                        decorators: vec![],
                         span,
                     })
                 } else {
@@ -611,6 +706,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::Interface(iface),
                     exported: true,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -637,6 +733,7 @@ impl<'src> Parser<'src> {
                         span,
                     }),
                     exported: true,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -845,6 +942,9 @@ impl<'src> Parser<'src> {
     /// - `{` followed by `ident :` → struct type def
     /// - String literal → simple enum
     /// - `|` → data enum (discriminated union)
+    #[allow(clippy::too_many_lines)]
+    // Type/enum/alias discrimination requires testing multiple production paths;
+    // splitting would obscure the grammar alternatives.
     fn parse_type_or_enum_def(&mut self) -> Option<Item> {
         let doc_comment = self.take_pending_doc();
         let type_token = self.advance(); // consume `type`
@@ -878,6 +978,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
                     exported: false,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -895,6 +996,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::EnumDef(enum_def),
                     exported: false,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -923,6 +1025,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::TypeDef(td),
                     exported: false,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -948,6 +1051,7 @@ impl<'src> Parser<'src> {
                 Some(Item {
                     kind: ItemKind::TypeDef(td),
                     exported: false,
+                    decorators: vec![],
                     span,
                 })
             }
@@ -4317,6 +4421,7 @@ impl<'src> Parser<'src> {
         Some(Item {
             kind: ItemKind::RustBlock(rust_block),
             exported: false,
+            decorators: vec![],
             span,
         })
     }
@@ -4375,6 +4480,7 @@ impl<'src> Parser<'src> {
                 span,
             }),
             exported: false,
+            decorators: vec![],
             span,
         })
     }
@@ -4468,6 +4574,7 @@ impl<'src> Parser<'src> {
                 span,
             }),
             exported: false,
+            decorators: vec![],
             span,
         })
     }
@@ -9229,5 +9336,79 @@ type Shape =
             }
             other => panic!("expected Conditional, got: {other:?}"),
         }
+    }
+
+    // ---- Decorator parsing tests ----
+
+    #[test]
+    fn test_parser_decorator_simple_name() {
+        let module = parse_ok("@test\nfunction foo() {}");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert_eq!(module.items[0].decorators[0].name, "test");
+        assert!(module.items[0].decorators[0].args.is_none());
+    }
+
+    #[test]
+    fn test_parser_decorator_with_args() {
+        let module = parse_ok("@derive(Clone, Debug)\ntype X = { x: i32 }");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert_eq!(module.items[0].decorators[0].name, "derive");
+        assert_eq!(
+            module.items[0].decorators[0].args.as_deref(),
+            Some("Clone, Debug")
+        );
+    }
+
+    #[test]
+    fn test_parser_multiple_decorators() {
+        let module = parse_ok("@inline\n@must_use\nfunction bar(): i32 { return 0; }");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 2);
+        assert_eq!(module.items[0].decorators[0].name, "inline");
+        assert_eq!(module.items[0].decorators[1].name, "must_use");
+    }
+
+    #[test]
+    fn test_parser_decorator_on_exported_item() {
+        let module = parse_ok("@test\nexport function foo() {}");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert_eq!(module.items[0].decorators[0].name, "test");
+        assert!(module.items[0].exported);
+    }
+
+    #[test]
+    fn test_parser_decorator_on_type_def() {
+        let module = parse_ok("@derive(Serialize)\ntype Config = { host: string }");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert_eq!(module.items[0].decorators[0].name, "derive");
+        assert!(matches!(module.items[0].kind, ItemKind::TypeDef(_)));
+    }
+
+    #[test]
+    fn test_parser_decorator_on_enum() {
+        let module = parse_ok("@derive(Clone)\ntype Dir = \"n\" | \"s\"");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert!(matches!(module.items[0].kind, ItemKind::EnumDef(_)));
+    }
+
+    #[test]
+    fn test_parser_decorator_on_class() {
+        let module =
+            parse_ok("@derive(Debug)\nclass Foo { x: i32; constructor(x: i32) { this.x = x; } }");
+        assert_eq!(module.items.len(), 1);
+        assert_eq!(module.items[0].decorators.len(), 1);
+        assert!(matches!(module.items[0].kind, ItemKind::Class(_)));
+    }
+
+    #[test]
+    fn test_parser_no_decorators() {
+        let module = parse_ok("function foo() {}");
+        assert_eq!(module.items.len(), 1);
+        assert!(module.items[0].decorators.is_empty());
     }
 }

@@ -134,6 +134,18 @@ impl Printer {
 
     /// Print a top-level item.
     fn print_item(&mut self, item: &Item) {
+        // Emit decorators before the item
+        for decorator in &item.decorators {
+            self.indent();
+            self.write("@");
+            self.write(&decorator.name);
+            if let Some(ref args) = decorator.args {
+                self.write("(");
+                self.write(args);
+                self.write(")");
+            }
+            self.newline();
+        }
         // Emit doc comment before the item if present
         let doc = match &item.kind {
             ItemKind::Function(f) => f.doc_comment.as_deref(),
@@ -1366,6 +1378,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1410,6 +1423,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1485,6 +1499,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1516,6 +1531,7 @@ mod tests {
                         span: Span::dummy(),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: Span::dummy(),
                 },
                 Item {
@@ -1534,6 +1550,7 @@ mod tests {
                         span: Span::dummy(),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: Span::dummy(),
                 },
             ],
@@ -1565,6 +1582,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1595,6 +1613,7 @@ mod tests {
                         span: Span::dummy(),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: Span::dummy(),
                 },
                 Item {
@@ -1608,6 +1627,7 @@ mod tests {
                         span: Span::dummy(),
                     }),
                     exported: false,
+                    decorators: vec![],
                     span: Span::dummy(),
                 },
             ],
@@ -1650,6 +1670,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1736,6 +1757,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),
@@ -1766,6 +1788,7 @@ mod tests {
                     span: Span::dummy(),
                 }),
                 exported: true,
+                decorators: vec![],
                 span: Span::dummy(),
             }],
             span: Span::dummy(),

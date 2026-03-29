@@ -197,6 +197,7 @@ mod tests {
                     span: span(),
                 }),
                 exported: false,
+                decorators: vec![],
                 span: span(),
             }],
             span: span(),

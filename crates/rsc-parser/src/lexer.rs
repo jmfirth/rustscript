@@ -968,6 +968,7 @@ impl<'a> Lexer<'a> {
             b'^' => Some(TokenKind::Caret),
             b'~' => Some(TokenKind::Tilde),
             b'?' => Some(TokenKind::Question),
+            b'@' => Some(TokenKind::At),
             _ => None,
         }
     }
@@ -1222,16 +1223,25 @@ mod tests {
         assert_eq!(tokens[1].kind, TokenKind::IntLit(3));
     }
 
-    // 16. Invalid character `@` → diagnostic, lexing continues
+    // 16. Invalid character emits diagnostic, lexing continues
     #[test]
     fn test_lexer_invalid_character_emits_diagnostic_and_continues() {
-        let (tokens, diagnostics) = tokenize_with_diagnostics("42 @ 3");
-        // IntLit(42), IntLit(3), Eof — the @ is skipped
+        let (tokens, diagnostics) = tokenize_with_diagnostics("42 \u{00a7} 3");
+        // IntLit(42), IntLit(3), Eof — the § is skipped
         assert_eq!(tokens.len(), 3);
         assert_eq!(tokens[0].kind, TokenKind::IntLit(42));
         assert_eq!(tokens[1].kind, TokenKind::IntLit(3));
         assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message.contains('@'));
+        assert!(diagnostics[0].message.contains('\u{00a7}'));
+    }
+
+    // 16b. `@` is a valid token (decorator prefix)
+    #[test]
+    fn test_lexer_at_sign_produces_at_token() {
+        let tokens = tokenize("@test");
+        assert_eq!(tokens.len(), 3); // At, Ident("test"), Eof
+        assert_eq!(tokens[0].kind, TokenKind::At);
+        assert_eq!(tokens[1].kind, TokenKind::Ident("test".into()));
     }
 
     // 17. Full program tokenization
