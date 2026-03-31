@@ -120,6 +120,8 @@ pub(crate) enum TokenKind {
     Void,
     /// `in` (in operator for key containment check, also used in `for...in`)
     In,
+    /// `super` (access parent class members)
+    Super,
 
     // Operators
     /// `+`

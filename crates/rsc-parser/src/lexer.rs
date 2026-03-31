@@ -834,6 +834,7 @@ impl<'a> Lexer<'a> {
             "class" => TokenKind::Class,
             "constructor" => TokenKind::Constructor,
             "this" => TokenKind::This,
+            "super" => TokenKind::Super,
             "private" => TokenKind::Private,
             "public" => TokenKind::Public,
             "implements" => TokenKind::Implements,
