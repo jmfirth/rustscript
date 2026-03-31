@@ -1147,6 +1147,9 @@ pub enum ExprKind {
     /// The `this` keyword — refers to the current class instance.
     /// Lowers to `self` in Rust methods.
     This,
+    /// The `super` keyword — refers to the parent class.
+    /// `super.method()` calls the parent class's method implementation.
+    Super,
     /// An `await` expression: `await expr`.
     /// Lowers to Rust's postfix `.await`: `expr.await`.
     Await(Box<Expr>),

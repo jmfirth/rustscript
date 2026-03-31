@@ -543,10 +543,11 @@ impl UseMap {
             | ast::ExprKind::BoolLit(_)
             | ast::ExprKind::NullLit
             | ast::ExprKind::This
+            | ast::ExprKind::Super
             | ast::ExprKind::Closure(_) => {
-                // Closure bodies and `this` are opaque for ownership analysis —
-                // variables captured by a closure are not tracked in the
-                // outer function's use map. This is the conservative Phase 1
+                // Closure bodies, `this`, and `super` are opaque for ownership
+                // analysis — variables captured by a closure are not tracked in
+                // the outer function's use map. This is the conservative Phase 1
                 // approach per the task spec.
             }
             ast::ExprKind::FieldAssign(fa) => {
@@ -1390,7 +1391,8 @@ fn collect_param_usage_expr(
         | ast::ExprKind::StringLit(_)
         | ast::ExprKind::BoolLit(_)
         | ast::ExprKind::NullLit
-        | ast::ExprKind::This => {}
+        | ast::ExprKind::This
+        | ast::ExprKind::Super => {}
     }
 }
 
@@ -1540,7 +1542,8 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::StringLit(_)
         | ast::ExprKind::BoolLit(_)
         | ast::ExprKind::NullLit
-        | ast::ExprKind::This => {}
+        | ast::ExprKind::This
+        | ast::ExprKind::Super => {}
     }
 }
 

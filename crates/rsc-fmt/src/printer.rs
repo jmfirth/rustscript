@@ -1090,6 +1090,7 @@ impl Printer {
             ExprKind::BoolLit(b) => self.write(if *b { "true" } else { "false" }),
             ExprKind::NullLit => self.write("null"),
             ExprKind::This => self.write("this"),
+            ExprKind::Super => self.write("super"),
             ExprKind::Ident(ident) => self.write(&ident.name),
             ExprKind::Binary(b) => self.print_binary_expr(b),
             ExprKind::Unary(u) => self.print_unary_expr(u),

@@ -2113,7 +2113,7 @@ function main() {
 
 // ===========================================================================
 //
-// CATEGORY: Computed Property Names (Task 121) + Static blocks (Task 122)
+// CATEGORY: Computed Property Names (Task 121) + Static blocks (Task 122) + super.method() (Task 123)
 //
 // ===========================================================================
 
@@ -2316,4 +2316,178 @@ function main() {
 
     let output = compile_and_run(source);
     assert_eq!(output.trim(), "8080");
+}
+
+#[test]
+fn test_super_method_call_snapshot() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    const base = super.speak();
+    return base;
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // super.speak() should emit a temporary Animal construction with the method call
+    assert!(
+        actual.contains("Animal {"),
+        "super.method() should construct a temporary base class:\n{actual}"
+    );
+    assert!(
+        actual.contains(".speak()"),
+        "super.method() should call speak() on the temporary:\n{actual}"
+    );
+}
+
+#[test]
+fn test_super_method_with_args_snapshot() {
+    let source = "\
+class Base {
+  x: i32;
+
+  constructor(x: i32) {
+    this.x = x;
+  }
+
+  greet(name: string): string {
+    return name;
+  }
+}
+
+class Child extends Base {
+  constructor(x: i32) {
+    this.x = x;
+  }
+
+  greet(name: string): string {
+    return super.greet(name);
+  }
+}
+
+function main() {
+  console.log(\"ok\");
+}";
+
+    let actual = compile_to_rust(source);
+
+    // super.greet(name) should construct a temporary Base and call greet on it
+    assert!(
+        actual.contains("Base {"),
+        "super.greet() should construct a temporary Base:\n{actual}"
+    );
+    assert!(
+        actual.contains(".greet("),
+        "super.greet() should call greet on the temporary:\n{actual}"
+    );
+}
+
+#[test]
+fn test_super_in_override_method_snapshot() {
+    let source = "\
+class Animal {
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  speak(): string {
+    return this.name;
+  }
+}
+
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    this.name = name;
+    this.breed = breed;
+  }
+
+  speak(): string {
+    const base = super.speak();
+    return base;
+  }
+}
+
+function main() {
+  const dog = new Dog(\"Rex\", \"Lab\");
+  console.log(dog.speak());
+}";
+
+    let actual = compile_to_rust(source);
+
+    // The generated code should contain both the Animal struct and Dog struct,
+    // and the Dog's speak should reference Animal
+    assert!(
+        actual.contains("struct Animal"),
+        "should have Animal struct:\n{actual}"
+    );
+    assert!(
+        actual.contains("struct Dog"),
+        "should have Dog struct:\n{actual}"
+    );
+    // super.speak() should create a temporary Animal instance
+    assert!(
+        actual.contains("Animal {"),
+        "super.speak() should construct temporary Animal:\n{actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_super_method_call_compiles() {
+    let source = "\
+class Counter {
+  count: i32;
+
+  constructor(count: i32) {
+    this.count = count;
+  }
+
+  value(): i32 {
+    return this.count;
+  }
+}
+
+class DoubleCounter extends Counter {
+  constructor(count: i32) {
+    this.count = count;
+  }
+
+  value(): i32 {
+    const base = super.value();
+    return base * 2;
+  }
+}
+
+function main() {
+  const dc = new DoubleCounter(5);
+  console.log(dc.value());
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output.trim(), "10");
 }

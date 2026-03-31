@@ -277,6 +277,9 @@ impl Transform {
             trait_methods.entry(base.name.clone()).or_default();
         }
 
+        // Set the base class context so `super.method()` can be lowered correctly.
+        ctx.set_base_class(cls.extends.as_ref().map(|e| e.name.clone()));
+
         // Lower the constructor
         for member in &cls.members {
             if let ast::ClassMember::Constructor(ctor) = member {
@@ -522,6 +525,9 @@ impl Transform {
                 self.generate_inheritance_trait(cls, exported, &type_params, ctx);
             items.extend(inheritance_items);
         }
+
+        // Clear the base class context.
+        ctx.set_base_class(None);
 
         for d in diags {
             ctx.emit_diagnostic(d);

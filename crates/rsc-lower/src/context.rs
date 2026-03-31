@@ -28,6 +28,10 @@ pub(crate) struct LoweringContext {
     /// closure parameters). Any use that requires ownership (return, function
     /// call with owned param, struct field assignment) should auto-clone.
     reference_variables: HashSet<String>,
+    /// The current class's base class name, if any.
+    /// Set during class method lowering for classes that `extends` another class.
+    /// Used to lower `super.method()` calls.
+    current_base_class: Option<String>,
 }
 
 /// A single scope level containing variable declarations.
@@ -53,6 +57,7 @@ impl LoweringContext {
             current_return_type: None,
             current_fn_throws: false,
             reference_variables: HashSet::new(),
+            current_base_class: None,
         }
     }
 
@@ -131,6 +136,16 @@ impl LoweringContext {
     /// Check whether a variable is currently a reference.
     pub fn is_reference_variable(&self, name: &str) -> bool {
         self.reference_variables.contains(name)
+    }
+
+    /// Set the current class's base class name for `super` call lowering.
+    pub fn set_base_class(&mut self, name: Option<String>) {
+        self.current_base_class = name;
+    }
+
+    /// Get the current class's base class name, if any.
+    pub fn current_base_class(&self) -> Option<&str> {
+        self.current_base_class.as_deref()
     }
 
     /// Add a diagnostic to the accumulated list.

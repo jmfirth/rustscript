@@ -137,7 +137,8 @@ impl Transform {
                 let field_name = fa.field.name.trim_start_matches('#');
 
                 // `this.field` or `this.#field` → `self.field`
-                if matches!(fa.object.kind, ast::ExprKind::This) {
+                // `super.field` → `self.field` (fields are copied from base class)
+                if matches!(fa.object.kind, ast::ExprKind::This | ast::ExprKind::Super) {
                     return RustExpr::new(
                         RustExprKind::SelfFieldAccess {
                             field: field_name.to_owned(),
@@ -448,6 +449,17 @@ impl Transform {
                 }
             }
             ast::ExprKind::This => RustExpr::new(RustExprKind::SelfRef, expr.span),
+            ast::ExprKind::Super => {
+                // `super` as a bare expression should not appear outside of
+                // `super.method()` which is handled in lower_method_call.
+                ctx.emit_diagnostic(rsc_syntax::diagnostic::Diagnostic::error(
+                    "`super` must be used as `super.method()` or `super(args)`".to_owned(),
+                ));
+                RustExpr::new(
+                    RustExprKind::Ident("/* super error */".to_owned()),
+                    expr.span,
+                )
+            }
             ast::ExprKind::FieldAssign(fa) => {
                 let assign_field_name = fa.field.name.trim_start_matches('#').to_owned();
                 // Check if this is `this.field = value` → `self.field = value`
@@ -1151,6 +1163,11 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Handle `super.method(args)` → construct temporary base class, call method.
+        if matches!(mc.object.kind, ast::ExprKind::Super) {
+            return self.lower_super_method_call(mc, span, ctx, use_map, stmt_index);
+        }
+
         // Try to match as a builtin: extract object name from Ident
         if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
             && let Some(lowering_fn) = self
@@ -1745,6 +1762,91 @@ impl Transform {
                 )
             }
         }
+    }
+    /// Lower a `super.method(args)` call.
+    ///
+    /// Constructs a temporary base class instance from the inherited fields
+    /// (which are copied into the derived class) and calls the method on it.
+    /// Emits: `Base { field1: self.field1.clone(), ... }.method(args)`
+    fn lower_super_method_call(
+        &self,
+        mc: &ast::MethodCallExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let Some(base_class) = ctx.current_base_class().map(String::from) else {
+            ctx.emit_diagnostic(rsc_syntax::diagnostic::Diagnostic::error(
+                "`super` can only be used in a class that extends another class".to_owned(),
+            ));
+            return RustExpr::new(RustExprKind::Ident("/* super error */".to_owned()), span);
+        };
+
+        // Lower the arguments
+        let args: Vec<RustExpr> = mc
+            .args
+            .iter()
+            .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+            .collect();
+
+        // `super(args)` (constructor delegation) → `Base::new(args)`
+        if mc.method.name == "new" {
+            return RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: base_class,
+                    method: "new".to_owned(),
+                    args,
+                },
+                span,
+            );
+        }
+
+        // `super.method(args)` → construct temporary base class, call method.
+        // Since fields are copied (not composed), we build a temporary Base
+        // instance from the inherited fields and call the method on it.
+        let base_fields: Vec<(String, RustType)> = self
+            .type_registry
+            .get_class_fields(&base_class)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), rsc_typeck::bridge::type_to_rust_type(ty)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Build field initializers: `field: self.field.clone()`
+        let struct_fields: Vec<(String, RustExpr)> = base_fields
+            .iter()
+            .map(|(name, _ty)| {
+                let field_access = RustExpr::synthetic(RustExprKind::SelfFieldAccess {
+                    field: name.clone(),
+                });
+                let cloned = RustExpr::synthetic(RustExprKind::Clone(Box::new(field_access)));
+                (name.clone(), cloned)
+            })
+            .collect();
+
+        // Construct: `Base { field1: self.field1.clone(), ... }`
+        let base_instance = RustExpr::new(
+            RustExprKind::StructLit {
+                type_name: base_class,
+                fields: struct_fields,
+            },
+            span,
+        );
+
+        // Emit: `Base { ... }.method(args)`
+        RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(base_instance),
+                method: mc.method.name.clone(),
+                type_args: vec![],
+                args,
+            },
+            span,
+        )
     }
 }
 

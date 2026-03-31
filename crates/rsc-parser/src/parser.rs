@@ -266,6 +266,7 @@ impl<'src> Parser<'src> {
             TokenKind::Class => "`class`",
             TokenKind::Constructor => "`constructor`",
             TokenKind::This => "`this`",
+            TokenKind::Super => "`super`",
             TokenKind::Private => "`private`",
             TokenKind::Public => "`public`",
             TokenKind::Implements => "`implements`",
@@ -3853,6 +3854,25 @@ impl<'src> Parser<'src> {
                         kind: ExprKind::Call(CallExpr { callee, args }),
                         span,
                     };
+                } else if matches!(expr.kind, ExprKind::Super) {
+                    // `super(args)` — constructor delegation call.
+                    // Parsed as MethodCall(Super, "new", args) and lowered to
+                    // Base::new(args) during class lowering.
+                    self.advance(); // consume `(`
+                    let args = self.parse_arg_list();
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = expr.span.merge(close.span);
+                    expr = Expr {
+                        kind: ExprKind::MethodCall(MethodCallExpr {
+                            object: Box::new(expr),
+                            method: Ident {
+                                name: "new".to_owned(),
+                                span: close.span,
+                            },
+                            args,
+                        }),
+                        span,
+                    };
                 } else {
                     // Non-identifier call target — not supported in Phase 0
                     break;
@@ -4495,6 +4515,13 @@ impl<'src> Parser<'src> {
                 Some(Expr {
                     kind: ExprKind::This,
                     span: this_token.span,
+                })
+            }
+            TokenKind::Super => {
+                let super_token = self.advance();
+                Some(Expr {
+                    kind: ExprKind::Super,
+                    span: super_token.span,
                 })
             }
             TokenKind::New => self.parse_new_expr(),
@@ -10499,6 +10526,129 @@ type Shape =
                 assert_eq!(m.name.name, "greet");
             }
             other => panic!("expected static Method, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // super expressions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parser_super_method_call_produces_method_call_on_super() {
+        let source = "\
+class Animal {
+  speak(): string { return \"hello\"; }
+}
+class Dog extends Animal {
+  speak(): string { return super.speak(); }
+}";
+        let module = parse_ok(source);
+        // Find Dog's speak method body
+        let dog = &module.items[1];
+        let cls = match &dog.kind {
+            ItemKind::Class(c) => c,
+            other => panic!("expected class, got {other:?}"),
+        };
+        let method = cls.members.iter().find_map(|m| match m {
+            ClassMember::Method(m) if m.name.name == "speak" => Some(m),
+            _ => None,
+        });
+        let method = method.expect("should have speak method");
+        // The return statement should have a method call on super
+        let ret_stmt = &method.body.stmts[0];
+        if let Stmt::Return(ret) = ret_stmt {
+            let expr = ret.value.as_ref().expect("should have return value");
+            match &expr.kind {
+                ExprKind::MethodCall(mc) => {
+                    assert!(
+                        matches!(mc.object.kind, ExprKind::Super),
+                        "receiver should be Super, got {:?}",
+                        mc.object.kind
+                    );
+                    assert_eq!(mc.method.name, "speak");
+                    assert!(mc.args.is_empty());
+                }
+                other => panic!("expected MethodCall, got {other:?}"),
+            }
+        } else {
+            panic!("expected Return statement, got {ret_stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_super_constructor_call_produces_method_call_on_super() {
+        let source = "\
+class Animal {
+  name: string;
+  constructor(name: string) { this.name = name; }
+}
+class Dog extends Animal {
+  constructor(name: string) { super(name); }
+}";
+        let module = parse_ok(source);
+        let dog = &module.items[1];
+        let cls = match &dog.kind {
+            ItemKind::Class(c) => c,
+            other => panic!("expected class, got {other:?}"),
+        };
+        let ctor = cls.members.iter().find_map(|m| match m {
+            ClassMember::Constructor(c) => Some(c),
+            _ => None,
+        });
+        let ctor = ctor.expect("should have constructor");
+        // The body should contain `super(name)` which parses as MethodCall(Super, "new", args)
+        let stmt = &ctor.body.stmts[0];
+        if let Stmt::Expr(expr) = stmt {
+            match &expr.kind {
+                ExprKind::MethodCall(mc) => {
+                    assert!(
+                        matches!(mc.object.kind, ExprKind::Super),
+                        "object should be Super, got {:?}",
+                        mc.object.kind
+                    );
+                    assert_eq!(mc.method.name, "new");
+                    assert_eq!(mc.args.len(), 1);
+                }
+                other => panic!("expected MethodCall, got {other:?}"),
+            }
+        } else {
+            panic!("expected Expr statement, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_super_method_with_args_parses_arguments() {
+        let source = "\
+class Base {
+  greet(a: string, b: i32): string { return a; }
+}
+class Child extends Base {
+  greet(a: string, b: i32): string { return super.greet(a, b); }
+}";
+        let module = parse_ok(source);
+        let child = &module.items[1];
+        let cls = match &child.kind {
+            ItemKind::Class(c) => c,
+            other => panic!("expected class, got {other:?}"),
+        };
+        let method = cls.members.iter().find_map(|m| match m {
+            ClassMember::Method(m) if m.name.name == "greet" => Some(m),
+            _ => None,
+        });
+        let method = method.expect("should have greet method");
+        let ret_stmt = &method.body.stmts[0];
+        if let Stmt::Return(ret) = ret_stmt {
+            let expr = ret.value.as_ref().expect("return value");
+            match &expr.kind {
+                ExprKind::MethodCall(mc) => {
+                    assert!(matches!(mc.object.kind, ExprKind::Super));
+                    assert_eq!(mc.method.name, "greet");
+                    assert_eq!(mc.args.len(), 2);
+                }
+                other => panic!("expected MethodCall, got {other:?}"),
+            }
+        } else {
+            panic!("expected Return statement");
         }
     }
 }
