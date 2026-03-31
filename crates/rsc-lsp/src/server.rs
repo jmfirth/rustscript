@@ -1168,6 +1168,7 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             param,
             guarded_type,
         } => format!("{} is {}", param.name, format_type(guarded_type)),
+        TypeKind::Readonly(inner) => format!("readonly {}", format_type(inner)),
     }
 }
 

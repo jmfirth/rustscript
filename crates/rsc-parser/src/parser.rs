@@ -2110,6 +2110,17 @@ impl<'src> Parser<'src> {
                 // Tuple type: `[T1, T2, ...]`
                 self.parse_tuple_type_annotation()
             }
+            TokenKind::Ident(name) if name == "readonly" => {
+                // `readonly` type modifier: `readonly T[]` or `readonly [T, U]`
+                let start = token.span;
+                self.advance(); // consume `readonly`
+                let inner = self.parse_base_type_annotation()?;
+                let span = start.merge(inner.span);
+                Some(TypeAnnotation {
+                    kind: TypeKind::Readonly(Box::new(inner)),
+                    span,
+                })
+            }
             TokenKind::Ident(_) => {
                 let ident = self.parse_ident()?;
                 let start_span = ident.span;
@@ -10136,6 +10147,102 @@ type Shape =
             );
         } else {
             panic!("expected VarDecl");
+        }
+    }
+
+    // ========================================================================
+    // Task 120: readonly type modifier
+    // ========================================================================
+
+    #[test]
+    fn test_parser_readonly_array_type() {
+        // `readonly Array<string>` should parse as Readonly wrapping a generic Array type.
+        let module = parse_ok("function process(data: readonly Array<string>): void {}");
+        let f = first_fn(&module);
+        assert_eq!(f.params.len(), 1);
+        match &f.params[0].type_ann.kind {
+            TypeKind::Readonly(inner) => match &inner.kind {
+                TypeKind::Generic(ident, args) => {
+                    assert_eq!(ident.name, "Array");
+                    assert_eq!(args.len(), 1);
+                    assert!(matches!(&args[0].kind, TypeKind::Named(id) if id.name == "string"));
+                }
+                other => panic!("expected Generic inside Readonly, got: {other:?}"),
+            },
+            other => panic!("expected TypeKind::Readonly, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_readonly_tuple_type() {
+        // `readonly [string, i32]` should parse as Readonly wrapping a tuple type.
+        let module =
+            parse_ok("function main() { const pair: readonly [string, i32] = [\"hello\", 42]; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            let type_ann = decl.type_ann.as_ref().expect("expected type annotation");
+            match &type_ann.kind {
+                TypeKind::Readonly(inner) => match &inner.kind {
+                    TypeKind::Tuple(types) => {
+                        assert_eq!(types.len(), 2);
+                        assert!(
+                            matches!(&types[0].kind, TypeKind::Named(id) if id.name == "string")
+                        );
+                        assert!(matches!(&types[1].kind, TypeKind::Named(id) if id.name == "i32"));
+                    }
+                    other => panic!("expected Tuple inside Readonly, got: {other:?}"),
+                },
+                other => panic!("expected TypeKind::Readonly, got: {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_readonly_array_generic_named() {
+        // `ReadonlyArray<string>` should parse as a Generic named type (not Readonly wrapper).
+        let module = parse_ok("function process(data: ReadonlyArray<string>): void {}");
+        let f = first_fn(&module);
+        assert_eq!(f.params.len(), 1);
+        match &f.params[0].type_ann.kind {
+            TypeKind::Generic(ident, args) => {
+                assert_eq!(ident.name, "ReadonlyArray");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].kind, TypeKind::Named(id) if id.name == "string"));
+            }
+            other => panic!("expected TypeKind::Generic, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_readonly_does_not_conflict_with_class_field() {
+        // `readonly` as a class field modifier should still work alongside
+        // `readonly` as a type modifier.
+        let module = parse_ok(
+            "class Config {
+                readonly items: readonly Array<string>;
+                constructor() {}
+            }",
+        );
+        let cls = first_class(&module);
+        let field = cls.members.iter().find_map(|m| match m {
+            ClassMember::Field(f) => Some(f),
+            _ => None,
+        });
+        let field = field.expect("should have field");
+        assert!(field.readonly, "field should be marked readonly");
+        assert_eq!(field.name.name, "items");
+        // The type annotation should be Readonly wrapping a Generic Array
+        match &field.type_ann.kind {
+            TypeKind::Readonly(inner) => match &inner.kind {
+                TypeKind::Generic(ident, _) => {
+                    assert_eq!(ident.name, "Array");
+                }
+                other => panic!("expected Generic inside Readonly, got: {other:?}"),
+            },
+            other => panic!("expected TypeKind::Readonly for field type, got: {other:?}"),
         }
     }
 }

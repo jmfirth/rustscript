@@ -270,7 +270,7 @@ impl Transform {
                     self.register_union_type(inner_ty);
                 }
             }
-            RustType::Option(inner) | RustType::ArcMutex(inner) => {
+            RustType::Option(inner) | RustType::ArcMutex(inner) | RustType::Slice(inner) => {
                 self.register_union_type(inner);
             }
             RustType::Result(ok, err) => {
@@ -1722,12 +1722,27 @@ impl Transform {
             .params
             .iter()
             .map(|p| {
+                let is_readonly = matches!(&p.type_ann.kind, ast::TypeKind::Readonly(_));
+                let is_readonly_array_generic =
+                    matches!(&p.type_ann.kind, ast::TypeKind::Generic(ident, _) if ident.name == "ReadonlyArray");
+
                 let ty = rsc_typeck::resolve::resolve_type_annotation_with_registry(
                     &p.type_ann,
                     &self.type_registry,
                     &mut diags,
                 );
                 let mut rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+
+                // readonly Array<T> or ReadonlyArray<T> in param → &[T] (borrowed slice)
+                if (is_readonly || is_readonly_array_generic)
+                    && let RustType::Generic(ref base, ref args) = rust_ty
+                    && let RustType::Named(ref name) = **base
+                    && name == "Vec"
+                    && args.len() == 1
+                {
+                    rust_ty = RustType::Slice(Box::new(args[0].clone()));
+                }
+
                 // Rewrite base class types to &dyn {Name}Trait for polymorphism
                 if let RustType::Named(ref name) = rust_ty
                     && self.extended_classes.contains(name)
@@ -1991,6 +2006,11 @@ impl Transform {
                     };
                 }
 
+                // Check for readonly array/tuple in parameter position
+                let is_readonly = matches!(&p.type_ann.kind, ast::TypeKind::Readonly(_));
+                let is_readonly_array_generic =
+                    matches!(&p.type_ann.kind, ast::TypeKind::Generic(ident, _) if ident.name == "ReadonlyArray");
+
                 let ty_inner = resolve::resolve_type_annotation_with_generics(
                     &p.type_ann,
                     &self.type_registry,
@@ -2000,6 +2020,16 @@ impl Transform {
                 let mut ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
                 for d in diags {
                     ctx.emit_diagnostic(d);
+                }
+
+                // readonly Array<T> or ReadonlyArray<T> in param → &[T] (borrowed slice)
+                if (is_readonly || is_readonly_array_generic)
+                    && let RustType::Generic(ref base, ref args) = ty
+                    && let RustType::Named(ref name) = **base
+                    && name == "Vec"
+                    && args.len() == 1
+                {
+                    ty = RustType::Slice(Box::new(args[0].clone()));
                 }
 
                 // Rewrite base class types to &dyn {Name}Trait for polymorphism
@@ -2022,16 +2052,16 @@ impl Transform {
                     .copied()
                     .unwrap_or(ParamMode::Owned);
 
-                // DynRef types are already references — force Owned mode
-                // to avoid emitting `&&dyn Trait`
-                if matches!(ty, RustType::DynRef(_)) {
+                // DynRef and Slice types are already references — force Owned mode
+                // to avoid emitting `&&dyn Trait` or `&&[T]`
+                if matches!(ty, RustType::DynRef(_) | RustType::Slice(_)) {
                     mode = ParamMode::Owned;
                 }
 
                 // Borrowed parameters are already references — mark them so
                 // downstream lowering (e.g., for-of) avoids double-borrowing.
                 if matches!(mode, ParamMode::Borrowed | ParamMode::BorrowedStr)
-                    || matches!(ty, RustType::DynRef(_))
+                    || matches!(ty, RustType::DynRef(_) | RustType::Slice(_))
                 {
                     ctx.mark_as_reference(p.name.name.clone());
                 }
@@ -2933,7 +2963,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Conditional { .. }
                         | ast::TypeKind::Infer(_)
                         | ast::TypeKind::TupleSpread(_)
-                        | ast::TypeKind::TypeGuard { .. } => vec![],
+                        | ast::TypeKind::TypeGuard { .. }
+                        | ast::TypeKind::Readonly(_) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

@@ -1745,6 +1745,26 @@ function main() {
 }
 
 #[test]
+fn test_readonly_array_param_snapshot() {
+    // `readonly Array<string>` in function param should lower to `&[String]`.
+    let source = "\
+function process(data: readonly Array<string>): void {
+  console.log(data.len());
+}
+
+function main() {
+  const items: Array<string> = [\"a\", \"b\"];
+  process(items);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("data: &[String]"),
+        "readonly Array<string> in param should emit &[String]: {actual}"
+    );
+}
+
+#[test]
 fn test_type_guard_emits_bool_return() {
     let source = r#"function isString(x: string | i32): x is string {
   return true;
@@ -1753,6 +1773,23 @@ fn test_type_guard_emits_bool_return() {
     assert!(
         actual.contains("-> bool"),
         "type guard function should emit `-> bool` return type.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_readonly_array_variable_snapshot() {
+    // `readonly Array<string>` in variable position should emit `Vec<String>`
+    // (Rust's `let` is already immutable).
+    let source = "\
+function main() {
+  const items: readonly Array<string> = [\"a\", \"b\"];
+  console.log(items.len());
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Vec<String>"),
+        "readonly Array in variable position should emit Vec<String>: {actual}"
     );
 }
 
@@ -1774,6 +1811,26 @@ function main() {
     assert!(
         !actual.contains("OrNever"),
         "should not contain union with Never variant, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_readonlyarray_generic_param_snapshot() {
+    // `ReadonlyArray<i32>` in function param should lower to `&[i32]`.
+    let source = "\
+function sum(nums: ReadonlyArray<i32>): i32 {
+  return 0;
+}
+
+function main() {
+  const nums: Array<i32> = [1, 2, 3];
+  const total: i32 = sum(nums);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("nums: &[i32]"),
+        "ReadonlyArray<i32> in param should emit &[i32]: {actual}"
     );
 }
 
@@ -1822,6 +1879,22 @@ function main() {
     assert!(
         actual.contains("isPositive(42)"),
         "type guard call should compile as normal function call.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_readonly_tuple_snapshot() {
+    // `readonly [string, i32]` should lower to a regular Rust tuple `(String, i32)`.
+    let source = "\
+function main() {
+  const pair: readonly [string, i32] = [\"hello\", 42];
+  console.log(pair);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("(String, i32)"),
+        "readonly tuple should emit regular Rust tuple: {actual}"
     );
 }
 
@@ -1886,6 +1959,24 @@ fn test_unknown_type_generates_use_any() {
         actual.contains("use std::any::Any;"),
         "unknown type should generate `use std::any::Any;`: {actual}"
     );
+}
+
+#[test]
+#[ignore]
+fn test_readonly_array_param_compiles() {
+    // Function with readonly array param should compile successfully.
+    let source = "\
+function first(data: readonly Array<string>): string {
+  return data[0].clone();
+}
+
+function main() {
+  const items: Array<string> = [\"hello\", \"world\"];
+  console.log(first(items));
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n");
 }
 
 #[test]
@@ -1998,4 +2089,24 @@ function main() {
         !output.is_empty(),
         "as const literal should compile and produce output"
     );
+}
+
+// ===========================================================================
+//
+// Task 120: readonly arrays and tuples
+//
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_readonly_variable_compiles() {
+    // Const with readonly array type should compile successfully.
+    let source = "\
+function main() {
+  const items: readonly Array<string> = [\"a\", \"b\", \"c\"];
+  console.log(items.len());
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "3\n");
 }

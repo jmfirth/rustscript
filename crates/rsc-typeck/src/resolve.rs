@@ -213,6 +213,11 @@ pub fn resolve_type_annotation(
             ));
             Type::Error
         }
+        ast::TypeKind::Readonly(inner) => {
+            // readonly is a compile-time modifier — resolve to the inner type.
+            // The lowering pass handles parameter-position semantics.
+            resolve_type_annotation(inner, diagnostics)
+        }
     }
 }
 
@@ -444,6 +449,11 @@ pub fn resolve_type_annotation_with_generics(
                     .to_owned(),
             ));
             Type::Error
+        }
+        ast::TypeKind::Readonly(inner) => {
+            // readonly is a compile-time modifier — resolve to the inner type.
+            // The lowering pass handles parameter-position semantics.
+            resolve_type_annotation_with_generics(inner, registry, generic_param_names, diagnostics)
         }
     }
 }
@@ -741,7 +751,8 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         }
         ast::TypeKind::KeyOf(inner)
         | ast::TypeKind::Shared(inner)
-        | ast::TypeKind::TupleSpread(inner) => ast_contains_infer(inner),
+        | ast::TypeKind::TupleSpread(inner)
+        | ast::TypeKind::Readonly(inner) => ast_contains_infer(inner),
         ast::TypeKind::IndexSignature(sig) => {
             ast_contains_infer(&sig.key_type) || ast_contains_infer(&sig.value_type)
         }
@@ -784,7 +795,7 @@ fn resolve_type_with_infer_bindings(
 #[must_use]
 pub fn map_collection_type_name(name: &str) -> String {
     match name {
-        "Array" => "Vec".to_owned(),
+        "Array" | "ReadonlyArray" => "Vec".to_owned(),
         "Map" => "HashMap".to_owned(),
         "Set" => "HashSet".to_owned(),
         other => other.to_owned(),

@@ -901,9 +901,9 @@ impl Transform {
             });
         }
 
-        // When the parameter type is &dyn Trait, add & before the argument
+        // When the parameter type is &dyn Trait or &[T], add & before the argument
         if let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
-            && matches!(param_ty, RustType::DynRef(_))
+            && matches!(param_ty, RustType::DynRef(_) | RustType::Slice(_))
         {
             let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
             if !matches!(lowered.kind, RustExprKind::Borrow(_)) {

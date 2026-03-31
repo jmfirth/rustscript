@@ -381,10 +381,10 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
             format!("&{inner_str}")
         }
 
-        // `[T]` — slice type
+        // `&[T]` -> `readonly Array<T>`
         RustType::Slice(inner) => {
             let inner_str = rust_type_to_rts_display(inner);
-            format!("[{inner_str}]")
+            format!("readonly Array<{inner_str}>")
         }
 
         // `&str` — string slice reference

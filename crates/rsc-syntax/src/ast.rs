@@ -697,6 +697,10 @@ pub enum TypeKind {
         /// The type the parameter is narrowed to.
         guarded_type: Box<TypeAnnotation>,
     },
+    /// A `readonly` type modifier: `readonly T[]` or `readonly [T, U]`.
+    /// In variable position, this is informational (Rust `let` is immutable).
+    /// In parameter position, arrays lower to borrowed slices `&[T]`.
+    Readonly(Box<TypeAnnotation>),
 }
 
 /// An identifier with its source span.
