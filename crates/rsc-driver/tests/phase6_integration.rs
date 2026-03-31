@@ -2113,7 +2113,7 @@ function main() {
 
 // ===========================================================================
 //
-// CATEGORY: Computed Property Names (Task 121)
+// CATEGORY: Computed Property Names (Task 121) + Static blocks (Task 122)
 //
 // ===========================================================================
 
@@ -2144,6 +2144,32 @@ function main() {
 }
 
 #[test]
+fn test_static_block_simple_assignment_snapshot() {
+    // Static block with literal assignment to declared static fields
+    // should lower to associated constants in the impl block.
+    let source = "\
+class Config {
+  static DEFAULT_PORT: i32;
+  static DEFAULT_HOST: string;
+
+  static {
+    Config.DEFAULT_PORT = 8080;
+    Config.DEFAULT_HOST = \"localhost\";
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("const DEFAULT_PORT: i32 = 8080"),
+        "static block assignment should lower to associated const: {actual}"
+    );
+    assert!(
+        actual.contains("const DEFAULT_HOST: String"),
+        "static block string assignment should lower to const: {actual}"
+    );
+}
+
+#[test]
 fn test_computed_property_insert_snapshot() {
     let source = "\
 function main() {
@@ -2160,6 +2186,23 @@ function main() {
     assert!(
         actual.contains("200"),
         "computed value should appear: {actual}"
+    );
+}
+
+#[test]
+fn test_static_block_complex_logic_snapshot() {
+    // Static block with non-assignment logic should lower to _static_init() method
+    let source = "\
+class Service {
+  static {
+    console.log(\"initializing\");
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("fn _static_init()"),
+        "complex static block should produce _static_init() method: {actual}"
     );
 }
 
@@ -2190,6 +2233,55 @@ function main() {
 }
 
 #[test]
+fn test_static_block_preserves_regular_members() {
+    // Class with static block + regular methods should emit both
+    let source = "\
+class Counter {
+  count: i32;
+  static MAX: i32 = 100;
+
+  constructor(n: i32) {
+    this.count = n;
+  }
+
+  static {
+    console.log(\"init\");
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    // Struct should exist
+    assert!(
+        actual.contains("struct Counter"),
+        "should produce Counter struct: {actual}"
+    );
+    // Static field const from direct initializer
+    assert!(
+        actual.contains("const MAX"),
+        "static field should produce associated const: {actual}"
+    );
+    // Constructor
+    assert!(
+        actual.contains("fn new("),
+        "constructor should produce fn new: {actual}"
+    );
+    // Instance method
+    assert!(
+        actual.contains("fn increment("),
+        "instance method should exist: {actual}"
+    );
+    // Static init from static block
+    assert!(
+        actual.contains("fn _static_init()"),
+        "static block should produce _static_init: {actual}"
+    );
+}
+
+#[test]
 #[ignore]
 fn test_computed_property_compiles() {
     let source = "\
@@ -2201,4 +2293,27 @@ function main() {
 
     let output = compile_and_run(source);
     assert_eq!(output, "hello\n");
+}
+
+#[test]
+#[ignore]
+fn test_static_block_simple_compiles() {
+    // Class with static block literal assignment should compile with rustc
+    let source = "\
+class Config {
+  static DEFAULT_PORT: i32;
+  static DEFAULT_HOST: string;
+
+  static {
+    Config.DEFAULT_PORT = 8080;
+    Config.DEFAULT_HOST = \"localhost\";
+  }
+}
+
+function main() {
+  console.log(Config.DEFAULT_PORT);
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output.trim(), "8080");
 }

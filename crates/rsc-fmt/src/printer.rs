@@ -634,6 +634,7 @@ impl Printer {
                 ClassMember::Method(m) => self.print_class_method(m),
                 ClassMember::Getter(g) => self.print_class_getter(g),
                 ClassMember::Setter(s) => self.print_class_setter(s),
+                ClassMember::StaticBlock(block) => self.print_static_block(block),
             }
         }
         self.dedent();
@@ -770,6 +771,13 @@ impl Printer {
         self.print_type_annotation(&setter.param.type_ann);
         self.write(") ");
         self.print_block(&setter.body);
+        self.newline();
+    }
+
+    /// Print a static initialization block: `static { ... }`.
+    fn print_static_block(&mut self, block: &Block) {
+        self.write("static ");
+        self.print_block(block);
         self.newline();
     }
 
