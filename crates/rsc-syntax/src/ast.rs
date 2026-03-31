@@ -679,6 +679,16 @@ pub enum TypeKind {
     /// Only valid inside a `Tuple` type. Resolved at compile time by flattening
     /// the spread type (which must be a known tuple type) into the outer tuple.
     TupleSpread(Box<TypeAnnotation>),
+    /// A type guard predicate: `x is Type`.
+    /// Only valid as a function return type. The function returns `bool` at runtime,
+    /// and the type system uses this to narrow the parameter's type at call sites.
+    /// Lowers to Rust `bool` return type.
+    TypeGuard {
+        /// The parameter name being narrowed.
+        param: Ident,
+        /// The type the parameter is narrowed to.
+        guarded_type: Box<TypeAnnotation>,
+    },
 }
 
 /// An identifier with its source span.

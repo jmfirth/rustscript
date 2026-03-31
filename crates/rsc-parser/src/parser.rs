@@ -901,6 +901,29 @@ impl<'src> Parser<'src> {
             let type_ann = self.parse_type_annotation()?;
             let start_span = type_ann.span;
 
+            // Check for type guard: `param is Type`
+            // If the parsed type is a plain identifier and the next token is `is`,
+            // reinterpret as a type guard predicate.
+            if let TypeKind::Named(ref param_ident) = type_ann.kind
+                && self.check_contextual_keyword("is")
+            {
+                self.advance(); // consume `is`
+                let guarded_type = self.parse_type_annotation()?;
+                let end_span = guarded_type.span;
+                let guard_ann = TypeAnnotation {
+                    kind: TypeKind::TypeGuard {
+                        param: param_ident.clone(),
+                        guarded_type: Box::new(guarded_type),
+                    },
+                    span: start_span.merge(end_span),
+                };
+                return Some(ReturnTypeAnnotation {
+                    type_ann: Some(guard_ann.clone()),
+                    throws: None,
+                    span: guard_ann.span,
+                });
+            }
+
             // Check for `throws ErrorType`
             if self.check(&TokenKind::Throws) {
                 self.advance(); // consume `throws`
@@ -9755,6 +9778,110 @@ type Shape =
                 assert_eq!(for_in.variable.name, "k");
             }
             other => panic!("expected ForIn, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // T118: Type guard return type (`x is Type`)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_type_guard_return_type() {
+        let source = r#"function isString(x: string | i32): x is string {
+  return typeof x === "string";
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "isString");
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::TypeGuard {
+                param,
+                guarded_type,
+            } => {
+                assert_eq!(param.name, "x");
+                match &guarded_type.kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "string"),
+                    other => panic!("expected Named(string), got {other:?}"),
+                }
+            }
+            other => panic!("expected TypeGuard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_type_guard_preserves_param_name() {
+        let source = r#"function isNumber(value: string | i32): value is i32 {
+  return true;
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::TypeGuard {
+                param,
+                guarded_type,
+            } => {
+                assert_eq!(param.name, "value");
+                // Verify the param name matches one of the function parameters
+                assert!(
+                    f.params.iter().any(|p| p.name.name == param.name),
+                    "type guard param should match a function parameter"
+                );
+                match &guarded_type.kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "i32"),
+                    other => panic!("expected Named(i32), got {other:?}"),
+                }
+            }
+            other => panic!("expected TypeGuard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_type_guard_complex_type() {
+        let source = r#"function isArray(x: Array<string> | i32): x is Array<string> {
+  return true;
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::TypeGuard {
+                param,
+                guarded_type,
+            } => {
+                assert_eq!(param.name, "x");
+                match &guarded_type.kind {
+                    TypeKind::Generic(ident, args) => {
+                        assert_eq!(ident.name, "Array");
+                        assert_eq!(args.len(), 1);
+                        match &args[0].kind {
+                            TypeKind::Named(inner) => assert_eq!(inner.name, "string"),
+                            other => panic!("expected Named(string), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Generic(Array<string>), got {other:?}"),
+                }
+            }
+            other => panic!("expected TypeGuard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_is_not_keyword_in_non_return_position() {
+        // `is` should not be reserved — it should be a valid variable name
+        let source = r#"function main() {
+  const is: i32 = 5;
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(v) => assert_eq!(v.name.name, "is"),
+            other => panic!("expected VarDecl, got {other:?}"),
         }
     }
 

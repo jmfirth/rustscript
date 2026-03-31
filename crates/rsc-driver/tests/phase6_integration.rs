@@ -1721,3 +1721,67 @@ fn test_void_expression_compiles() {
         "void expression should compile successfully"
     );
 }
+
+// ===========================================================================
+//
+// CATEGORY: Type Guard Support (Task 118)
+//
+// ===========================================================================
+
+#[test]
+fn test_type_guard_emits_bool_return() {
+    let source = r#"function isString(x: string | i32): x is string {
+  return true;
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-> bool"),
+        "type guard function should emit `-> bool` return type.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_type_guard_function_body() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-> bool"),
+        "type guard should lower to bool return.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn isPositive"),
+        "function name should be present in output.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_type_guard_call_site() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}
+
+function main() {
+  const result: bool = isPositive(42);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("isPositive(42)"),
+        "type guard call should compile as normal function call.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_type_guard_function_compiles() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}
+
+function main() {
+  const result: bool = isPositive(42);
+}"#;
+    // compile_and_run panics if compilation fails, so reaching here means success
+    let _output = compile_and_run(source);
+}

@@ -2920,7 +2920,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::TypeOf(_)
                         | ast::TypeKind::Conditional { .. }
                         | ast::TypeKind::Infer(_)
-                        | ast::TypeKind::TupleSpread(_) => vec![],
+                        | ast::TypeKind::TupleSpread(_)
+                        | ast::TypeKind::TypeGuard { .. } => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {
