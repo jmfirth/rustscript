@@ -1183,6 +1183,10 @@ pub enum ExprKind {
     /// Evaluates all expressions left-to-right, returns the last.
     /// Lowers to a block expression: `{ a; b; c }`.
     Comma(Vec<Expr>),
+    /// An `as const` assertion: `expr as const`.
+    /// Signals that the value should be treated as deeply immutable with literal types.
+    /// Arrays become static slices, objects become const structs.
+    AsConst(Box<Expr>),
 }
 
 /// Logical assignment operators.

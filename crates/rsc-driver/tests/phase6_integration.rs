@@ -1920,3 +1920,82 @@ function main() {
 }"#;
     let _output = compile_and_run(source);
 }
+
+// ---- Task 119: `as const` assertion ----
+
+// T119-5: `as const` on a string array emits a static slice reference
+#[test]
+fn test_as_const_array_snapshot() {
+    let source = r#"const colors = ["red", "green"] as const;"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("&["),
+        "as const array should emit static slice `&[...]`:\n{actual}"
+    );
+    assert!(
+        actual.contains("&str"),
+        "as const string array should have type `&str`:\n{actual}"
+    );
+    assert!(
+        actual.contains("const colors"),
+        "top-level const should preserve name:\n{actual}"
+    );
+}
+
+// T119-6: `as const` on a number literal emits a regular const binding
+#[test]
+fn test_as_const_number_snapshot() {
+    let source = r#"const x = 42 as const;"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("const x: i64 = 42;"),
+        "as const on number should emit const binding:\n{actual}"
+    );
+}
+
+// T119-7: `as const` on a number array emits a static slice
+#[test]
+fn test_as_const_int_array_snapshot() {
+    let source = r#"const nums = [1, 2, 3] as const;"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("&[i64]"),
+        "as const int array should have type `&[i64]`:\n{actual}"
+    );
+    assert!(
+        actual.contains("&[1, 2, 3]"),
+        "as const int array should emit static slice literal:\n{actual}"
+    );
+}
+
+// T119-8: `as const` array compiles with rustc
+#[test]
+#[ignore]
+fn test_as_const_array_compiles() {
+    let source = r#"const colors = ["red", "green", "blue"] as const;
+function main() {
+  console.log(colors[0]);
+}"#;
+    // compile_and_run panics if compilation fails
+    let output = compile_and_run(source);
+    assert!(
+        !output.is_empty(),
+        "as const array should compile and produce output"
+    );
+}
+
+// T119-9: `as const` literal compiles with rustc
+#[test]
+#[ignore]
+fn test_as_const_literal_compiles() {
+    let source = r#"const x = 42 as const;
+function main() {
+  console.log(x);
+}"#;
+    // compile_and_run panics if compilation fails
+    let output = compile_and_run(source);
+    assert!(
+        !output.is_empty(),
+        "as const literal should compile and produce output"
+    );
+}

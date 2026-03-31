@@ -630,7 +630,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(arg, needs_hashmap, needs_hashset);
             }
         }
-        RustExprKind::VecLit(elems) | RustExprKind::Tuple(elems) => {
+        RustExprKind::VecLit(elems)
+        | RustExprKind::Tuple(elems)
+        | RustExprKind::SliceLit(elems) => {
             for elem in elems {
                 scan_expr_for_collections(elem, needs_hashmap, needs_hashset);
             }

@@ -94,6 +94,9 @@ fn union_variant_name(ty: &RustType) -> String {
         RustType::DynRef(name) => format!("Dyn{name}"),
         RustType::Never => "Never".to_owned(),
         RustType::BoxDynAny => "Unknown".to_owned(),
+        RustType::Reference(inner) => format!("Ref{}", union_variant_name(inner)),
+        RustType::Slice(inner) => format!("Slice{}", union_variant_name(inner)),
+        RustType::StrRef => "StrRef".to_owned(),
     }
 }
 

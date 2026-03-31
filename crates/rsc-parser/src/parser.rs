@@ -3764,12 +3764,22 @@ impl<'src> Parser<'src> {
         loop {
             if self.check(&TokenKind::As) {
                 self.advance(); // consume `as`
-                let ty = self.parse_type_annotation()?;
-                let span = expr.span.merge(ty.span);
-                expr = Expr {
-                    kind: ExprKind::Cast(Box::new(expr), ty),
-                    span,
-                };
+                // Check for `as const` — special case before type annotation
+                if self.check(&TokenKind::Const) {
+                    let const_token = self.advance();
+                    let span = expr.span.merge(const_token.span);
+                    expr = Expr {
+                        kind: ExprKind::AsConst(Box::new(expr)),
+                        span,
+                    };
+                } else {
+                    let ty = self.parse_type_annotation()?;
+                    let span = expr.span.merge(ty.span);
+                    expr = Expr {
+                        kind: ExprKind::Cast(Box::new(expr), ty),
+                        span,
+                    };
+                }
             } else if self.check(&TokenKind::Satisfies) {
                 self.advance(); // consume `satisfies`
                 let ty = self.parse_type_annotation()?;
@@ -10043,6 +10053,89 @@ type Shape =
                 );
             }
             other => panic!("expected VarDecl, got {other:?}"),
+        }
+    }
+
+    // ---- Task 119: `as const` assertion ----
+
+    // T119-1: `as const` on an array literal produces AsConst wrapping ArrayLit
+    #[test]
+    fn test_parser_as_const_array() {
+        let module = parse_ok("function f() { const x = [1, 2, 3] as const; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::AsConst(inner) = &decl.init.kind {
+                assert!(
+                    matches!(&inner.kind, ExprKind::ArrayLit(_)),
+                    "expected ArrayLit inside AsConst, got: {:?}",
+                    inner.kind
+                );
+            } else {
+                panic!("expected AsConst, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    // T119-2: `as const` on an object literal produces AsConst wrapping StructLit
+    #[test]
+    fn test_parser_as_const_object() {
+        let source = r#"function f() { const x = { a: 1 } as const; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::AsConst(inner) = &decl.init.kind {
+                assert!(
+                    matches!(&inner.kind, ExprKind::StructLit(_)),
+                    "expected StructLit inside AsConst, got: {:?}",
+                    inner.kind
+                );
+            } else {
+                panic!("expected AsConst, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    // T119-3: `as const` on a literal produces AsConst wrapping the literal
+    #[test]
+    fn test_parser_as_const_literal() {
+        let module = parse_ok("function f() { const x = 42 as const; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::AsConst(inner) = &decl.init.kind {
+                assert!(
+                    matches!(&inner.kind, ExprKind::IntLit(42)),
+                    "expected IntLit(42) inside AsConst, got: {:?}",
+                    inner.kind
+                );
+            } else {
+                panic!("expected AsConst, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    // T119-4: `as Type` still works and is not confused with `as const`
+    #[test]
+    fn test_parser_as_type_still_works() {
+        let module = parse_ok("function f() { const x: f64 = y as f64; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(&decl.init.kind, ExprKind::Cast(_, _)),
+                "expected Cast for `as f64`, got: {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl");
         }
     }
 }

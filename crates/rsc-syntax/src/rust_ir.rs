@@ -501,6 +501,15 @@ pub enum RustType {
     /// `Box<dyn std::any::Any>` — from TypeScript `unknown`.
     /// The type-safe top type that can hold any value.
     BoxDynAny,
+    /// A reference type: `&T`.
+    /// Produced by lowering `as const` arrays to `&[T]`.
+    Reference(Box<RustType>),
+    /// A slice type: `[T]`.
+    /// Used inside references for `&[T]` static slice types.
+    Slice(Box<RustType>),
+    /// A string slice reference: `&str`.
+    /// Used in `as const` string array slices (`&[&str]`).
+    StrRef,
     /// Auto-generated union enum type: `StringOrI32`.
     /// Produced by lowering `string | i32` (non-null general union types).
     /// The `name` is the deterministic enum name (e.g., `"StringOrI32"`),
@@ -560,6 +569,9 @@ impl std::fmt::Display for RustType {
             Self::Infer => "_",
             Self::BoxDynAny => "Box<dyn std::any::Any>",
             Self::ArcMutex(inner) => return write!(f, "Arc<Mutex<{inner}>>"),
+            Self::Reference(inner) => return write!(f, "&{inner}"),
+            Self::Slice(inner) => return write!(f, "[{inner}]"),
+            Self::StrRef => "&str",
             Self::Tuple(types) => {
                 write!(f, "(")?;
                 for (i, ty) in types.iter().enumerate() {
@@ -1270,6 +1282,9 @@ pub enum RustExprKind {
         /// The field index (0-based).
         index: usize,
     },
+    /// Static slice literal: `&["a", "b", "c"]`.
+    /// Produced by lowering `as const` array literals.
+    SliceLit(Vec<RustExpr>),
     /// Raw Rust code emitted verbatim.
     /// Used for generator state machine bodies and other compiler-generated code.
     Raw(String),
