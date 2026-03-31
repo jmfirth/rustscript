@@ -1162,6 +1162,7 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         ),
         TypeKind::Infer(ident) => format!("infer {}", ident.name),
         TypeKind::TupleSpread(inner) => format!("...{}", format_type(inner)),
+        TypeKind::Readonly(inner) => format!("readonly {}", format_type(inner)),
     }
 }
 

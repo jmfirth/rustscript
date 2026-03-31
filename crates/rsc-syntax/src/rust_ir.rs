@@ -506,6 +506,9 @@ pub enum RustType {
         /// The variants: `(VariantName, InnerType)` pairs.
         variants: Vec<(String, RustType)>,
     },
+    /// Borrowed slice type: `&[T]`.
+    /// Produced by lowering `readonly T[]` in parameter position.
+    Slice(Box<RustType>),
 }
 
 impl std::fmt::Display for RustType {
@@ -563,6 +566,7 @@ impl std::fmt::Display for RustType {
                 }
                 return write!(f, ")");
             }
+            Self::Slice(inner) => return write!(f, "&[{inner}]"),
         };
         f.write_str(s)
     }

@@ -679,6 +679,10 @@ pub enum TypeKind {
     /// Only valid inside a `Tuple` type. Resolved at compile time by flattening
     /// the spread type (which must be a known tuple type) into the outer tuple.
     TupleSpread(Box<TypeAnnotation>),
+    /// A `readonly` type modifier: `readonly T[]` or `readonly [T, U]`.
+    /// In variable position, this is informational (Rust `let` is immutable).
+    /// In parameter position, arrays lower to borrowed slices `&[T]`.
+    Readonly(Box<TypeAnnotation>),
 }
 
 /// An identifier with its source span.

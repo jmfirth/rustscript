@@ -1721,3 +1721,114 @@ fn test_void_expression_compiles() {
         "void expression should compile successfully"
     );
 }
+
+// ===========================================================================
+//
+// Task 120: readonly arrays and tuples
+//
+// ===========================================================================
+
+#[test]
+fn test_readonly_array_param_snapshot() {
+    // `readonly Array<string>` in function param should lower to `&[String]`.
+    let source = "\
+function process(data: readonly Array<string>): void {
+  console.log(data.len());
+}
+
+function main() {
+  const items: Array<string> = [\"a\", \"b\"];
+  process(items);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("data: &[String]"),
+        "readonly Array<string> in param should emit &[String]: {actual}"
+    );
+}
+
+#[test]
+fn test_readonly_array_variable_snapshot() {
+    // `readonly Array<string>` in variable position should emit `Vec<String>`
+    // (Rust's `let` is already immutable).
+    let source = "\
+function main() {
+  const items: readonly Array<string> = [\"a\", \"b\"];
+  console.log(items.len());
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Vec<String>"),
+        "readonly Array in variable position should emit Vec<String>: {actual}"
+    );
+}
+
+#[test]
+fn test_readonlyarray_generic_param_snapshot() {
+    // `ReadonlyArray<i32>` in function param should lower to `&[i32]`.
+    let source = "\
+function sum(nums: ReadonlyArray<i32>): i32 {
+  return 0;
+}
+
+function main() {
+  const nums: Array<i32> = [1, 2, 3];
+  const total: i32 = sum(nums);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("nums: &[i32]"),
+        "ReadonlyArray<i32> in param should emit &[i32]: {actual}"
+    );
+}
+
+#[test]
+fn test_readonly_tuple_snapshot() {
+    // `readonly [string, i32]` should lower to a regular Rust tuple `(String, i32)`.
+    let source = "\
+function main() {
+  const pair: readonly [string, i32] = [\"hello\", 42];
+  console.log(pair);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("(String, i32)"),
+        "readonly tuple should emit regular Rust tuple: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_readonly_array_param_compiles() {
+    // Function with readonly array param should compile successfully.
+    let source = "\
+function first(data: readonly Array<string>): string {
+  return data[0].clone();
+}
+
+function main() {
+  const items: Array<string> = [\"hello\", \"world\"];
+  console.log(first(items));
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n");
+}
+
+#[test]
+#[ignore]
+fn test_readonly_variable_compiles() {
+    // Const with readonly array type should compile successfully.
+    let source = "\
+function main() {
+  const items: readonly Array<string> = [\"a\", \"b\", \"c\"];
+  console.log(items.len());
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "3\n");
+}

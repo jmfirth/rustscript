@@ -429,6 +429,10 @@ impl Printer {
                 self.write("...");
                 self.print_type_annotation(inner);
             }
+            TypeKind::Readonly(inner) => {
+                self.write("readonly ");
+                self.print_type_annotation(inner);
+            }
         }
     }
 

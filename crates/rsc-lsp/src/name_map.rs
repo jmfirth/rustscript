@@ -368,6 +368,12 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
 
         // `&dyn TraitName` -> display as the trait name (for polymorphic class params)
         RustType::DynRef(trait_name) => trait_name.clone(),
+
+        // `&[T]` -> `readonly Array<T>`
+        RustType::Slice(inner) => {
+            let inner_str = rust_type_to_rts_display(inner);
+            format!("readonly Array<{inner_str}>")
+        }
     }
 }
 

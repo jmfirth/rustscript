@@ -90,6 +90,7 @@ fn union_variant_name(ty: &RustType) -> String {
         RustType::Infer => "Infer".to_owned(),
         RustType::ArcMutex(inner) => format!("Shared{}", union_variant_name(inner)),
         RustType::DynRef(name) => format!("Dyn{name}"),
+        RustType::Slice(inner) => format!("Slice{}", union_variant_name(inner)),
     }
 }
 
