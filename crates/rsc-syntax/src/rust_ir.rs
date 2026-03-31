@@ -496,6 +496,9 @@ pub enum RustType {
     /// Produced when a function parameter has a base class type that is extended,
     /// enabling polymorphic dispatch.
     DynRef(String),
+    /// `Box<dyn std::any::Any>` — from TypeScript `unknown`.
+    /// The type-safe top type that can hold any value.
+    BoxDynAny,
     /// Auto-generated union enum type: `StringOrI32`.
     /// Produced by lowering `string | i32` (non-null general union types).
     /// The `name` is the deterministic enum name (e.g., `"StringOrI32"`),
@@ -552,6 +555,7 @@ impl std::fmt::Display for RustType {
             }
             Self::SelfType => "Self",
             Self::Infer => "_",
+            Self::BoxDynAny => "Box<dyn std::any::Any>",
             Self::ArcMutex(inner) => return write!(f, "Arc<Mutex<{inner}>>"),
             Self::Tuple(types) => {
                 write!(f, "(")?;
@@ -1571,6 +1575,7 @@ mod tests {
         assert_eq!(RustType::Bool.to_string(), "bool");
         assert_eq!(RustType::String.to_string(), "String");
         assert_eq!(RustType::Unit.to_string(), "()");
+        assert_eq!(RustType::BoxDynAny.to_string(), "Box<dyn std::any::Any>");
     }
 
     #[test]

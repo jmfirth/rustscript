@@ -47,6 +47,7 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             let name = union_enum_name(&variants);
             RustType::GeneratedUnion { name, variants }
         }
+        Type::Unknown => RustType::BoxDynAny,
         Type::Unit | Type::Error => RustType::Unit,
     }
 }
@@ -90,6 +91,7 @@ fn union_variant_name(ty: &RustType) -> String {
         RustType::Infer => "Infer".to_owned(),
         RustType::ArcMutex(inner) => format!("Shared{}", union_variant_name(inner)),
         RustType::DynRef(name) => format!("Dyn{name}"),
+        RustType::BoxDynAny => "Unknown".to_owned(),
     }
 }
 
@@ -362,5 +364,25 @@ mod tests {
         assert_eq!(union_variant_name(&RustType::I32), "I32");
         assert_eq!(union_variant_name(&RustType::Bool), "Bool");
         assert_eq!(union_variant_name(&RustType::F64), "F64");
+    }
+
+    // ---- Task 117: unknown type ----
+
+    #[test]
+    fn test_bridge_unknown_type_produces_box_dyn_any() {
+        assert_eq!(type_to_rust_type(&Type::Unknown), RustType::BoxDynAny);
+    }
+
+    #[test]
+    fn test_bridge_unknown_display_shows_box_dyn_any() {
+        assert_eq!(
+            type_to_rust_type(&Type::Unknown).to_string(),
+            "Box<dyn std::any::Any>"
+        );
+    }
+
+    #[test]
+    fn test_bridge_unknown_union_variant_name() {
+        assert_eq!(union_variant_name(&RustType::BoxDynAny), "Unknown");
     }
 }

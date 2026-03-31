@@ -34,6 +34,9 @@ pub enum Type {
     ArcMutex(Box<Type>),
     /// A tuple type: `(T1, T2, ...)` — from `[T1, T2]`.
     Tuple(Vec<Type>),
+    /// The `unknown` type — the type-safe top type.
+    /// Lowers to `Box<dyn std::any::Any>` in Rust.
+    Unknown,
     /// A general union type: `string | i32`, `string | i32 | bool`.
     /// Distinguished from `Option` (`T | null`). The members are the non-null
     /// component types, sorted alphabetically by their canonical names for

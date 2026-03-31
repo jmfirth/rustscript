@@ -108,7 +108,8 @@ fn supports_partial_eq(ty: &RustType) -> bool {
         | RustType::SelfType
         | RustType::Infer
         | RustType::ArcMutex(_)
-        | RustType::DynRef(_) => false,
+        | RustType::DynRef(_)
+        | RustType::BoxDynAny => false,
     }
 }
 
@@ -137,7 +138,8 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::SelfType
         | RustType::Infer
         | RustType::ArcMutex(_)
-        | RustType::DynRef(_) => false,
+        | RustType::DynRef(_)
+        | RustType::BoxDynAny => false,
         RustType::GeneratedUnion { variants, .. } => variants.iter().all(|(_, ty)| supports_eq(ty)),
         RustType::Tuple(types) => types.iter().all(supports_eq),
         RustType::Option(inner) => supports_eq(inner),

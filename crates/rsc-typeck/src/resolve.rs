@@ -101,6 +101,7 @@ pub fn resolve_type_annotation(
 ) -> Type {
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
+        ast::TypeKind::Unknown => Type::Unknown,
         ast::TypeKind::Named(ident) => resolve_type_name(&ident.name).unwrap_or_else(|| {
             diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
             Type::Primitive(PrimitiveType::I64)
@@ -235,6 +236,7 @@ pub fn resolve_type_annotation_with_generics(
 ) -> Type {
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
+        ast::TypeKind::Unknown => Type::Unknown,
         ast::TypeKind::Named(ident) => {
             // `Self` is a special type used in interface method return types.
             // It passes through to the lowering pass which handles it natively.
@@ -729,6 +731,7 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         }
         ast::TypeKind::Named(_)
         | ast::TypeKind::Void
+        | ast::TypeKind::Unknown
         | ast::TypeKind::Inferred
         | ast::TypeKind::StringLiteral(_)
         | ast::TypeKind::TypeOf(_) => false,
@@ -1542,6 +1545,35 @@ mod tests {
             diags[0]
                 .message
                 .contains("spread type is only valid inside a tuple type")
+        );
+    }
+
+    // ---- Task 117: unknown type ----
+
+    #[test]
+    fn test_resolve_type_annotation_unknown_produces_unknown() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Unknown,
+            span: span(0, 7),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Unknown);
+        assert!(diags.is_empty(), "unknown type should not emit diagnostics");
+    }
+
+    #[test]
+    fn test_resolve_type_annotation_unknown_to_rust_type() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Unknown,
+            span: span(0, 7),
+        };
+        let mut diags = Vec::new();
+        let rust_ty = resolve_type_annotation_to_rust_type(&ann, &mut diags);
+        assert_eq!(
+            rust_ty,
+            rsc_syntax::rust_ir::RustType::BoxDynAny,
+            "unknown type should resolve to BoxDynAny"
         );
     }
 }
