@@ -3987,13 +3987,20 @@ impl<'src> Parser<'src> {
         }
 
         // `{ ...expr }` — object spread literal
-        matches!(after_brace, Some(TokenKind::DotDotDot))
+        if matches!(after_brace, Some(TokenKind::DotDotDot)) {
+            return true;
+        }
+
+        // `{ [expr]: value, ... }` — computed property name
+        matches!(after_brace, Some(TokenKind::LBracket))
     }
 
-    /// Parse a struct literal: `{ name: expr, ... }`.
+    /// Parse a struct literal: `{ name: expr, ... }` or `{ [expr]: value, ... }`.
     ///
     /// The `type_name` is provided when the struct type is known from context
     /// (e.g., from a type annotation on the variable declaration).
+    /// Supports computed property names: `{ [key_expr]: value }`.
+    #[allow(clippy::too_many_lines)]
     fn parse_struct_literal(&mut self, type_name: Option<Ident>) -> Option<Expr> {
         let open = self.advance(); // consume `{`
         let start = type_name.as_ref().map_or(open.span, |n| n.span);
@@ -4028,6 +4035,7 @@ impl<'src> Parser<'src> {
                         fields.push(FieldInit {
                             name,
                             value,
+                            computed_key: None,
                             span: field_span,
                         });
 
@@ -4041,24 +4049,55 @@ impl<'src> Parser<'src> {
                     }
                 }
             } else {
-                // No spread — parse fields as normal
+                // No spread — parse fields (static or computed)
                 loop {
                     let field_start = self.current_token().span;
-                    let Some(name) = self.parse_ident() else {
-                        break;
-                    };
-                    if self.expect(&TokenKind::Colon).is_none() {
-                        break;
+
+                    // Computed property: `[expr]: value`
+                    if self.check(&TokenKind::LBracket) {
+                        self.advance(); // consume `[`
+                        let Some(key_expr) = self.parse_expr() else {
+                            break;
+                        };
+                        if self.expect(&TokenKind::RBracket).is_none() {
+                            break;
+                        }
+                        if self.expect(&TokenKind::Colon).is_none() {
+                            break;
+                        }
+                        let Some(value) = self.parse_expr() else {
+                            break;
+                        };
+                        let field_span = field_start.merge(value.span);
+                        let placeholder = Ident {
+                            name: "__computed".to_owned(),
+                            span: key_expr.span,
+                        };
+                        fields.push(FieldInit {
+                            name: placeholder,
+                            value,
+                            computed_key: Some(Box::new(key_expr)),
+                            span: field_span,
+                        });
+                    } else {
+                        // Static property: `name: value`
+                        let Some(name) = self.parse_ident() else {
+                            break;
+                        };
+                        if self.expect(&TokenKind::Colon).is_none() {
+                            break;
+                        }
+                        let Some(value) = self.parse_expr() else {
+                            break;
+                        };
+                        let field_span = field_start.merge(value.span);
+                        fields.push(FieldInit {
+                            name,
+                            value,
+                            computed_key: None,
+                            span: field_span,
+                        });
                     }
-                    let Some(value) = self.parse_expr() else {
-                        break;
-                    };
-                    let field_span = field_start.merge(value.span);
-                    fields.push(FieldInit {
-                        name,
-                        value,
-                        span: field_span,
-                    });
 
                     if !self.eat(&TokenKind::Comma) {
                         break;
@@ -10243,6 +10282,120 @@ type Shape =
                 other => panic!("expected Generic inside Readonly, got: {other:?}"),
             },
             other => panic!("expected TypeKind::Readonly for field type, got: {other:?}"),
+        }
+    }
+
+    // ===================================================================
+    // Task 121: Computed property name tests
+    // ===================================================================
+
+    #[test]
+    fn test_parser_computed_property_name() {
+        let source = r#"function main() { const obj = { [key]: "value" }; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::StructLit(slit) => {
+                    assert_eq!(slit.fields.len(), 1);
+                    let field = &slit.fields[0];
+                    assert!(
+                        field.computed_key.is_some(),
+                        "field should have computed_key"
+                    );
+                    let key = field.computed_key.as_ref().unwrap();
+                    match &key.kind {
+                        ExprKind::Ident(ident) => assert_eq!(ident.name, "key"),
+                        other => panic!("expected Ident key, got: {other:?}"),
+                    }
+                }
+                other => panic!("expected StructLit, got: {other:?}"),
+            },
+            other => panic!("expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_computed_property_string_expr() {
+        let source = r#"function main() { const obj = { ["hello"]: 1 }; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::StructLit(slit) => {
+                    assert_eq!(slit.fields.len(), 1);
+                    let field = &slit.fields[0];
+                    assert!(
+                        field.computed_key.is_some(),
+                        "field should have computed_key"
+                    );
+                    let key = field.computed_key.as_ref().unwrap();
+                    match &key.kind {
+                        ExprKind::StringLit(s) => assert_eq!(s, "hello"),
+                        other => panic!("expected StringLit key, got: {other:?}"),
+                    }
+                }
+                other => panic!("expected StructLit, got: {other:?}"),
+            },
+            other => panic!("expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_mixed_static_computed_properties() {
+        let source = r#"function main() { const obj = { a: 1, [b]: 2 }; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::StructLit(slit) => {
+                    assert_eq!(slit.fields.len(), 2);
+                    // First field is static
+                    assert!(
+                        slit.fields[0].computed_key.is_none(),
+                        "first field should be static"
+                    );
+                    assert_eq!(slit.fields[0].name.name, "a");
+                    // Second field is computed
+                    assert!(
+                        slit.fields[1].computed_key.is_some(),
+                        "second field should be computed"
+                    );
+                }
+                other => panic!("expected StructLit, got: {other:?}"),
+            },
+            other => panic!("expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_computed_property_complex_expr() {
+        let source = r#"function main() { const obj = { [a + b]: "value" }; }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => match &decl.init.kind {
+                ExprKind::StructLit(slit) => {
+                    assert_eq!(slit.fields.len(), 1);
+                    let field = &slit.fields[0];
+                    assert!(
+                        field.computed_key.is_some(),
+                        "field should have computed_key"
+                    );
+                    let key = field.computed_key.as_ref().unwrap();
+                    assert!(
+                        matches!(&key.kind, ExprKind::Binary(_)),
+                        "expected Binary expr key, got: {:?}",
+                        key.kind
+                    );
+                }
+                other => panic!("expected StructLit, got: {other:?}"),
+            },
+            other => panic!("expected VarDecl, got: {other:?}"),
         }
     }
 }

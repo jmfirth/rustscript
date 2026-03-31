@@ -448,6 +448,16 @@ impl UseMap {
             }
             ast::ExprKind::StructLit(slit) => {
                 for field in &slit.fields {
+                    if let Some(key_expr) = &field.computed_key {
+                        Self::collect_expr_uses(
+                            key_expr,
+                            stmt_index,
+                            false,
+                            is_ref_call,
+                            callee_param_modes,
+                            uses,
+                        );
+                    }
                     Self::collect_expr_uses(
                         &field.value,
                         stmt_index,
@@ -1267,6 +1277,9 @@ fn collect_param_usage_expr(
         ast::ExprKind::StructLit(slit) => {
             // Struct field values are move positions (stored in struct)
             for field in &slit.fields {
+                if let Some(key_expr) = &field.computed_key {
+                    collect_param_usage_expr(key_expr, param_set, is_ref_call, result);
+                }
                 if let ast::ExprKind::Ident(ident) = &field.value.kind {
                     record_usage(&ident.name, ParamUsage::Moved, param_set, result);
                 } else {
@@ -1454,6 +1467,9 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
                 collect_idents_in_expr(spread, names);
             }
             for field in &slit.fields {
+                if let Some(key_expr) = &field.computed_key {
+                    collect_idents_in_expr(key_expr, names);
+                }
                 collect_idents_in_expr(&field.value, names);
             }
         }
@@ -2082,6 +2098,7 @@ mod tests {
                         fields: vec![FieldInit {
                             name: ident("name", 16, 20),
                             value: ident_expr("name", 22, 26),
+                            computed_key: None,
                             span: span(16, 26),
                         }],
                     }),

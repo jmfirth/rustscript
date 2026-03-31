@@ -8,8 +8,8 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustStmt,
-    RustType, SpreadOp,
+    ParamMode, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustLetStmt,
+    RustStmt, RustType, SpreadOp,
 };
 
 use crate::context::LoweringContext;
@@ -903,7 +903,10 @@ impl Transform {
 
         // When the parameter type is &dyn Trait or &[T], add & before the argument
         if let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
-            && matches!(param_ty, RustType::DynRef(_) | RustType::Slice(_) | RustType::Reference(_))
+            && matches!(
+                param_ty,
+                RustType::DynRef(_) | RustType::Slice(_) | RustType::Reference(_)
+            )
         {
             let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
             if !matches!(lowered.kind, RustExprKind::Borrow(_)) {
@@ -1429,6 +1432,9 @@ impl Transform {
     ///
     /// Handles spread syntax: `{ ...base, field: value }` lowers to Rust
     /// struct update syntax `Type { field: value, ..base.clone() }`.
+    ///
+    /// When any field has a computed key (`[expr]: value`), the entire object
+    /// literal is lowered to a `HashMap<String, _>` with `.insert()` calls.
     fn lower_struct_lit(
         &self,
         slit: &ast::StructLitExpr,
@@ -1437,6 +1443,13 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Check if any field uses a computed property name.
+        let has_computed = slit.fields.iter().any(|f| f.computed_key.is_some());
+
+        if has_computed {
+            return self.lower_computed_object_lit(slit, span, ctx, use_map, stmt_index);
+        }
+
         let type_name = slit
             .type_name
             .as_ref()
@@ -1479,6 +1492,89 @@ impl Transform {
         }
 
         RustExpr::new(RustExprKind::StructLit { type_name, fields }, span)
+    }
+
+    /// Lower an object literal with computed property names to a `HashMap`.
+    ///
+    /// Produces a block expression:
+    /// ```text
+    /// {
+    ///     let mut __obj = HashMap::new();
+    ///     __obj.insert("static_key".to_string(), value);
+    ///     __obj.insert(computed_key_expr, value);
+    ///     __obj
+    /// }
+    /// ```
+    fn lower_computed_object_lit(
+        &self,
+        slit: &ast::StructLitExpr,
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        let obj_name = "__obj";
+        let mut stmts = Vec::new();
+
+        // `let mut __obj = HashMap::new();`
+        stmts.push(RustStmt::Let(RustLetStmt {
+            mutable: true,
+            name: obj_name.to_owned(),
+            ty: None,
+            init: RustExpr::new(
+                RustExprKind::StaticCall {
+                    type_name: "HashMap".to_owned(),
+                    method: "new".to_owned(),
+                    args: vec![],
+                },
+                span,
+            ),
+            span: Some(span),
+        }));
+
+        // Generate `.insert()` calls for each field
+        for field in &slit.fields {
+            let value = self.lower_expr(&field.value, ctx, use_map, stmt_index);
+
+            let key_expr = if let Some(computed) = &field.computed_key {
+                // Computed key: use the expression directly
+                self.lower_expr(computed, ctx, use_map, stmt_index)
+            } else {
+                // Static key: convert name to a string literal with `.to_string()`
+                RustExpr::new(
+                    RustExprKind::ToString(Box::new(RustExpr::new(
+                        RustExprKind::StringLit(field.name.name.clone()),
+                        field.span,
+                    ))),
+                    field.span,
+                )
+            };
+
+            // `__obj.insert(key, value);`
+            stmts.push(RustStmt::Semi(RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(RustExpr::new(
+                        RustExprKind::Ident(obj_name.to_owned()),
+                        span,
+                    )),
+                    method: "insert".to_owned(),
+                    type_args: vec![],
+                    args: vec![key_expr, value],
+                },
+                field.span,
+            )));
+        }
+
+        // Trailing expression: `__obj`
+        let trailing = RustExpr::new(RustExprKind::Ident(obj_name.to_owned()), span);
+
+        RustExpr::new(
+            RustExprKind::BlockExpr(RustBlock {
+                stmts,
+                expr: Some(Box::new(trailing)),
+            }),
+            span,
+        )
     }
 
     /// Lower an array literal expression.

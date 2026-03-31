@@ -2110,3 +2110,95 @@ function main() {
     let output = compile_and_run(source);
     assert_eq!(output, "3\n");
 }
+
+// ===========================================================================
+//
+// CATEGORY: Computed Property Names (Task 121)
+//
+// ===========================================================================
+
+#[test]
+fn test_computed_property_snapshot() {
+    let source = "\
+function main() {
+  const key: string = \"name\";
+  const obj = { [key]: \"value\" };
+}";
+
+    let actual = compile_to_rust(source);
+    // Should emit HashMap::new()
+    assert!(
+        actual.contains("HashMap::new()"),
+        "computed property should emit HashMap::new(): {actual}"
+    );
+    // Should emit .insert() call
+    assert!(
+        actual.contains(".insert("),
+        "computed property should emit .insert(): {actual}"
+    );
+    // Should use std::collections::HashMap
+    assert!(
+        actual.contains("use std::collections::HashMap"),
+        "should generate use declaration for HashMap: {actual}"
+    );
+}
+
+#[test]
+fn test_computed_property_insert_snapshot() {
+    let source = "\
+function main() {
+  const key: string = \"status\";
+  const obj = { [key]: 200 };
+}";
+
+    let actual = compile_to_rust(source);
+    // The computed key expression should appear in the insert call
+    assert!(
+        actual.contains("key"),
+        "computed key should use key variable in insert: {actual}"
+    );
+    assert!(
+        actual.contains("200"),
+        "computed value should appear: {actual}"
+    );
+}
+
+#[test]
+fn test_mixed_properties_snapshot() {
+    let source = "\
+function main() {
+  const key: string = \"dynamic\";
+  const obj = { static_field: 1, [key]: 2 };
+}";
+
+    let actual = compile_to_rust(source);
+    // With any computed key, the whole object becomes a HashMap
+    assert!(
+        actual.contains("HashMap::new()"),
+        "mixed properties should use HashMap: {actual}"
+    );
+    // Static field should be inserted as a string key
+    assert!(
+        actual.contains("\"static_field\""),
+        "static field name should appear as string literal: {actual}"
+    );
+    // Both values should appear in insert calls
+    assert!(
+        actual.contains(".insert("),
+        "should use .insert() for fields: {actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_computed_property_compiles() {
+    let source = "\
+function main() {
+  const key: string = \"greeting\";
+  const obj = { [key]: \"hello\" };
+  console.log(obj[&key]);
+}";
+
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n");
+}

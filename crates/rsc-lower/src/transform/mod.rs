@@ -4386,6 +4386,7 @@ mod tests {
                                 kind: ExprKind::FloatLit(1.0),
                                 span: span(0, 3),
                             },
+                            computed_key: None,
                             span: span(0, 4),
                         },
                         ast::FieldInit {
@@ -4394,6 +4395,7 @@ mod tests {
                                 kind: ExprKind::FloatLit(2.0),
                                 span: span(0, 3),
                             },
+                            computed_key: None,
                             span: span(0, 4),
                         },
                     ],

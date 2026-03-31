@@ -1271,7 +1271,13 @@ impl Printer {
 
     /// Print a field initializer.
     fn print_field_init(&mut self, field: &FieldInit) {
-        self.write(&field.name.name);
+        if let Some(key_expr) = &field.computed_key {
+            self.write("[");
+            self.print_expr(key_expr);
+            self.write("]");
+        } else {
+            self.write(&field.name.name);
+        }
         self.write(": ");
         self.print_expr(&field.value);
     }

@@ -1418,13 +1418,18 @@ pub struct StructLitExpr {
 
 /// A field initializer in a struct literal.
 ///
-/// Corresponds to `name: expr` within a struct literal body.
+/// Corresponds to `name: expr` or `[key_expr]: expr` within a struct literal body.
+/// When `computed_key` is `Some`, the field uses a computed property name and will
+/// cause the entire object literal to be lowered as a `HashMap`.
 #[derive(Debug, Clone)]
 pub struct FieldInit {
-    /// The field name.
+    /// The field name. For computed properties, this is a placeholder identifier.
     pub name: Ident,
     /// The field value expression.
     pub value: Expr,
+    /// Optional computed key expression: `[expr]: value`.
+    /// When present, this field uses a dynamically computed key.
+    pub computed_key: Option<Box<Expr>>,
     /// The span covering the field initializer.
     pub span: Span,
 }
