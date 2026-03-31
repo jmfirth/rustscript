@@ -1582,6 +1582,20 @@ impl<'src> Parser<'src> {
             }
         }
 
+        // Check for static initialization block: `static { ... }`
+        // Must come before consuming `static` as a modifier, since the block
+        // syntax is `static` immediately followed by `{`.
+        if self.check_contextual_keyword("static")
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| t.kind == TokenKind::LBrace)
+        {
+            self.advance(); // consume `static`
+            let block = self.parse_block()?;
+            return Some(ClassMember::StaticBlock(block));
+        }
+
         // Check for `abstract` modifier
         let is_abstract = self.eat(&TokenKind::Abstract);
 
@@ -8670,6 +8684,7 @@ function main(): void {
                 ClassMember::Method(_) => methods += 1,
                 ClassMember::Getter(_) => getters += 1,
                 ClassMember::Setter(_) => setters += 1,
+                ClassMember::StaticBlock(_) => {}
             }
         }
         assert_eq!(fields, 4, "4 fields (MAX, _value, label, id)");
@@ -10243,6 +10258,94 @@ type Shape =
                 other => panic!("expected Generic inside Readonly, got: {other:?}"),
             },
             other => panic!("expected TypeKind::Readonly for field type, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 122: Static blocks in classes
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_static_block_empty() {
+        let module = parse_ok(
+            "class Foo {
+                static { }
+            }",
+        );
+        let cls = first_class(&module);
+        assert_eq!(cls.members.len(), 1);
+        match &cls.members[0] {
+            ClassMember::StaticBlock(block) => {
+                assert!(block.stmts.is_empty(), "empty static block");
+            }
+            other => panic!("expected StaticBlock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_static_block_with_statements() {
+        let module = parse_ok(
+            "class Foo {
+                static {
+                    const x: i32 = 1;
+                }
+            }",
+        );
+        let cls = first_class(&module);
+        assert_eq!(cls.members.len(), 1);
+        match &cls.members[0] {
+            ClassMember::StaticBlock(block) => {
+                assert_eq!(block.stmts.len(), 1, "should have one statement");
+            }
+            other => panic!("expected StaticBlock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_static_block_mixed_with_methods() {
+        let module = parse_ok(
+            "class Foo {
+                value: i32;
+                constructor() {}
+
+                static {
+                    const x: i32 = 42;
+                }
+
+                greet(): void {}
+            }",
+        );
+        let cls = first_class(&module);
+        // field + constructor + static block + method = 4
+        assert_eq!(cls.members.len(), 4);
+        let has_static_block = cls
+            .members
+            .iter()
+            .any(|m| matches!(m, ClassMember::StaticBlock(_)));
+        assert!(has_static_block, "should contain a static block");
+        let has_method = cls
+            .members
+            .iter()
+            .any(|m| matches!(m, ClassMember::Method(m) if m.name.name == "greet"));
+        assert!(has_method, "should still have greet method");
+    }
+
+    #[test]
+    fn test_parser_static_keyword_method_not_confused_with_static_block() {
+        // `static greet(): void {}` should parse as a static method, not a static block
+        let module = parse_ok(
+            "class Foo {
+                static greet(): void {}
+            }",
+        );
+        let cls = first_class(&module);
+        assert_eq!(cls.members.len(), 1);
+        match &cls.members[0] {
+            ClassMember::Method(m) => {
+                assert!(m.is_static, "method should be static");
+                assert_eq!(m.name.name, "greet");
+            }
+            other => panic!("expected static Method, got {other:?}"),
         }
     }
 }

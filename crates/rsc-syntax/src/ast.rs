@@ -412,6 +412,12 @@ pub enum ClassMember {
     /// A setter accessor: `set name(value: Type) { ... }`.
     /// Lowers to a `fn set_name(&mut self, value: Type)` method.
     Setter(ClassSetter),
+    /// A static initialization block: `static { ... }`.
+    ///
+    /// Contains statements that run once when the class is initialized.
+    /// Simple literal assignments lower to associated constants; complex
+    /// logic lowers to a `_static_init()` method.
+    StaticBlock(Block),
 }
 
 /// A class field declaration: `[private|public] [readonly] [static] name: Type [= expr];`.

@@ -404,6 +404,87 @@ impl Transform {
             }
         }
 
+        // 4b. Lower static initialization blocks
+        //     Simple case: `ClassName.field = literal` → associated const (if a
+        //     matching static field declaration exists with a type annotation).
+        //     General case: remaining statements → `_static_init()` method.
+        for member in &cls.members {
+            if let ast::ClassMember::StaticBlock(block) = member {
+                let mut remaining_stmts: Vec<&ast::Stmt> = Vec::new();
+
+                for stmt in &block.stmts {
+                    if let Some((field_name, value)) =
+                        extract_static_field_assign(stmt, &cls.name.name)
+                    {
+                        // Look up the matching static field declaration for its type
+                        if let Some(field_decl) = find_static_field(&cls.members, &field_name) {
+                            let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                                &field_decl.type_ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut diags,
+                            );
+                            let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+                            let use_map = UseMap::analyze(
+                                &ast::Block {
+                                    stmts: vec![],
+                                    span: block.span,
+                                },
+                                |obj, method| self.builtins.is_ref_args(obj, method),
+                                |_| None,
+                            );
+                            let init = self.lower_expr(value, ctx, &use_map, 0);
+                            // Only add if not already present from a direct field initializer
+                            if !associated_consts.iter().any(|c| c.name == field_name) {
+                                associated_consts.push(RustConstItem {
+                                    public: field_decl.visibility == ast::Visibility::Public,
+                                    name: field_name,
+                                    ty: rust_ty,
+                                    init,
+                                    span: Some(block.span),
+                                });
+                            }
+                        } else {
+                            // No matching static field found — keep as general statement
+                            remaining_stmts.push(stmt);
+                        }
+                    } else {
+                        remaining_stmts.push(stmt);
+                    }
+                }
+
+                // If there are remaining non-const statements, emit _static_init()
+                if !remaining_stmts.is_empty() {
+                    let reassigned = ownership::find_reassigned_variables(block);
+                    let use_map = UseMap::analyze(
+                        block,
+                        |obj, method_name| self.builtins.is_ref_args(obj, method_name),
+                        |_| None,
+                    );
+                    let body_stmts: Vec<RustStmt> = remaining_stmts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, stmt)| self.lower_stmt(stmt, ctx, &use_map, i, &reassigned))
+                        .collect();
+                    inherent_methods.push(RustMethod {
+                        is_async: false,
+                        name: "_static_init".to_owned(),
+                        self_param: None,
+                        params: vec![],
+                        return_type: None,
+                        body: RustBlock {
+                            stmts: body_stmts,
+                            expr: None,
+                        },
+                        doc_comment: Some(
+                            "Static initialization logic. Call once at program startup.".to_owned(),
+                        ),
+                        span: Some(block.span),
+                    });
+                }
+            }
+        }
+
         // 5. Emit the inherent impl block
         items.push(RustItem::Impl(RustImplBlock {
             type_name: cls.name.name.clone(),
@@ -1228,4 +1309,36 @@ fn field_accessor_type_and_body(field_name: &str, rust_ty: &RustType) -> (RustTy
         };
         (RustType::Named(format!("&{rust_ty}")), body)
     }
+}
+
+/// Extract a static field assignment from a statement of the form `ClassName.field = value`.
+///
+/// Returns `Some((field_name, value_expr))` if the statement matches the pattern,
+/// or `None` if it does not.
+fn extract_static_field_assign<'a>(
+    stmt: &'a ast::Stmt,
+    class_name: &str,
+) -> Option<(String, &'a ast::Expr)> {
+    if let ast::Stmt::Expr(expr) = stmt
+        && let ast::ExprKind::FieldAssign(fa) = &expr.kind
+        && let ast::ExprKind::Ident(ident) = &fa.object.kind
+        && ident.name == class_name
+    {
+        Some((fa.field.name.clone(), &fa.value))
+    } else {
+        None
+    }
+}
+
+/// Find a static field declaration in the class members by name.
+///
+/// Returns the field definition if a matching `static` field exists.
+fn find_static_field<'a>(
+    members: &'a [ast::ClassMember],
+    field_name: &str,
+) -> Option<&'a ast::ClassField> {
+    members.iter().find_map(|m| match m {
+        ast::ClassMember::Field(f) if f.is_static && f.name.name == field_name => Some(f),
+        _ => None,
+    })
 }

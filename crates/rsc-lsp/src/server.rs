@@ -1510,6 +1510,11 @@ fn find_hover_in_class_members(
                     return Some(info);
                 }
             }
+            ClassMember::StaticBlock(block) => {
+                if let Some(info) = find_hover_in_stmts(&block.stmts, pos, cache) {
+                    return Some(info);
+                }
+            }
         }
     }
 
