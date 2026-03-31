@@ -1740,7 +1740,7 @@ impl Transform {
                     && name == "Vec"
                     && args.len() == 1
                 {
-                    rust_ty = RustType::Slice(Box::new(args[0].clone()));
+                    rust_ty = RustType::Reference(Box::new(RustType::Slice(Box::new(args[0].clone()))));
                 }
 
                 // Rewrite base class types to &dyn {Name}Trait for polymorphism
@@ -2029,7 +2029,7 @@ impl Transform {
                     && name == "Vec"
                     && args.len() == 1
                 {
-                    ty = RustType::Slice(Box::new(args[0].clone()));
+                    ty = RustType::Reference(Box::new(RustType::Slice(Box::new(args[0].clone()))));
                 }
 
                 // Rewrite base class types to &dyn {Name}Trait for polymorphism
@@ -2054,14 +2054,14 @@ impl Transform {
 
                 // DynRef and Slice types are already references — force Owned mode
                 // to avoid emitting `&&dyn Trait` or `&&[T]`
-                if matches!(ty, RustType::DynRef(_) | RustType::Slice(_)) {
+                if matches!(ty, RustType::DynRef(_) | RustType::Slice(_) | RustType::Reference(_)) {
                     mode = ParamMode::Owned;
                 }
 
                 // Borrowed parameters are already references — mark them so
                 // downstream lowering (e.g., for-of) avoids double-borrowing.
                 if matches!(mode, ParamMode::Borrowed | ParamMode::BorrowedStr)
-                    || matches!(ty, RustType::DynRef(_) | RustType::Slice(_))
+                    || matches!(ty, RustType::DynRef(_) | RustType::Slice(_) | RustType::Reference(_))
                 {
                     ctx.mark_as_reference(p.name.name.clone());
                 }
