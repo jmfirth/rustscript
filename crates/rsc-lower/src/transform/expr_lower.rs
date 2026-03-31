@@ -656,6 +656,36 @@ impl Transform {
                 // Should never reach here — comma expressions always have at least one element
                 unreachable!("comma expression should have at least one element")
             }
+            ast::ExprKind::AsConst(inner) => {
+                // `as const` on array literals → static slice literal `&[elem1, elem2, ...]`
+                // `as const` on other expressions → lower the inner expression unchanged
+                if let ast::ExprKind::ArrayLit(elements) = &inner.kind {
+                    let has_spread = elements
+                        .iter()
+                        .any(|e| matches!(e, ast::ArrayElement::Spread(_)));
+                    if !has_spread {
+                        let lowered: Vec<RustExpr> = elements
+                            .iter()
+                            .map(|e| match e {
+                                ast::ArrayElement::Expr(el) => {
+                                    // In `as const` context, string literals stay as `&str`
+                                    // (no `.to_string()` wrapping) since static slices
+                                    // hold `&str` references, not owned `String`.
+                                    if let ast::ExprKind::StringLit(s) = &el.kind {
+                                        RustExpr::new(RustExprKind::StringLit(s.clone()), el.span)
+                                    } else {
+                                        self.lower_expr(el, ctx, use_map, stmt_index)
+                                    }
+                                }
+                                ast::ArrayElement::Spread(_) => unreachable!(),
+                            })
+                            .collect();
+                        return RustExpr::new(RustExprKind::SliceLit(lowered), expr.span);
+                    }
+                }
+                // For non-array (objects, literals): strip the `as const`, lower inner
+                self.lower_expr(inner, ctx, use_map, stmt_index)
+            }
         }
     }
 

@@ -93,8 +93,11 @@ fn supports_partial_eq(ty: &RustType) -> bool {
         | RustType::Bool
         | RustType::String
         | RustType::Unit
-        | RustType::Named(_) => true,
-        RustType::Option(inner) => supports_partial_eq(inner),
+        | RustType::Named(_)
+        | RustType::StrRef => true,
+        RustType::Option(inner) | RustType::Reference(inner) | RustType::Slice(inner) => {
+            supports_partial_eq(inner)
+        }
         RustType::Result(ok, err) => supports_partial_eq(ok) && supports_partial_eq(err),
         RustType::Generic(base, args) => {
             supports_partial_eq(base) && args.iter().all(supports_partial_eq)
@@ -129,7 +132,11 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::Bool
         | RustType::String
         | RustType::Unit
-        | RustType::Named(_) => true,
+        | RustType::Named(_)
+        | RustType::StrRef => true,
+        RustType::Reference(inner) | RustType::Slice(inner) | RustType::Option(inner) => {
+            supports_eq(inner)
+        }
         RustType::F32
         | RustType::F64
         | RustType::TypeParam(_)
@@ -140,7 +147,6 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::DynRef(_) => false,
         RustType::GeneratedUnion { variants, .. } => variants.iter().all(|(_, ty)| supports_eq(ty)),
         RustType::Tuple(types) => types.iter().all(supports_eq),
-        RustType::Option(inner) => supports_eq(inner),
         RustType::Result(ok, err) => supports_eq(ok) && supports_eq(err),
         RustType::Generic(base, args) => supports_eq(base) && args.iter().all(supports_eq),
     }

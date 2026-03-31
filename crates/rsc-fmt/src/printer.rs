@@ -1054,6 +1054,8 @@ impl Printer {
     }
 
     /// Print an expression.
+    #[allow(clippy::too_many_lines)]
+    // Expression printing covers all ExprKind variants; splitting would fragment the match
     fn print_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::IntLit(v) => self.write(&v.to_string()),
@@ -1152,6 +1154,10 @@ impl Printer {
                     self.print_expr(e);
                 }
                 self.write(")");
+            }
+            ExprKind::AsConst(inner) => {
+                self.print_expr(inner);
+                self.write(" as const");
             }
         }
     }

@@ -1390,6 +1390,16 @@ impl Emitter {
                 }
                 self.write("]");
             }
+            RustExprKind::SliceLit(elements) => {
+                self.write("&[");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(elem);
+                }
+                self.write("]");
+            }
             RustExprKind::StaticCall {
                 type_name,
                 method,

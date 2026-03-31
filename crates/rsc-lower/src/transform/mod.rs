@@ -1881,6 +1881,16 @@ impl Transform {
             ctx.emit_diagnostic(d);
         }
 
+        // If `as const` wraps an array literal, override the type to a static slice reference.
+        let ty = if let ast::ExprKind::AsConst(inner) = &decl.init.kind
+            && matches!(&inner.kind, ast::ExprKind::ArrayLit(_))
+        {
+            let elem_ty = infer_as_const_slice_element_type(inner);
+            RustType::Reference(Box::new(RustType::Slice(Box::new(elem_ty))))
+        } else {
+            ty
+        };
+
         // Register the const variable in the lowering context so that
         // `typeof x` can resolve to this variable's type.
         ctx.declare_variable(decl.name.name.clone(), ty.clone());
@@ -2941,6 +2951,27 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
 ///
 /// For `Vec<i32>` (represented as `Generic(Named("Vec"), [I32])`), returns true.
 /// For `Vec<String>` or non-collection types, returns false.
+/// Infer the element type for an `as const` array to determine the static slice type.
+///
+/// For string arrays: `&str` (string literals are `&'static str` in const context).
+/// For integer arrays: `i64` (the default integer type).
+/// For float arrays: `f64`.
+/// For boolean arrays: `bool`.
+/// Falls back to `i64` for empty or mixed arrays.
+fn infer_as_const_slice_element_type(array_expr: &ast::Expr) -> RustType {
+    if let ast::ExprKind::ArrayLit(elements) = &array_expr.kind
+        && let Some(ast::ArrayElement::Expr(first)) = elements.first()
+    {
+        return match &first.kind {
+            ast::ExprKind::StringLit(_) => RustType::StrRef,
+            ast::ExprKind::FloatLit(_) => RustType::F64,
+            ast::ExprKind::BoolLit(_) => RustType::Bool,
+            _ => RustType::I64,
+        };
+    }
+    RustType::I64
+}
+
 fn element_type_is_copy(ty: &RustType) -> bool {
     if let RustType::Generic(_, args) = ty
         && let Some(elem) = args.first()

@@ -496,6 +496,15 @@ pub enum RustType {
     /// Produced when a function parameter has a base class type that is extended,
     /// enabling polymorphic dispatch.
     DynRef(String),
+    /// A reference type: `&T`.
+    /// Produced by lowering `as const` arrays to `&[T]`.
+    Reference(Box<RustType>),
+    /// A slice type: `[T]`.
+    /// Used inside references for `&[T]` static slice types.
+    Slice(Box<RustType>),
+    /// A string slice reference: `&str`.
+    /// Used in `as const` string array slices (`&[&str]`).
+    StrRef,
     /// Auto-generated union enum type: `StringOrI32`.
     /// Produced by lowering `string | i32` (non-null general union types).
     /// The `name` is the deterministic enum name (e.g., `"StringOrI32"`),
@@ -553,6 +562,9 @@ impl std::fmt::Display for RustType {
             Self::SelfType => "Self",
             Self::Infer => "_",
             Self::ArcMutex(inner) => return write!(f, "Arc<Mutex<{inner}>>"),
+            Self::Reference(inner) => return write!(f, "&{inner}"),
+            Self::Slice(inner) => return write!(f, "[{inner}]"),
+            Self::StrRef => "&str",
             Self::Tuple(types) => {
                 write!(f, "(")?;
                 for (i, ty) in types.iter().enumerate() {
@@ -1263,6 +1275,9 @@ pub enum RustExprKind {
         /// The field index (0-based).
         index: usize,
     },
+    /// Static slice literal: `&["a", "b", "c"]`.
+    /// Produced by lowering `as const` array literals.
+    SliceLit(Vec<RustExpr>),
     /// Raw Rust code emitted verbatim.
     /// Used for generator state machine bodies and other compiler-generated code.
     Raw(String),
