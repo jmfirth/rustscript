@@ -14,7 +14,7 @@ use rsc_syntax::ast::{
     OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation,
     StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind,
     TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr,
-    UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt,
+    UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -168,6 +168,7 @@ impl Printer {
             ItemKind::Interface(i) => self.print_interface_def(i),
             ItemKind::Import(imp) => self.print_import(imp),
             ItemKind::ReExport(re) => self.print_re_export(re),
+            ItemKind::WildcardReExport(re) => self.print_wildcard_re_export(re),
             ItemKind::Class(c) => self.print_class_def(c),
             ItemKind::RustBlock(rb) => self.print_rust_block(rb),
             ItemKind::Const(decl) => self.print_var_decl(decl),
@@ -240,6 +241,13 @@ impl Printer {
             self.write(&name.name);
         }
         self.write(" } from \"");
+        self.write(&re.source.value);
+        self.writeln("\";");
+    }
+
+    /// Print a wildcard re-export: `export * from "./module";`.
+    fn print_wildcard_re_export(&mut self, re: &WildcardReExportDecl) {
+        self.write("export * from \"");
         self.write(&re.source.value);
         self.writeln("\";");
     }

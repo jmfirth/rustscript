@@ -82,6 +82,55 @@ pub(super) fn classify_import(
     }
 }
 
+/// Classify a wildcard re-export source path and produce a `pub use path::*;`
+/// declaration plus any crate dependency.
+///
+/// Same path classification as [`classify_import`]:
+/// 1. **Local** (`"./"` or `"../"`) — `pub use crate::module::*;`
+/// 2. **Standard library** (`"std/..."`) — `pub use std::...::*;`
+/// 3. **External crate** (everything else) — `pub use crate_name::*;` + dependency
+pub(super) fn classify_wildcard_reexport(
+    source: &str,
+    span: Span,
+    import_uses: &mut Vec<RustUseDecl>,
+    crate_deps: &mut HashSet<CrateDependency>,
+) {
+    if source.starts_with("./") || source.starts_with("../") {
+        // Local module wildcard re-export
+        let module_path = resolve_import_path(source);
+        import_uses.push(RustUseDecl {
+            path: format!("{module_path}::*"),
+            public: true,
+            span: Some(span),
+        });
+    } else if source.starts_with("std/") {
+        // Standard library wildcard re-export
+        let rust_path = source.replace('/', "::");
+        import_uses.push(RustUseDecl {
+            path: format!("{rust_path}::*"),
+            public: true,
+            span: Some(span),
+        });
+    } else {
+        // External crate wildcard re-export
+        let parts: Vec<&str> = source.split('/').collect();
+        let crate_name = parts[0].replace('-', "_");
+        let rust_path = parts
+            .iter()
+            .map(|p| p.replace('-', "_"))
+            .collect::<Vec<_>>()
+            .join("::");
+
+        import_uses.push(RustUseDecl {
+            path: format!("{rust_path}::*"),
+            public: true,
+            span: Some(span),
+        });
+
+        crate_deps.insert(CrateDependency { name: crate_name });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +146,42 @@ mod tests {
             resolve_import_path("./utils/helpers"),
             "crate::utils::helpers"
         );
+    }
+
+    #[test]
+    fn test_classify_wildcard_reexport_local() {
+        let mut uses = Vec::new();
+        let mut deps = HashSet::new();
+        let span = Span::new(0, 0);
+        classify_wildcard_reexport("./utils", span, &mut uses, &mut deps);
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].path, "crate::utils::*");
+        assert!(uses[0].public);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_classify_wildcard_reexport_external() {
+        let mut uses = Vec::new();
+        let mut deps = HashSet::new();
+        let span = Span::new(0, 0);
+        classify_wildcard_reexport("serde", span, &mut uses, &mut deps);
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].path, "serde::*");
+        assert!(uses[0].public);
+        assert_eq!(deps.len(), 1);
+        assert!(deps.iter().any(|d| d.name == "serde"));
+    }
+
+    #[test]
+    fn test_classify_wildcard_reexport_std() {
+        let mut uses = Vec::new();
+        let mut deps = HashSet::new();
+        let span = Span::new(0, 0);
+        classify_wildcard_reexport("std/collections", span, &mut uses, &mut deps);
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].path, "std::collections::*");
+        assert!(uses[0].public);
+        assert!(deps.is_empty());
     }
 }

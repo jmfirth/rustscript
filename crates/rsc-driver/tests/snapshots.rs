@@ -1246,6 +1246,32 @@ function main() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 124: Wildcard re-exports — export * from "module"
+// ---------------------------------------------------------------------------
+
+// Snapshot: export * from "./utils" emits pub use crate::utils::*;
+#[test]
+fn test_export_star_snapshot() {
+    let source = r#"export * from "./utils";"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("pub use crate::utils::*;"),
+        "expected `pub use crate::utils::*;` in output:\n{actual}"
+    );
+}
+
+// Snapshot: export * from "serde" emits pub use serde::*;
+#[test]
+fn test_export_star_crate_snapshot() {
+    let source = r#"export * from "serde";"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("pub use serde::*;"),
+        "expected `pub use serde::*;` in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 023: Class sugar — struct + impl + constructor
 // ---------------------------------------------------------------------------
 

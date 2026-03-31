@@ -433,6 +433,7 @@ impl Transform {
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
+                | ast::ItemKind::WildcardReExport(_)
                 | ast::ItemKind::RustBlock(_)
                 | ast::ItemKind::Const(_)
                 | ast::ItemKind::TestBlock(_) => {}
@@ -600,6 +601,14 @@ impl Transform {
                     for name in &reexport.names {
                         self.imported_types.insert(name.name.clone());
                     }
+                }
+                ast::ItemKind::WildcardReExport(reexport) => {
+                    import_lower::classify_wildcard_reexport(
+                        &reexport.source.value,
+                        reexport.span,
+                        &mut import_uses,
+                        &mut crate_deps,
+                    );
                 }
                 ast::ItemKind::RustBlock(rb) => {
                     items.push(RustItem::RawRust(rb.code.clone()));
@@ -6101,6 +6110,42 @@ function main() {}"#;
         let pub_uses: Vec<&RustUseDecl> = ir.uses.iter().filter(|u| u.public).collect();
         assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
         assert_eq!(pub_uses[0].path, "crate::models::User");
+    }
+
+    // Test: Lower wildcard re-export → pub use module::*
+    #[test]
+    fn test_lower_wildcard_re_export_local() {
+        let source = r#"export * from "./utils";"#;
+        let result = crate::lower(&parse_module(source));
+        let pub_uses: Vec<&RustUseDecl> = result.ir.uses.iter().filter(|u| u.public).collect();
+        assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
+        assert_eq!(pub_uses[0].path, "crate::utils::*");
+    }
+
+    // Test: Lower wildcard re-export from external crate
+    #[test]
+    fn test_lower_wildcard_re_export_external() {
+        let source = r#"export * from "serde";"#;
+        let result = crate::lower(&parse_module(source));
+        let pub_uses: Vec<&RustUseDecl> = result.ir.uses.iter().filter(|u| u.public).collect();
+        assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
+        assert_eq!(pub_uses[0].path, "serde::*");
+        assert_eq!(result.crate_dependencies.len(), 1);
+        assert_eq!(result.crate_dependencies[0].name, "serde");
+    }
+
+    // Test: Lower wildcard re-export from std library
+    #[test]
+    fn test_lower_wildcard_re_export_std() {
+        let source = r#"export * from "std/collections";"#;
+        let result = crate::lower(&parse_module(source));
+        let pub_uses: Vec<&RustUseDecl> = result.ir.uses.iter().filter(|u| u.public).collect();
+        assert_eq!(pub_uses.len(), 1, "expected one pub use declaration");
+        assert_eq!(pub_uses[0].path, "std::collections::*");
+        assert!(
+            result.crate_dependencies.is_empty(),
+            "std imports should not produce crate dependencies"
+        );
     }
 
     // Test: Lower exported type → public struct

@@ -18,7 +18,7 @@ use rsc_syntax::ast::{
     Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
     SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
     TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt,
+    VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -621,6 +621,7 @@ impl<'src> Parser<'src> {
     /// - `export type ...` — exported type/enum
     /// - `export interface ...` — exported interface
     /// - `export abstract class ...` — exported abstract class
+    /// - `export * from "path"` — wildcard re-export
     /// - `export { Name } from "path"` — re-export
     #[allow(clippy::too_many_lines)]
     // Export parsing must disambiguate many syntactic forms; splitting would fragment the grammar
@@ -710,6 +711,27 @@ impl<'src> Parser<'src> {
                 let span = start.merge(iface.span);
                 Some(Item {
                     kind: ItemKind::Interface(iface),
+                    exported: true,
+                    decorators: vec![],
+                    span,
+                })
+            }
+            TokenKind::Star => {
+                // Wildcard re-export: `export * from "path";`
+                self.advance(); // consume `*`
+
+                self.expect_keyword(&TokenKind::From, "from")?;
+
+                let source = self.parse_string_literal()?;
+
+                // Optional semicolon
+                if self.check(&TokenKind::Semicolon) {
+                    self.advance();
+                }
+
+                let span = start.merge(source.span);
+                Some(Item {
+                    kind: ItemKind::WildcardReExport(WildcardReExportDecl { source, span }),
                     exported: true,
                     decorators: vec![],
                     span,
@@ -7365,6 +7387,49 @@ function fail() throws string {
                 assert_eq!(re.source.value, "./models");
             }
             other => panic!("expected ReExport item, got {other:?}"),
+        }
+    }
+
+    // Test: Parse `export * from "./utils"` → WildcardReExportDecl
+    #[test]
+    fn test_parser_export_star_from() {
+        let module = parse_ok("export * from \"./utils\";");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "wildcard re-export should be exported");
+        match &item.kind {
+            ItemKind::WildcardReExport(re) => {
+                assert_eq!(re.source.value, "./utils");
+            }
+            other => panic!("expected WildcardReExport item, got {other:?}"),
+        }
+    }
+
+    // Test: Parse `export * from "serde"` with external crate name
+    #[test]
+    fn test_parser_export_star_from_package() {
+        let module = parse_ok("export * from \"serde\";");
+        assert_eq!(module.items.len(), 1);
+        let item = &module.items[0];
+        assert!(item.exported, "wildcard re-export should be exported");
+        match &item.kind {
+            ItemKind::WildcardReExport(re) => {
+                assert_eq!(re.source.value, "serde");
+            }
+            other => panic!("expected WildcardReExport item, got {other:?}"),
+        }
+    }
+
+    // Test: Source module string is preserved in wildcard re-export
+    #[test]
+    fn test_parser_export_star_preserves_source() {
+        let module = parse_ok("export * from \"./deeply/nested/module\";");
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::WildcardReExport(re) => {
+                assert_eq!(re.source.value, "./deeply/nested/module");
+            }
+            other => panic!("expected WildcardReExport item, got {other:?}"),
         }
     }
 

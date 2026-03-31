@@ -82,6 +82,9 @@ pub enum ItemKind {
     /// A re-export declaration (`export { Name } from "./module"`).
     /// Lowers to a Rust `pub use` declaration.
     ReExport(ReExportDecl),
+    /// A wildcard re-export declaration (`export * from "./module"`).
+    /// Lowers to a Rust `pub use module::*;` declaration.
+    WildcardReExport(WildcardReExportDecl),
     /// A class definition (`class Name { fields; constructor() { }; methods() { } }`).
     /// Lowers to a Rust `struct` + `impl` block.
     Class(ClassDef),
@@ -175,6 +178,18 @@ pub struct ReExportDecl {
     /// The module path as a string literal.
     pub source: StringLiteral,
     /// The span covering the entire re-export declaration.
+    pub span: Span,
+}
+
+/// A wildcard re-export declaration: `export * from "./module"`.
+///
+/// Lowers to `pub use crate::module::*;` in Rust. Re-exports all public items
+/// from the specified module.
+#[derive(Debug, Clone)]
+pub struct WildcardReExportDecl {
+    /// The module path as a string literal (e.g., `"./utils"`).
+    pub source: StringLiteral,
+    /// The span covering the entire wildcard re-export declaration.
     pub span: Span,
 }
 
