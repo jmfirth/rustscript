@@ -1721,3 +1721,77 @@ fn test_void_expression_compiles() {
         "void expression should compile successfully"
     );
 }
+
+// ===========================================================================
+//
+// TASK 116: Never type support
+//
+// ===========================================================================
+
+#[test]
+fn test_never_return_type_snapshot_emits_bang() {
+    let source = r#"function fail(): never {
+  throw new Error("fatal error");
+}
+
+function main() {
+  console.log("before");
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-> !"),
+        "expected `-> !` in output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_never_in_union_eliminated_produces_single_type() {
+    let source = r#"function get_name(): string | never {
+  return "hello";
+}
+
+function main() {
+  const s: string = get_name();
+  console.log(s);
+}"#;
+    let actual = compile_to_rust(source);
+    // `string | never` should simplify to just `String`, not a union enum
+    assert!(
+        actual.contains("-> String"),
+        "expected `-> String` (never eliminated from union), got:\n{actual}"
+    );
+    assert!(
+        !actual.contains("OrNever"),
+        "should not contain union with Never variant, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_never_param_type_emits_bang_type() {
+    let source = r#"function absurd(x: never): string {
+  return x;
+}
+
+function main() {
+  console.log("ok");
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(": !"),
+        "expected `: !` type annotation in output, got:\n{actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_never_function_compiles_with_panic() {
+    let source = r#"function fail(): never {
+  throw new Error("fatal");
+}
+
+function main() {
+  console.log("before fail");
+}"#;
+    let output = compile_and_run(source);
+    assert!(output.contains("before fail"));
+}

@@ -621,6 +621,10 @@ pub enum TypeKind {
     Named(Ident),
     /// The void type, indicating no return value. Lowers to Rust `()`.
     Void,
+    /// The `never` type — the bottom type that has no values.
+    /// Functions returning `never` never return normally (they always throw or loop forever).
+    /// Lowers to Rust `!` (the never type).
+    Never,
     /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
     /// The `Ident` is the base type name; the `Vec` is the type arguments.
     Generic(Ident, Vec<TypeAnnotation>),

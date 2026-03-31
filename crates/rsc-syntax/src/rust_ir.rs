@@ -467,6 +467,8 @@ pub enum RustType {
     String,
     /// Rust unit type `()`.
     Unit,
+    /// Rust `!` (the never type). From TypeScript `never`.
+    Never,
     /// A user-defined named type (e.g., `User`, `Point`).
     Named(String),
     /// A generic type instantiation: `Vec<String>`, `HashMap<String, u32>`.
@@ -524,6 +526,7 @@ impl std::fmt::Display for RustType {
             Self::Bool => "bool",
             Self::String => "String",
             Self::Unit => "()",
+            Self::Never => "!",
             Self::Named(name) | Self::TypeParam(name) | Self::GeneratedUnion { name, .. } => {
                 return f.write_str(name);
             }
@@ -1571,6 +1574,7 @@ mod tests {
         assert_eq!(RustType::Bool.to_string(), "bool");
         assert_eq!(RustType::String.to_string(), "String");
         assert_eq!(RustType::Unit.to_string(), "()");
+        assert_eq!(RustType::Never.to_string(), "!");
     }
 
     #[test]

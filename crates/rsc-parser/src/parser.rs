@@ -2042,6 +2042,13 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
+            TokenKind::Ident(name) if name == "never" => {
+                self.advance();
+                Some(TypeAnnotation {
+                    kind: TypeKind::Never,
+                    span: token.span,
+                })
+            }
             TokenKind::Ident(name) if name == "shared" => {
                 let start = token.span;
                 self.advance(); // consume `shared`
@@ -9779,5 +9786,60 @@ type Shape =
             "for-in should produce ForIn"
         );
         assert!(matches!(stmt_of, Stmt::For(_)), "for-of should produce For");
+    }
+
+    // ---------------------------------------------------------------
+    // Task 116: `never` type support
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_never_return_type_produces_never_kind() {
+        let source = r#"function fail(): never { throw new Error("fail"); }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "fail");
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        assert!(
+            matches!(type_ann.kind, TypeKind::Never),
+            "expected TypeKind::Never, got {:?}",
+            type_ann.kind
+        );
+    }
+
+    #[test]
+    fn test_parser_never_param_type_produces_never_kind() {
+        let source = "function f(x: never): void { }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.params.len(), 1);
+        assert!(
+            matches!(f.params[0].type_ann.kind, TypeKind::Never),
+            "expected TypeKind::Never param, got {:?}",
+            f.params[0].type_ann.kind
+        );
+    }
+
+    #[test]
+    fn test_parser_never_in_union_produces_union_with_never() {
+        let source = "type X = string | never;";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        let item = &module.items[0];
+        if let ItemKind::TypeDef(td) = &item.kind {
+            if let TypeKind::Union(members) = &td.type_alias.as_ref().unwrap().kind {
+                assert_eq!(members.len(), 2);
+                assert!(matches!(members[0].kind, TypeKind::Named(_)));
+                assert!(
+                    matches!(members[1].kind, TypeKind::Never),
+                    "expected TypeKind::Never in union, got {:?}",
+                    members[1].kind
+                );
+            } else {
+                panic!("expected Union type alias");
+            }
+        } else {
+            panic!("expected TypeDef item");
+        }
     }
 }

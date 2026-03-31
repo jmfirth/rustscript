@@ -39,6 +39,10 @@ pub enum Type {
     /// component types, sorted alphabetically by their canonical names for
     /// deterministic enum name generation.
     Union(Vec<Type>),
+    /// The `never` type — the bottom type with no values.
+    /// Functions returning `never` never return normally.
+    /// Lowers to Rust `!`.
+    Never,
     /// Type could not be resolved — used for error recovery.
     Error,
 }

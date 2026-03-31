@@ -55,6 +55,10 @@ fn resolve_union_type(
             has_null = true;
             continue;
         }
+        // `never` is the bottom type — it is eliminated from unions.
+        if matches!(member.kind, ast::TypeKind::Never) {
+            continue;
+        }
         non_null_types.push(resolve_member(member));
     }
 
@@ -101,6 +105,7 @@ pub fn resolve_type_annotation(
 ) -> Type {
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
+        ast::TypeKind::Never => Type::Never,
         ast::TypeKind::Named(ident) => resolve_type_name(&ident.name).unwrap_or_else(|| {
             diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
             Type::Primitive(PrimitiveType::I64)
@@ -235,6 +240,7 @@ pub fn resolve_type_annotation_with_generics(
 ) -> Type {
     match &ann.kind {
         ast::TypeKind::Void => Type::Unit,
+        ast::TypeKind::Never => Type::Never,
         ast::TypeKind::Named(ident) => {
             // `Self` is a special type used in interface method return types.
             // It passes through to the lowering pass which handles it natively.
@@ -729,6 +735,7 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         }
         ast::TypeKind::Named(_)
         | ast::TypeKind::Void
+        | ast::TypeKind::Never
         | ast::TypeKind::Inferred
         | ast::TypeKind::StringLiteral(_)
         | ast::TypeKind::TypeOf(_) => false,

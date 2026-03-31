@@ -93,6 +93,7 @@ fn supports_partial_eq(ty: &RustType) -> bool {
         | RustType::Bool
         | RustType::String
         | RustType::Unit
+        | RustType::Never
         | RustType::Named(_) => true,
         RustType::Option(inner) => supports_partial_eq(inner),
         RustType::Result(ok, err) => supports_partial_eq(ok) && supports_partial_eq(err),
@@ -129,6 +130,7 @@ fn supports_eq(ty: &RustType) -> bool {
         | RustType::Bool
         | RustType::String
         | RustType::Unit
+        | RustType::Never
         | RustType::Named(_) => true,
         RustType::F32
         | RustType::F64

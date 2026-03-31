@@ -331,6 +331,7 @@ impl Printer {
         match &ty.kind {
             TypeKind::Named(ident) => self.write(&ident.name),
             TypeKind::Void => self.write("void"),
+            TypeKind::Never => self.write("never"),
             TypeKind::Generic(name, args) => {
                 self.write(&name.name);
                 self.write("<");

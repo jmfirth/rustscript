@@ -309,6 +309,9 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
         // Rust `()` -> RustScript `void`
         RustType::Unit => "void".to_owned(),
 
+        // Rust `!` -> RustScript `never`
+        RustType::Never => "never".to_owned(),
+
         // User-defined named types and type parameters pass through
         RustType::Named(name) | RustType::TypeParam(name) => name.clone(),
 

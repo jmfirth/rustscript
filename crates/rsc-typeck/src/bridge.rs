@@ -47,6 +47,7 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
             let name = union_enum_name(&variants);
             RustType::GeneratedUnion { name, variants }
         }
+        Type::Never => RustType::Never,
         Type::Unit | Type::Error => RustType::Unit,
     }
 }
@@ -90,6 +91,7 @@ fn union_variant_name(ty: &RustType) -> String {
         RustType::Infer => "Infer".to_owned(),
         RustType::ArcMutex(inner) => format!("Shared{}", union_variant_name(inner)),
         RustType::DynRef(name) => format!("Dyn{name}"),
+        RustType::Never => "Never".to_owned(),
     }
 }
 
@@ -362,5 +364,22 @@ mod tests {
         assert_eq!(union_variant_name(&RustType::I32), "I32");
         assert_eq!(union_variant_name(&RustType::Bool), "Bool");
         assert_eq!(union_variant_name(&RustType::F64), "F64");
+    }
+
+    // ---- Task 116: Never type ----
+
+    #[test]
+    fn test_bridge_never_type_produces_never() {
+        assert_eq!(type_to_rust_type(&Type::Never), RustType::Never);
+    }
+
+    #[test]
+    fn test_bridge_never_display_produces_bang() {
+        assert_eq!(RustType::Never.to_string(), "!");
+    }
+
+    #[test]
+    fn test_bridge_never_variant_name_produces_never() {
+        assert_eq!(union_variant_name(&RustType::Never), "Never");
     }
 }
