@@ -431,6 +431,14 @@ impl Printer {
                 self.write("...");
                 self.print_type_annotation(inner);
             }
+            TypeKind::TypeGuard {
+                param,
+                guarded_type,
+            } => {
+                self.write(&param.name);
+                self.write(" is ");
+                self.print_type_annotation(guarded_type);
+            }
         }
     }
 

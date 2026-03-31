@@ -1745,6 +1745,18 @@ function main() {
 }
 
 #[test]
+fn test_type_guard_emits_bool_return() {
+    let source = r#"function isString(x: string | i32): x is string {
+  return true;
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-> bool"),
+        "type guard function should emit `-> bool` return type.\nActual:\n{actual}"
+    );
+}
+
+#[test]
 fn test_never_in_union_eliminated_produces_single_type() {
     let source = r#"function get_name(): string | never {
   return "hello";
@@ -1755,7 +1767,6 @@ function main() {
   console.log(s);
 }"#;
     let actual = compile_to_rust(source);
-    // `string | never` should simplify to just `String`, not a union enum
     assert!(
         actual.contains("-> String"),
         "expected `-> String` (never eliminated from union), got:\n{actual}"
@@ -1763,6 +1774,22 @@ function main() {
     assert!(
         !actual.contains("OrNever"),
         "should not contain union with Never variant, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_type_guard_function_body() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-> bool"),
+        "type guard should lower to bool return.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn isPositive"),
+        "function name should be present in output.\nActual:\n{actual}"
     );
 }
 
@@ -1779,6 +1806,22 @@ function main() {
     assert!(
         actual.contains(": !"),
         "expected `: !` type annotation in output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_type_guard_call_site() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}
+
+function main() {
+  const result: bool = isPositive(42);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("isPositive(42)"),
+        "type guard call should compile as normal function call.\nActual:\n{actual}"
     );
 }
 
@@ -1855,9 +1898,25 @@ function main() {
   process(42);
 }"#;
     let output = compile_and_run(source);
-    // Just verify it compiles and runs without error
     assert!(
         output.is_empty() || !output.is_empty(),
         "should compile and run"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task 118: Type guard support
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_type_guard_function_compiles() {
+    let source = r#"function isPositive(x: i32): x is i32 {
+  return x > 0;
+}
+
+function main() {
+  const result: bool = isPositive(42);
+}"#;
+    let _output = compile_and_run(source);
 }

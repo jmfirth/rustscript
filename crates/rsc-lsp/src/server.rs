@@ -1164,6 +1164,10 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         ),
         TypeKind::Infer(ident) => format!("infer {}", ident.name),
         TypeKind::TupleSpread(inner) => format!("...{}", format_type(inner)),
+        TypeKind::TypeGuard {
+            param,
+            guarded_type,
+        } => format!("{} is {}", param.name, format_type(guarded_type)),
     }
 }
 

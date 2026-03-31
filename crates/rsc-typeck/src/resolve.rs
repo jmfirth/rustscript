@@ -186,6 +186,11 @@ pub fn resolve_type_annotation(
             // registry-aware resolution handle them.
             Type::Error
         }
+        ast::TypeKind::TypeGuard { .. } => {
+            // Type guards are `param is Type` return annotations.
+            // At runtime they return bool; the guard metadata is for narrowing only.
+            Type::Primitive(PrimitiveType::Bool)
+        }
         ast::TypeKind::Conditional {
             check_type,
             extends_type,
@@ -412,6 +417,11 @@ pub fn resolve_type_annotation_with_generics(
             // cannot look up variable types, so this is handled as a pass-through.
             // The lowering pass resolves typeof by looking up the variable's type.
             Type::Error
+        }
+        ast::TypeKind::TypeGuard { .. } => {
+            // Type guards are `param is Type` return annotations.
+            // At runtime they return bool; the guard metadata is for narrowing only.
+            Type::Primitive(PrimitiveType::Bool)
         }
         ast::TypeKind::Conditional {
             check_type,
@@ -741,7 +751,8 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         | ast::TypeKind::Unknown
         | ast::TypeKind::Inferred
         | ast::TypeKind::StringLiteral(_)
-        | ast::TypeKind::TypeOf(_) => false,
+        | ast::TypeKind::TypeOf(_)
+        | ast::TypeKind::TypeGuard { .. } => false,
     }
 }
 

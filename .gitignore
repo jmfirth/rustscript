@@ -2,6 +2,9 @@
 target/
 .rsc-build/
 
+# Claude worktrees
+.claude/worktrees/
+
 # Editor/OS
 *.swp
 *.swo
