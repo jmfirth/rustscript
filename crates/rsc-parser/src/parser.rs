@@ -2049,6 +2049,13 @@ impl<'src> Parser<'src> {
                     span: token.span,
                 })
             }
+            TokenKind::Ident(name) if name == "unknown" => {
+                self.advance();
+                Some(TypeAnnotation {
+                    kind: TypeKind::Unknown,
+                    span: token.span,
+                })
+            }
             TokenKind::Ident(name) if name == "shared" => {
                 let start = token.span;
                 self.advance(); // consume `shared`
@@ -9840,6 +9847,75 @@ type Shape =
             }
         } else {
             panic!("expected TypeDef item");
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Task 117: `unknown` type support
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_parser_unknown_param_type() {
+        let source = "function f(x: unknown): void {}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.params.len(), 1);
+        assert!(
+            matches!(f.params[0].type_ann.kind, TypeKind::Unknown),
+            "expected TypeKind::Unknown for param type"
+        );
+    }
+
+    #[test]
+    fn test_parser_unknown_return_type() {
+        let source = "function f(): unknown { }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret
+            .type_ann
+            .as_ref()
+            .expect("expected return type annotation");
+        assert!(
+            matches!(type_ann.kind, TypeKind::Unknown),
+            "expected TypeKind::Unknown for return type"
+        );
+    }
+
+    #[test]
+    fn test_parser_unknown_in_union() {
+        let source = "function f(x: string | unknown): void {}";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let param_type = &f.params[0].type_ann.kind;
+        match param_type {
+            TypeKind::Union(members) => {
+                assert_eq!(members.len(), 2);
+                assert!(matches!(members[0].kind, TypeKind::Named(_)));
+                assert!(
+                    matches!(members[1].kind, TypeKind::Unknown),
+                    "expected TypeKind::Unknown in union"
+                );
+            }
+            other => panic!("expected Union type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_unknown_variable() {
+        let source = "function main() { const x: unknown = 42; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(v) => {
+                let type_ann = v.type_ann.as_ref().expect("expected type annotation");
+                assert!(
+                    matches!(type_ann.kind, TypeKind::Unknown),
+                    "expected TypeKind::Unknown for variable type"
+                );
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
         }
     }
 }

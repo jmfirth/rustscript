@@ -9,17 +9,20 @@ use rsc_syntax::rust_ir::{
 };
 
 /// Scan generated items for usage of `HashMap`, `HashSet`, `Arc`, `Mutex`,
-/// and `futures::StreamExt` types and produce the corresponding `use` declarations.
+/// `Any` (for `Box<dyn Any>`), and `futures::StreamExt` types and produce
+/// the corresponding `use` declarations.
 pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     let mut needs_hashmap = false;
     let mut needs_hashset = false;
     let mut needs_arc_mutex = false;
     let mut needs_stream_ext = false;
+    let mut needs_any = false;
 
     for item in items {
         scan_item_for_collections(item, &mut needs_hashmap, &mut needs_hashset);
         scan_item_for_arc_mutex(item, &mut needs_arc_mutex);
         scan_item_for_stream_ext(item, &mut needs_stream_ext);
+        scan_item_for_box_dyn_any(item, &mut needs_any);
     }
 
     let mut uses = Vec::new();
@@ -45,6 +48,13 @@ pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
         });
         uses.push(RustUseDecl {
             path: "std::sync::Mutex".to_owned(),
+            public: false,
+            span: None,
+        });
+    }
+    if needs_any {
+        uses.push(RustUseDecl {
+            path: "std::any::Any".to_owned(),
             public: false,
             span: None,
         });
@@ -297,6 +307,115 @@ fn scan_expr_for_arc_mutex(expr: &RustExpr, needs_arc_mutex: &mut bool) {
             scan_expr_for_arc_mutex(value, needs_arc_mutex);
         }
         _ => {}
+    }
+}
+
+/// Scan a single item for references to `Box<dyn Any>` (`BoxDynAny`).
+fn scan_item_for_box_dyn_any(item: &RustItem, needs_any: &mut bool) {
+    match item {
+        RustItem::Function(f) => {
+            for p in &f.params {
+                scan_type_for_box_dyn_any(&p.ty, needs_any);
+            }
+            if let Some(ret) = &f.return_type {
+                scan_type_for_box_dyn_any(ret, needs_any);
+            }
+            scan_block_for_box_dyn_any(&f.body, needs_any);
+        }
+        RustItem::Struct(s) => {
+            for field in &s.fields {
+                scan_type_for_box_dyn_any(&field.ty, needs_any);
+            }
+        }
+        RustItem::Enum(e) => {
+            for variant in &e.variants {
+                for field in &variant.fields {
+                    scan_type_for_box_dyn_any(&field.ty, needs_any);
+                }
+            }
+        }
+        RustItem::Trait(t) => {
+            for method in &t.methods {
+                for p in &method.params {
+                    scan_type_for_box_dyn_any(&p.ty, needs_any);
+                }
+                if let Some(ret) = &method.return_type {
+                    scan_type_for_box_dyn_any(ret, needs_any);
+                }
+            }
+        }
+        RustItem::Impl(imp) => {
+            for method in &imp.methods {
+                scan_method_for_box_dyn_any(method, needs_any);
+            }
+        }
+        RustItem::TraitImpl(ti) => {
+            for method in &ti.methods {
+                scan_method_for_box_dyn_any(method, needs_any);
+            }
+        }
+        RustItem::RawRust(_) => {}
+        RustItem::Const(c) => {
+            scan_type_for_box_dyn_any(&c.ty, needs_any);
+        }
+        RustItem::TypeAlias(ta) => {
+            scan_type_for_box_dyn_any(&ta.ty, needs_any);
+        }
+    }
+}
+
+/// Scan a method for `BoxDynAny` references.
+fn scan_method_for_box_dyn_any(method: &RustMethod, needs_any: &mut bool) {
+    for p in &method.params {
+        scan_type_for_box_dyn_any(&p.ty, needs_any);
+    }
+    if let Some(ret) = &method.return_type {
+        scan_type_for_box_dyn_any(ret, needs_any);
+    }
+    scan_block_for_box_dyn_any(&method.body, needs_any);
+}
+
+/// Scan a type for `BoxDynAny` references.
+fn scan_type_for_box_dyn_any(ty: &RustType, needs_any: &mut bool) {
+    match ty {
+        RustType::BoxDynAny => {
+            *needs_any = true;
+        }
+        RustType::Generic(base, args) => {
+            scan_type_for_box_dyn_any(base, needs_any);
+            for arg in args {
+                scan_type_for_box_dyn_any(arg, needs_any);
+            }
+        }
+        RustType::Option(inner) | RustType::ArcMutex(inner) => {
+            scan_type_for_box_dyn_any(inner, needs_any);
+        }
+        RustType::Result(ok, err) => {
+            scan_type_for_box_dyn_any(ok, needs_any);
+            scan_type_for_box_dyn_any(err, needs_any);
+        }
+        RustType::Tuple(types) => {
+            for ty in types {
+                scan_type_for_box_dyn_any(ty, needs_any);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block for `BoxDynAny` usage.
+fn scan_block_for_box_dyn_any(block: &RustBlock, needs_any: &mut bool) {
+    for stmt in &block.stmts {
+        scan_stmt_for_box_dyn_any(stmt, needs_any);
+    }
+}
+
+/// Scan a statement for `BoxDynAny` usage.
+fn scan_stmt_for_box_dyn_any(stmt: &RustStmt, needs_any: &mut bool) {
+    if let RustStmt::Let(let_stmt) = stmt
+        && let Some(ty) = &let_stmt.ty
+    {
+        scan_type_for_box_dyn_any(ty, needs_any);
     }
 }
 
@@ -692,7 +811,7 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
 mod tests {
     use super::*;
     use rsc_syntax::rust_ir::{
-        RustBlock, RustExpr, RustExprKind, RustFnDecl, RustLetStmt, RustStmt, RustType,
+        RustBlock, RustExpr, RustExprKind, RustFnDecl, RustLetStmt, RustParam, RustStmt, RustType,
     };
 
     /// Helper: make a minimal function item with the given body statements.
@@ -750,6 +869,73 @@ mod tests {
         assert!(
             !paths.contains(&"std::sync::Arc"),
             "unexpected Arc use when not needed"
+        );
+    }
+
+    #[test]
+    fn test_use_collector_detects_box_dyn_any_type_in_let_stmt() {
+        let items = vec![make_fn_with_stmts(vec![RustStmt::Let(RustLetStmt {
+            mutable: false,
+            name: "val".to_owned(),
+            ty: Some(RustType::BoxDynAny),
+            init: RustExpr::synthetic(RustExprKind::IntLit(42)),
+            span: None,
+        })])];
+
+        let uses = collect_use_declarations(&items);
+        let paths: Vec<&str> = uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            paths.contains(&"std::any::Any"),
+            "expected Any use, got: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_use_collector_detects_box_dyn_any_in_fn_param() {
+        let items = vec![RustItem::Function(RustFnDecl {
+            attributes: vec![],
+            is_async: false,
+            public: false,
+            name: "process".to_owned(),
+            type_params: vec![],
+            params: vec![RustParam {
+                name: "x".to_owned(),
+                ty: RustType::BoxDynAny,
+                mode: rsc_syntax::rust_ir::ParamMode::Owned,
+                span: None,
+            }],
+            return_type: None,
+            body: RustBlock {
+                stmts: vec![],
+                expr: None,
+            },
+            doc_comment: None,
+            span: None,
+        })];
+
+        let uses = collect_use_declarations(&items);
+        let paths: Vec<&str> = uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            paths.contains(&"std::any::Any"),
+            "expected Any use for BoxDynAny param, got: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_use_collector_no_any_when_not_used() {
+        let items = vec![make_fn_with_stmts(vec![RustStmt::Let(RustLetStmt {
+            mutable: false,
+            name: "x".to_owned(),
+            ty: Some(RustType::I32),
+            init: RustExpr::synthetic(RustExprKind::IntLit(42)),
+            span: None,
+        })])];
+
+        let uses = collect_use_declarations(&items);
+        let paths: Vec<&str> = uses.iter().map(|u| u.path.as_str()).collect();
+        assert!(
+            !paths.contains(&"std::any::Any"),
+            "unexpected Any use when not needed"
         );
     }
 }

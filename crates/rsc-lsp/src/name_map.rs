@@ -371,6 +371,9 @@ pub fn rust_type_to_rts_display(ty: &RustType) -> String {
 
         // `&dyn TraitName` -> display as the trait name (for polymorphic class params)
         RustType::DynRef(trait_name) => trait_name.clone(),
+
+        // `Box<dyn std::any::Any>` -> `unknown`
+        RustType::BoxDynAny => "unknown".to_owned(),
     }
 }
 

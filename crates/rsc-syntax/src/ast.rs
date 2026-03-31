@@ -625,6 +625,10 @@ pub enum TypeKind {
     /// Functions returning `never` never return normally (they always throw or loop forever).
     /// Lowers to Rust `!` (the never type).
     Never,
+    /// The `unknown` type — the type-safe top type.
+    /// Any value can be assigned to `unknown`, but `unknown` values must be narrowed before use.
+    /// Lowers to `Box<dyn std::any::Any>` in Rust.
+    Unknown,
     /// A generic type instantiation: `Array<string>`, `Map<string, u32>`.
     /// The `Ident` is the base type name; the `Vec` is the type arguments.
     Generic(Ident, Vec<TypeAnnotation>),

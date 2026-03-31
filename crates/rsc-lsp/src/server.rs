@@ -1116,6 +1116,7 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
         TypeKind::Named(ident) => ident.name.clone(),
         TypeKind::Void => "void".to_owned(),
         TypeKind::Never => "never".to_owned(),
+        TypeKind::Unknown => "unknown".to_owned(),
         TypeKind::Generic(name, args) => {
             let args_str: Vec<String> = args.iter().map(format_type).collect();
             format!("{}<{}>", name.name, args_str.join(", "))

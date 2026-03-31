@@ -2910,6 +2910,7 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                             .collect(),
                         ast::TypeKind::Void
                         | ast::TypeKind::Never
+                        | ast::TypeKind::Unknown
                         | ast::TypeKind::Union(_)
                         | ast::TypeKind::Function(_, _)
                         | ast::TypeKind::Inferred
