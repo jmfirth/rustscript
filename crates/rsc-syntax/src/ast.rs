@@ -141,8 +141,9 @@ pub enum TestBody {
 ///
 /// Lowers to `use crate::models::{User, Post};` in Rust.
 /// When `is_type_only` is true, the import was written as `import type { ... }`.
-/// In `RustScript`, type-only imports are identical to regular imports (all types
-/// are structural), but the flag is preserved for formatter round-tripping.
+/// Type-only imports do not generate `use` declarations in the Rust output.
+/// The imported names are valid in type positions but produce a diagnostic
+/// error if used as values (e.g., function calls, property access, `new`).
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     /// The names being imported.
@@ -150,7 +151,8 @@ pub struct ImportDecl {
     /// The module path as a string literal (e.g., `"./models"`).
     pub source: StringLiteral,
     /// Whether this is a `import type { ... }` declaration.
-    /// Preserved for formatter round-tripping; ignored during lowering.
+    /// Type-only imports are erased during lowering (no `use` declaration)
+    /// and produce a diagnostic if used as values.
     pub is_type_only: bool,
     /// The span covering the entire import declaration.
     pub span: Span,

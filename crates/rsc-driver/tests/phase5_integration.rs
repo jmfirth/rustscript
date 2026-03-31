@@ -1839,7 +1839,7 @@ function main() {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// 1. import type — type-only imports lower identically to regular imports
+// 1. import type — type-only imports do NOT generate use declarations (Task 126)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1853,8 +1853,8 @@ function main() {
 
     let actual = compile_to_rust(source);
     assert!(
-        actual.contains("use crate::models::User;"),
-        "import type should generate use declaration:\n{actual}"
+        !actual.contains("use crate::models::User;"),
+        "import type should NOT generate use declaration (type-only erasure):\n{actual}"
     );
 }
 
@@ -1874,8 +1874,8 @@ function main() {
         "regular import should work:\n{actual}"
     );
     assert!(
-        actual.contains("use crate::models::User;"),
-        "import type should generate use:\n{actual}"
+        !actual.contains("use crate::models::User;"),
+        "import type should NOT generate use (type-only erasure):\n{actual}"
     );
 }
 

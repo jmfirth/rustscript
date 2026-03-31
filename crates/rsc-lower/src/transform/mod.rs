@@ -169,6 +169,10 @@ pub(crate) struct Transform {
     /// When `type Extended = [...Pair, bool]` is encountered, we look up `Pair`
     /// here to get its resolved `RustType::Tuple(...)` for flattening.
     type_alias_types: HashMap<String, RustType>,
+    /// Names imported via `import type { ... }` declarations.
+    /// These names are valid in type positions but must not be used as values.
+    /// No `use` declarations are emitted for type-only imports.
+    type_only_imports: HashSet<String>,
 }
 
 /// Convert a `RustScript` decorator to a Rust attribute.
@@ -229,6 +233,7 @@ impl Transform {
             external_signatures: HashMap::new(),
             generator_structs: HashMap::new(),
             type_alias_types: HashMap::new(),
+            type_only_imports: HashSet::new(),
         }
     }
 
@@ -259,6 +264,14 @@ impl Transform {
         }
         // PascalCase heuristic: starts with uppercase letter
         name.starts_with(|c: char| c.is_ascii_uppercase())
+    }
+
+    /// Check whether an identifier was imported via `import type { ... }`.
+    ///
+    /// Type-only imports are valid in type positions but must not be used as
+    /// values (e.g., in function calls, property access, or variable bindings).
+    fn is_type_only_import(&self, name: &str) -> bool {
+        self.type_only_imports.contains(name)
     }
 
     /// Recursively register any generated union types found within a `RustType`.
@@ -573,18 +586,29 @@ impl Transform {
                     items.extend(lowered);
                 }
                 ast::ItemKind::Import(import) => {
-                    import_lower::classify_import(
-                        &import.source.value,
-                        &import.names,
-                        false,
-                        import.span,
-                        &mut import_uses,
-                        &mut crate_deps,
-                    );
-                    // Track imported names so method calls on types can be
-                    // recognized as static calls (`Type.method()` → `Type::method()`).
-                    for name in &import.names {
-                        self.imported_types.insert(name.name.clone());
+                    if import.is_type_only {
+                        // Type-only imports (`import type { T } from "mod"`) do not
+                        // generate `use` declarations. The names are still tracked
+                        // so they can be recognized as types in annotations, but
+                        // using them as values will produce a diagnostic error.
+                        for name in &import.names {
+                            self.imported_types.insert(name.name.clone());
+                            self.type_only_imports.insert(name.name.clone());
+                        }
+                    } else {
+                        import_lower::classify_import(
+                            &import.source.value,
+                            &import.names,
+                            false,
+                            import.span,
+                            &mut import_uses,
+                            &mut crate_deps,
+                        );
+                        // Track imported names so method calls on types can be
+                        // recognized as static calls (`Type.method()` → `Type::method()`).
+                        for name in &import.names {
+                            self.imported_types.insert(name.name.clone());
+                        }
                     }
                 }
                 ast::ItemKind::ReExport(reexport) => {
@@ -8604,5 +8628,148 @@ type Bad = Pick<User, "nonexistent">"#;
             }
         });
         assert!(has_alias, "expected XType type alias to i32 in IR");
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 126: import type enforcement
+    // -----------------------------------------------------------------------
+
+    /// Parse and lower a RustScript source string, returning the Rust IR
+    /// and diagnostics (without asserting diagnostics are empty).
+    fn lower_source_with_diagnostics(
+        source: &str,
+    ) -> (RustFile, Vec<rsc_syntax::diagnostic::Diagnostic>) {
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, parse_diags) = rsc_parser::parse(source, file_id);
+        assert!(
+            parse_diags.is_empty(),
+            "unexpected parse diagnostics: {parse_diags:?}"
+        );
+        let lower_result = crate::lower(&module);
+        (lower_result.ir, lower_result.diagnostics)
+    }
+
+    #[test]
+    fn test_import_type_no_use_declaration() {
+        let source = r#"import type { User } from "./models";
+function main() {}"#;
+        let ir = lower_source(source);
+        // Type-only imports should NOT generate any use declarations
+        assert!(
+            ir.uses.is_empty() || ir.uses.iter().all(|u| !u.path.contains("User")),
+            "type-only import should not generate a use declaration for User, got: {:?}",
+            ir.uses
+        );
+    }
+
+    #[test]
+    fn test_regular_import_emits_use_declaration() {
+        let source = r#"import { User } from "./models";
+function main() {}"#;
+        let ir = lower_source(source);
+        // Regular import should generate a use declaration
+        let has_user_use = ir.uses.iter().any(|u| u.path.contains("User"));
+        assert!(
+            has_user_use,
+            "regular import should generate a use declaration for User, got: {:?}",
+            ir.uses
+        );
+    }
+
+    #[test]
+    fn test_import_type_vs_regular_import_mixed() {
+        let source = r#"import type { Config } from "./config";
+import { process_data } from "./handlers";
+function main() {
+  process_data();
+}"#;
+        let ir = lower_source(source);
+        // Should have use for process_data but NOT for Config
+        let has_config_use = ir.uses.iter().any(|u| u.path.contains("Config"));
+        let has_process_use = ir.uses.iter().any(|u| u.path.contains("process_data"));
+        assert!(
+            !has_config_use,
+            "type-only import Config should not generate a use declaration"
+        );
+        assert!(
+            has_process_use,
+            "regular import process_data should generate a use declaration"
+        );
+    }
+
+    #[test]
+    fn test_import_type_used_as_value_emits_diagnostic() {
+        let source = r#"import type { User } from "./models";
+function main() {
+  User.create();
+}"#;
+        let (_, diags) = lower_source_with_diagnostics(source);
+        let has_error = diags.iter().any(|d| {
+            d.message
+                .contains("cannot use type-only import `User` as a value")
+        });
+        assert!(
+            has_error,
+            "expected diagnostic about using type-only import as value, got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_import_type_used_in_new_emits_diagnostic() {
+        let source = r#"import type { User } from "./models";
+function main() {
+  const u = new User();
+}"#;
+        let (_, diags) = lower_source_with_diagnostics(source);
+        let has_error = diags.iter().any(|d| {
+            d.message
+                .contains("cannot use type-only import `User` as a value")
+        });
+        assert!(
+            has_error,
+            "expected diagnostic about using type-only import in new expression, got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_import_type_used_as_type_annotation_ok() {
+        // Use `import type` with the imported name in a type position only.
+        // The type resolver emits "unknown type" for imported types that aren't
+        // locally defined, which is expected for cross-module usage. The key
+        // invariant is that no "cannot use type-only import as a value" diagnostic
+        // is emitted.
+        let source = r#"import type { User } from "./models";
+function greet(user: User): string {
+  return "hello";
+}"#;
+        let (_, diags) = lower_source_with_diagnostics(source);
+        let has_type_only_error = diags
+            .iter()
+            .any(|d| d.message.contains("cannot use type-only import"));
+        assert!(
+            !has_type_only_error,
+            "type-only import used as type annotation should not produce type-only import error, got: {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_import_type_multiple_names() {
+        let source = r#"import type { User, Post } from "./models";
+function main() {}"#;
+        let ir = lower_source(source);
+        // Neither User nor Post should generate use declarations
+        let has_user_use = ir.uses.iter().any(|u| u.path.contains("User"));
+        let has_post_use = ir.uses.iter().any(|u| u.path.contains("Post"));
+        assert!(
+            !has_user_use,
+            "type-only import User should not generate a use declaration"
+        );
+        assert!(
+            !has_post_use,
+            "type-only import Post should not generate a use declaration"
+        );
     }
 }

@@ -2491,3 +2491,89 @@ function main() {
     let output = compile_and_run(source);
     assert_eq!(output.trim(), "10");
 }
+
+// ===========================================================================
+//
+// CATEGORY: Import Type Enforcement (Task 126)
+//
+// ===========================================================================
+
+#[test]
+fn test_import_type_no_use_declaration() {
+    let source = r#"import type { User } from "./models";
+
+function main() {
+  console.log("hello");
+}"#;
+    let rust = compile_to_rust(source);
+    // Type-only import should NOT produce a `use` declaration for User
+    assert!(
+        !rust.contains("use crate::models::User"),
+        "type-only import should not emit `use` declaration.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_import_type_vs_regular_import() {
+    let source = r#"import type { Config } from "./config";
+import { process_data } from "./handlers";
+
+function main() {
+  process_data();
+}"#;
+    let rust = compile_to_rust(source);
+    // Regular import should produce a use declaration
+    assert!(
+        rust.contains("use crate::handlers::process_data"),
+        "regular import should emit `use` declaration.\nGenerated:\n{rust}"
+    );
+    // Type-only import should NOT produce a use declaration
+    assert!(
+        !rust.contains("use crate::config::Config"),
+        "type-only import should not emit `use` declaration.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_import_type_used_as_type_annotation() {
+    // When a type-only import is used only in type position, it should NOT
+    // produce the "cannot use type-only import as a value" diagnostic.
+    // Note: "unknown type" diagnostics for cross-module types are expected
+    // in single-file compilation — the key assertion is no type-only error.
+    let diags = test_utils::compile_diagnostics(
+        r#"import type { User } from "./models";
+
+function greet(user: User): string {
+  return "hello";
+}
+
+function main() {
+  console.log("ok");
+}"#,
+    );
+    let has_type_only_error = diags
+        .iter()
+        .any(|msg| msg.contains("cannot use type-only import"));
+    assert!(
+        !has_type_only_error,
+        "type-only import used as annotation should not produce type-only import error, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_import_type_used_as_value_emits_error() {
+    let diags = test_utils::compile_diagnostics(
+        r#"import type { User } from "./models";
+
+function main() {
+  User.create();
+}"#,
+    );
+    let has_error = diags
+        .iter()
+        .any(|msg| msg.contains("cannot use type-only import `User` as a value"));
+    assert!(
+        has_error,
+        "expected diagnostic about type-only import used as value, got: {diags:?}"
+    );
+}
