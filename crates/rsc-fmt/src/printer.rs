@@ -1182,6 +1182,11 @@ impl Printer {
                 self.print_expr(inner);
                 self.write(" as const");
             }
+            ExprKind::DynamicImport(module) => {
+                self.write("import(\"");
+                self.write(module);
+                self.write("\")");
+            }
         }
     }
 

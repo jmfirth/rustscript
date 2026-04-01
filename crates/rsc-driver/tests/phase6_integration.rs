@@ -2491,3 +2491,58 @@ function main() {
     let output = compile_and_run(source);
     assert_eq!(output.trim(), "10");
 }
+
+// ===========================================================================
+//
+// CATEGORY: Dynamic Import Expressions
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Dynamic import emits diagnostic warning and lowers to panic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_dynamic_import_emits_diagnostic() {
+    let result = rsc_driver::compile_source(
+        "function main() { const m = import(\"./utils\"); }",
+        "test.rts",
+    );
+    // Should compile (warnings don't prevent compilation)
+    assert!(
+        !result.has_errors,
+        "dynamic import should compile (with warning), got errors: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    // Should emit a warning about dynamic imports
+    assert!(
+        result.diagnostics.iter().any(|d| d
+            .message
+            .contains("dynamic import")
+            && d.message.contains("not supported")),
+        "expected diagnostic about dynamic import, got: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_dynamic_import_snapshot() {
+    let result = rsc_driver::compile_source(
+        "function main() { const m = import(\"./utils\"); }",
+        "test.rts",
+    );
+    let rust = &result.rust_source;
+    // The generated Rust should contain a panic! with a message about dynamic import
+    assert!(
+        rust.contains("panic!") && rust.contains("dynamic import not supported"),
+        "expected panic!(\"dynamic import not supported: ...\") in output, got:\n{rust}"
+    );
+}

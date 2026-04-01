@@ -668,6 +668,22 @@ impl Transform {
                 // Should never reach here — comma expressions always have at least one element
                 unreachable!("comma expression should have at least one element")
             }
+            ast::ExprKind::DynamicImport(module) => {
+                // Dynamic imports are not supported in compiled Rust.
+                // Emit a diagnostic warning and lower to a panic to keep code compiling.
+                ctx.emit_diagnostic(Diagnostic::warning(format!(
+                    "dynamic import(\"{module}\") is not supported in RustScript; use a static import declaration instead"
+                )));
+                RustExpr::new(
+                    RustExprKind::Macro {
+                        name: "panic".to_owned(),
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
+                            format!("dynamic import not supported: {module}"),
+                        ))],
+                    },
+                    expr.span,
+                )
+            }
             ast::ExprKind::AsConst(inner) => {
                 // `as const` on array literals → static slice literal `&[elem1, elem2, ...]`
                 // `as const` on other expressions → lower the inner expression unchanged

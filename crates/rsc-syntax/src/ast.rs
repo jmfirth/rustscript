@@ -1200,6 +1200,10 @@ pub enum ExprKind {
     /// Signals that the value should be treated as deeply immutable with literal types.
     /// Arrays become static slices, objects become const structs.
     AsConst(Box<Expr>),
+    /// A dynamic import expression: `import("module")`.
+    /// Not fully supported in compiled Rust — emits a diagnostic warning.
+    /// The `String` is the module specifier.
+    DynamicImport(String),
 }
 
 /// Logical assignment operators.
