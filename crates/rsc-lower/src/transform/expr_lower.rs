@@ -735,6 +735,14 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Type-only imports cannot be called as functions.
+        if self.is_type_only_import(&call.callee.name) {
+            ctx.emit_diagnostic(Diagnostic::error(format!(
+                "cannot use type-only import `{}` as a value",
+                call.callee.name
+            )));
+        }
+
         // Check for generator function calls — rewrite to StructName::new(args)
         if let Some(struct_name) = self.generator_structs.get(&call.callee.name) {
             let args: Vec<RustExpr> = call
@@ -1361,6 +1369,13 @@ impl Transform {
         if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
             && self.is_type_name(&obj_ident.name, ctx)
         {
+            // Type-only imports cannot be used as values (e.g., static method calls).
+            if self.is_type_only_import(&obj_ident.name) {
+                ctx.emit_diagnostic(Diagnostic::error(format!(
+                    "cannot use type-only import `{}` as a value",
+                    obj_ident.name
+                )));
+            }
             // Look up external signature by "TypeName::method_name"
             let sig_key = format!("{}::{}", obj_ident.name, mc.method.name);
             let sig = self.fn_signatures.get(&sig_key);
@@ -1751,6 +1766,13 @@ impl Transform {
         use_map: &UseMap,
         stmt_index: usize,
     ) -> RustExpr {
+        // Type-only imports cannot be constructed as values.
+        if self.is_type_only_import(&new_expr.type_name.name) {
+            ctx.emit_diagnostic(Diagnostic::error(format!(
+                "cannot use type-only import `{}` as a value",
+                new_expr.type_name.name
+            )));
+        }
         let rust_type_name =
             rsc_typeck::resolve::map_collection_type_name(&new_expr.type_name.name);
 

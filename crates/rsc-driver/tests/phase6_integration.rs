@@ -2508,7 +2508,6 @@ fn test_dynamic_import_emits_diagnostic() {
         "function main() { const m = import(\"./utils\"); }",
         "test.rts",
     );
-    // Should compile (warnings don't prevent compilation)
     assert!(
         !result.has_errors,
         "dynamic import should compile (with warning), got errors: {:?}",
@@ -2518,7 +2517,6 @@ fn test_dynamic_import_emits_diagnostic() {
             .map(|d| &d.message)
             .collect::<Vec<_>>()
     );
-    // Should emit a warning about dynamic imports
     assert!(
         result.diagnostics.iter().any(|d| d
             .message
@@ -2540,9 +2538,87 @@ fn test_dynamic_import_snapshot() {
         "test.rts",
     );
     let rust = &result.rust_source;
-    // The generated Rust should contain a panic! with a message about dynamic import
     assert!(
         rust.contains("panic!") && rust.contains("dynamic import not supported"),
         "expected panic!(\"dynamic import not supported: ...\") in output, got:\n{rust}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY: Import Type Enforcement (Task 126)
+//
+// ===========================================================================
+
+#[test]
+fn test_import_type_no_use_declaration() {
+    let source = r#"import type { User } from "./models";
+
+function main() {
+  console.log("hello");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        !rust.contains("use crate::models::User"),
+        "type-only import should not emit `use` declaration.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_import_type_vs_regular_import() {
+    let source = r#"import type { Config } from "./config";
+import { process_data } from "./handlers";
+
+function main() {
+  process_data();
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("use crate::handlers::process_data"),
+        "regular import should emit `use` declaration.\nGenerated:\n{rust}"
+    );
+    assert!(
+        !rust.contains("use crate::config::Config"),
+        "type-only import should not emit `use` declaration.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_import_type_used_as_type_annotation() {
+    let diags = test_utils::compile_diagnostics(
+        r#"import type { User } from "./models";
+
+function greet(user: User): string {
+  return "hello";
+}
+
+function main() {
+  console.log("ok");
+}"#,
+    );
+    let has_type_only_error = diags
+        .iter()
+        .any(|msg| msg.contains("cannot use type-only import"));
+    assert!(
+        !has_type_only_error,
+        "type-only import used as annotation should not produce type-only import error, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_import_type_used_as_value_emits_error() {
+    let diags = test_utils::compile_diagnostics(
+        r#"import type { User } from "./models";
+
+function main() {
+  User.create();
+}"#,
+    );
+    let has_error = diags
+        .iter()
+        .any(|msg| msg.contains("cannot use type-only import `User` as a value"));
+    assert!(
+        has_error,
+        "expected diagnostic about type-only import used as value, got: {diags:?}"
     );
 }
