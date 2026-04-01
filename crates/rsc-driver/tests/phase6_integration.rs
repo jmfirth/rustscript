@@ -2711,3 +2711,48 @@ function main() {
         "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
     );
 }
+
+// ===========================================================================
+//
+// Task 137: Global parseInt / parseFloat
+//
+// ===========================================================================
+
+#[test]
+fn test_parse_int_snapshot() {
+    let source = r#"function main() {
+  const x: i64 = parseInt("42");
+  console.log(x);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("parse::<i64>()") && rust.contains("unwrap_or(0)"),
+        "parseInt(\"42\") should lower to .parse::<i64>().unwrap_or(0).\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_parse_int_with_radix_snapshot() {
+    let source = r#"function main() {
+  const x: i64 = parseInt("ff", 16);
+  console.log(x);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("from_str_radix") && rust.contains("unwrap_or(0)"),
+        "parseInt(\"ff\", 16) should lower to i64::from_str_radix(...).unwrap_or(0).\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_parse_float_snapshot() {
+    let source = r#"function main() {
+  const y: f64 = parseFloat("3.14");
+  console.log(y);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("parse::<f64>()") && rust.contains("unwrap_or(0.0)"),
+        "parseFloat(\"3.14\") should lower to .parse::<f64>().unwrap_or(0.0).\nGenerated:\n{rust}"
+    );
+}
