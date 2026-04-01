@@ -9,20 +9,22 @@ use rsc_syntax::rust_ir::{
 };
 
 /// Scan generated items for usage of `HashMap`, `HashSet`, `Arc`, `Mutex`,
-/// `Any` (for `Box<dyn Any>`), and `futures::StreamExt` types and produce
-/// the corresponding `use` declarations.
+/// `Any` (for `Box<dyn Any>`), `futures::StreamExt`, and `regex::Regex` types
+/// and produce the corresponding `use` declarations.
 pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     let mut needs_hashmap = false;
     let mut needs_hashset = false;
     let mut needs_arc_mutex = false;
     let mut needs_stream_ext = false;
     let mut needs_any = false;
+    let mut needs_regex = false;
 
     for item in items {
         scan_item_for_collections(item, &mut needs_hashmap, &mut needs_hashset);
         scan_item_for_arc_mutex(item, &mut needs_arc_mutex);
         scan_item_for_stream_ext(item, &mut needs_stream_ext);
         scan_item_for_box_dyn_any(item, &mut needs_any);
+        scan_item_for_regex(item, &mut needs_regex);
     }
 
     let mut uses = Vec::new();
@@ -62,6 +64,13 @@ pub(super) fn collect_use_declarations(items: &[RustItem]) -> Vec<RustUseDecl> {
     if needs_stream_ext {
         uses.push(RustUseDecl {
             path: "futures::StreamExt".to_owned(),
+            public: false,
+            span: None,
+        });
+    }
+    if needs_regex {
+        uses.push(RustUseDecl {
+            path: "regex::Regex".to_owned(),
             public: false,
             span: None,
         });
@@ -810,6 +819,96 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         RustExprKind::BlockExpr(block) => {
             scan_block_for_collections(block, needs_hashmap, needs_hashset);
         }
+    }
+}
+
+/// Scan a single item for `Regex::new(...)` calls (via `StaticCall`).
+fn scan_item_for_regex(item: &RustItem, needs_regex: &mut bool) {
+    match item {
+        RustItem::Function(f) => scan_block_for_regex(&f.body, needs_regex),
+        RustItem::Impl(imp) => {
+            for method in &imp.methods {
+                scan_block_for_regex(&method.body, needs_regex);
+            }
+        }
+        RustItem::TraitImpl(ti) => {
+            for method in &ti.methods {
+                scan_block_for_regex(&method.body, needs_regex);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan a block for `Regex` usage.
+fn scan_block_for_regex(block: &RustBlock, needs_regex: &mut bool) {
+    for stmt in &block.stmts {
+        scan_stmt_for_regex(stmt, needs_regex);
+    }
+    if let Some(expr) = &block.expr {
+        scan_expr_for_regex(expr, needs_regex);
+    }
+}
+
+/// Scan a statement for `Regex` usage.
+fn scan_stmt_for_regex(stmt: &RustStmt, needs_regex: &mut bool) {
+    match stmt {
+        RustStmt::Let(let_stmt) => {
+            scan_expr_for_regex(&let_stmt.init, needs_regex);
+        }
+        RustStmt::Expr(expr) | RustStmt::Semi(expr) => {
+            scan_expr_for_regex(expr, needs_regex);
+        }
+        RustStmt::Return(ret) => {
+            if let Some(val) = &ret.value {
+                scan_expr_for_regex(val, needs_regex);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan an expression for `Regex::new(...)` static calls.
+fn scan_expr_for_regex(expr: &RustExpr, needs_regex: &mut bool) {
+    match &expr.kind {
+        RustExprKind::StaticCall {
+            type_name, args, ..
+        } => {
+            if type_name == "Regex" {
+                *needs_regex = true;
+            }
+            for arg in args {
+                scan_expr_for_regex(arg, needs_regex);
+            }
+        }
+        RustExprKind::Binary { left, right, .. } => {
+            scan_expr_for_regex(left, needs_regex);
+            scan_expr_for_regex(right, needs_regex);
+        }
+        RustExprKind::Call { args, .. } | RustExprKind::Macro { args, .. } => {
+            for arg in args {
+                scan_expr_for_regex(arg, needs_regex);
+            }
+        }
+        RustExprKind::MethodCall { receiver, args, .. } => {
+            scan_expr_for_regex(receiver, needs_regex);
+            for arg in args {
+                scan_expr_for_regex(arg, needs_regex);
+            }
+        }
+        RustExprKind::Paren(inner)
+        | RustExprKind::Clone(inner)
+        | RustExprKind::Borrow(inner)
+        | RustExprKind::ToString(inner)
+        | RustExprKind::Some(inner)
+        | RustExprKind::QuestionMark(inner)
+        | RustExprKind::Ok(inner)
+        | RustExprKind::Err(inner)
+        | RustExprKind::Await(inner)
+        | RustExprKind::Cast(inner, _) => {
+            scan_expr_for_regex(inner, needs_regex);
+        }
+        _ => {}
     }
 }
 

@@ -345,6 +345,8 @@ impl Project {
         let mut any_needs_rand = false;
         // Track whether any module uses derives Serialize/Deserialize (needs serde)
         let mut any_needs_serde = false;
+        // Track whether any module uses new RegExp() (needs regex)
+        let mut any_needs_regex = false;
 
         // Compile each module file and collect mod declarations
         let mut mod_decls = Vec::new();
@@ -369,6 +371,7 @@ impl Project {
             any_needs_serde_json |= module_result.needs_serde_json;
             any_needs_rand |= module_result.needs_rand;
             any_needs_serde |= module_result.needs_serde;
+            any_needs_regex |= module_result.needs_regex;
 
             if module_result.has_errors {
                 has_module_errors = true;
@@ -419,6 +422,7 @@ impl Project {
         any_needs_serde_json |= result.needs_serde_json;
         any_needs_rand |= result.needs_rand;
         any_needs_serde |= result.needs_serde;
+        any_needs_regex |= result.needs_regex;
 
         // Build Cargo.toml with collected dependencies
         let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
@@ -441,6 +445,11 @@ impl Project {
         // Add rand crate if Math.random() is used
         if any_needs_rand {
             cargo_builder.add_dependency("rand", DependencySpec::Simple("0.8".to_owned()));
+        }
+
+        // Add regex crate if new RegExp() is used
+        if any_needs_regex {
+            cargo_builder.add_dependency("regex", DependencySpec::Simple("1".to_owned()));
         }
 
         // Add serde with derive feature if derives Serialize/Deserialize is used

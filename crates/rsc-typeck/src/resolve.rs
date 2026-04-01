@@ -31,6 +31,7 @@ pub fn resolve_type_name(name: &str) -> Option<Type> {
         "bool" => Some(Type::Primitive(PrimitiveType::Bool)),
         "string" => Some(Type::String),
         "void" => Some(Type::Unit),
+        "RegExp" => Some(Type::Named("Regex".to_owned())),
         _ => None,
     }
 }
@@ -814,6 +815,7 @@ pub fn map_collection_type_name(name: &str) -> String {
         "Array" | "ReadonlyArray" => "Vec".to_owned(),
         "Map" => "HashMap".to_owned(),
         "Set" => "HashSet".to_owned(),
+        "RegExp" => "Regex".to_owned(),
         other => other.to_owned(),
     }
 }
