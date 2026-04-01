@@ -856,6 +856,8 @@ pub enum VarBinding {
     Const,
     /// A mutable binding (`let`). Lowers to Rust `let mut`.
     Let,
+    /// A `var` binding. Treated as block-scoped `let mut` in RustScript.
+    Var,
 }
 
 /// A `return` statement, optionally with a value.

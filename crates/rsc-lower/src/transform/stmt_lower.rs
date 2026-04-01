@@ -199,7 +199,8 @@ impl Transform {
         // Determine mutability:
         // - `const` declarations are never mutable
         // - `let` declarations are mutable only if the variable is reassigned
-        let mutable = decl.binding == ast::VarBinding::Let && reassigned.contains(&decl.name.name);
+        let mutable = decl.binding == ast::VarBinding::Var
+            || (decl.binding == ast::VarBinding::Let && reassigned.contains(&decl.name.name));
 
         ctx.declare_variable(decl.name.name.clone(), ty.clone());
 
@@ -860,7 +861,7 @@ impl Transform {
                         local_name,
                         access_expr,
                         default_value,
-                        mutable: destr.binding == ast::VarBinding::Let,
+                        mutable: matches!(destr.binding, ast::VarBinding::Let | ast::VarBinding::Var),
                     }
                 })
                 .collect();
@@ -884,7 +885,7 @@ impl Transform {
                 type_name,
                 fields,
                 init,
-                mutable: destr.binding == ast::VarBinding::Let,
+                mutable: matches!(destr.binding, ast::VarBinding::Let | ast::VarBinding::Var),
                 span: Some(destr.span),
             })
         }
@@ -967,7 +968,7 @@ impl Transform {
                 _ => "source".to_owned(),
             };
 
-            let mutable = adestr.binding == ast::VarBinding::Let;
+            let mutable = matches!(adestr.binding, ast::VarBinding::Let | ast::VarBinding::Var);
             let let_kw = if mutable { "let mut" } else { "let" };
             let mut raw_lines = Vec::new();
             for (i, elem) in adestr.elements.iter().enumerate() {
@@ -1021,7 +1022,7 @@ impl Transform {
             RustStmt::TupleDestructure(RustTupleDestructureStmt {
                 bindings,
                 init,
-                mutable: adestr.binding == ast::VarBinding::Let,
+                mutable: matches!(adestr.binding, ast::VarBinding::Let | ast::VarBinding::Var),
                 span: Some(adestr.span),
             })
         }

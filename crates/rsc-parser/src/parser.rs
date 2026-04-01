@@ -306,6 +306,7 @@ impl<'src> Parser<'src> {
             TokenKind::Void => "`void`",
             TokenKind::In => "`in`",
             TokenKind::Declare => "`declare`",
+            TokenKind::Var => "`var`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -600,7 +601,7 @@ impl<'src> Parser<'src> {
             TokenKind::Import => self.parse_import_decl(),
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
-            TokenKind::Const | TokenKind::Let => self.parse_top_level_const(),
+            TokenKind::Const | TokenKind::Let | TokenKind::Var => self.parse_top_level_const(),
             TokenKind::Declare => {
                 // Ambient declaration — skip entirely (produces no AST node).
                 self.skip_declare_body();
@@ -880,7 +881,7 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
-            TokenKind::Const | TokenKind::Let => {
+            TokenKind::Const | TokenKind::Let | TokenKind::Var => {
                 let mut item = self.parse_top_level_const()?;
                 item.exported = true;
                 item.span = start.merge(item.span);
@@ -2829,7 +2830,7 @@ impl<'src> Parser<'src> {
         }
 
         match self.peek() {
-            TokenKind::Const | TokenKind::Let => self.parse_var_decl(),
+            TokenKind::Const | TokenKind::Let | TokenKind::Var => self.parse_var_decl(),
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
             TokenKind::While => self.parse_while_stmt(None).map(Stmt::While),
             TokenKind::Do => self.parse_do_while_stmt(None).map(Stmt::DoWhile),
@@ -2864,13 +2865,14 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a variable declaration or destructuring:
-    /// - `(const | let) IDENT (: type)? = expr ;`
-    /// - `(const | let) { field, ... } = expr ;`
+    /// - `(const | let | var) IDENT (: type)? = expr ;`
+    /// - `(const | let | var) { field, ... } = expr ;`
     fn parse_var_decl(&mut self) -> Option<Stmt> {
         let keyword = self.advance();
         let start = keyword.span;
         let binding = match keyword.kind {
             TokenKind::Const => VarBinding::Const,
+            TokenKind::Var => VarBinding::Var,
             _ => VarBinding::Let,
         };
 
@@ -3097,7 +3099,7 @@ impl<'src> Parser<'src> {
 
         self.expect(&TokenKind::LParen)?;
 
-        // Parse binding kind: `const` or `let`
+        // Parse binding kind: `const`, `let`, or `var`
         let binding_token = self.current_token().clone();
         let binding = match &binding_token.kind {
             TokenKind::Const => {
@@ -3108,12 +3110,16 @@ impl<'src> Parser<'src> {
                 self.advance();
                 VarBinding::Let
             }
+            TokenKind::Var => {
+                self.advance();
+                VarBinding::Var
+            }
             _ => {
                 self.diagnostics.push(
-                    Diagnostic::error("expected `const` or `let` in for loop").with_label(
+                    Diagnostic::error("expected `const`, `let`, or `var` in for loop").with_label(
                         binding_token.span,
                         self.file_id,
-                        "expected `const` or `let`",
+                        "expected `const`, `let`, or `var`",
                     ),
                 );
                 return None;
@@ -5313,15 +5319,16 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a top-level `const` or `let` declaration as a module-level item.
+    /// Parse a top-level `const`, `let`, or `var` declaration as a module-level item.
     ///
-    /// Syntax: `const name: Type = expr;` or `let name: Type = expr;`
+    /// Syntax: `const name: Type = expr;` or `let name: Type = expr;` or `var name: Type = expr;`
     /// Produces an `ItemKind::Const(VarDecl)`.
     fn parse_top_level_const(&mut self) -> Option<Item> {
         let keyword = self.advance();
         let start = keyword.span;
         let binding = match keyword.kind {
             TokenKind::Const => VarBinding::Const,
+            TokenKind::Var => VarBinding::Var,
             _ => VarBinding::Let,
         };
 
@@ -5723,6 +5730,68 @@ mod tests {
                 assert_eq!(v.binding, VarBinding::Let);
                 assert_eq!(v.name.name, "x");
                 assert!(v.type_ann.is_none());
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 5b. var declaration
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_var_declaration() {
+        let module = parse_ok("function f() { var x = 1; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(v) => {
+                assert_eq!(v.binding, VarBinding::Var);
+                assert_eq!(v.name.name, "x");
+                assert!(v.type_ann.is_none());
+                match &v.init.kind {
+                    ExprKind::IntLit(1) => {}
+                    other => panic!("expected IntLit(1), got {other:?}"),
+                }
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 5c. var declaration with type annotation
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_var_with_type() {
+        let module = parse_ok("function f() { var x: i32 = 1; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(v) => {
+                assert_eq!(v.binding, VarBinding::Var);
+                assert_eq!(v.name.name, "x");
+                assert!(v.type_ann.is_some());
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 5d. var declaration with string type
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_var_string_type() {
+        let module = parse_ok("function f() { var x: string = \"hello\"; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(v) => {
+                assert_eq!(v.binding, VarBinding::Var);
+                assert_eq!(v.name.name, "x");
+                assert!(v.type_ann.is_some());
+                match &v.init.kind {
+                    ExprKind::StringLit(s) => assert_eq!(s.as_str(), "hello"),
+                    other => panic!("expected StringLit, got {other:?}"),
+                }
             }
             other => panic!("expected VarDecl, got {other:?}"),
         }
