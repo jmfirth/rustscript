@@ -2997,7 +2997,8 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Infer(_)
                         | ast::TypeKind::TupleSpread(_)
                         | ast::TypeKind::TypeGuard { .. }
-                        | ast::TypeKind::Readonly(_) => vec![],
+                        | ast::TypeKind::Readonly(_)
+                        | ast::TypeKind::TemplateLiteralType { .. } => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

@@ -1169,6 +1169,19 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             guarded_type,
         } => format!("{} is {}", param.name, format_type(guarded_type)),
         TypeKind::Readonly(inner) => format!("readonly {}", format_type(inner)),
+        TypeKind::TemplateLiteralType { quasis, types } => {
+            let mut result = String::from('`');
+            for (i, quasi) in quasis.iter().enumerate() {
+                result.push_str(quasi);
+                if i < types.len() {
+                    result.push_str("${");
+                    result.push_str(&format_type(&types[i]));
+                    result.push('}');
+                }
+            }
+            result.push('`');
+            result
+        }
     }
 }
 

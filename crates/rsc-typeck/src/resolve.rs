@@ -99,6 +99,8 @@ pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
 /// Resolve a type annotation to a [`Type`], emitting a diagnostic for unknown types.
 ///
 /// Unknown type names produce a diagnostic and default to `i64`.
+#[allow(clippy::too_many_lines)]
+// Type annotation resolution covers all TypeKind variants; splitting would obscure the match
 pub fn resolve_type_annotation(
     ann: &ast::TypeAnnotation,
     diagnostics: &mut Vec<Diagnostic>,
@@ -217,6 +219,11 @@ pub fn resolve_type_annotation(
             // readonly is a compile-time modifier — resolve to the inner type.
             // The lowering pass handles parameter-position semantics.
             resolve_type_annotation(inner, diagnostics)
+        }
+        ast::TypeKind::TemplateLiteralType { .. } => {
+            // Template literal types are compile-time string patterns (e.g., `hello ${string}`).
+            // Rust's type system cannot express string patterns, so they lower to String.
+            Type::String
         }
     }
 }
@@ -454,6 +461,11 @@ pub fn resolve_type_annotation_with_generics(
             // readonly is a compile-time modifier — resolve to the inner type.
             // The lowering pass handles parameter-position semantics.
             resolve_type_annotation_with_generics(inner, registry, generic_param_names, diagnostics)
+        }
+        ast::TypeKind::TemplateLiteralType { .. } => {
+            // Template literal types are compile-time string patterns (e.g., `hello ${string}`).
+            // Rust's type system cannot express string patterns, so they lower to String.
+            Type::String
         }
     }
 }
@@ -737,7 +749,10 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         ast::TypeKind::Union(members) | ast::TypeKind::Intersection(members) => {
             members.iter().any(ast_contains_infer)
         }
-        ast::TypeKind::Tuple(types) => types.iter().any(ast_contains_infer),
+        ast::TypeKind::Tuple(types)
+        | ast::TypeKind::TemplateLiteralType { types, .. } => {
+            types.iter().any(ast_contains_infer)
+        }
         ast::TypeKind::Conditional {
             check_type,
             extends_type,

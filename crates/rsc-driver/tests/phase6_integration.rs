@@ -2622,3 +2622,46 @@ function main() {
         "expected diagnostic about type-only import used as value, got: {diags:?}"
     );
 }
+
+// ===========================================================================
+//
+// CATEGORY: Template literal types (Task 128)
+//
+// ===========================================================================
+
+#[test]
+fn test_template_literal_type_lowers_to_string() {
+    let source = r#"type Greeting = `hello ${string}`
+
+function main() {
+  const g: Greeting = "hello world";
+  console.log(g);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("type Greeting = String;"),
+        "template literal type should lower to `type Greeting = String;`.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_template_literal_type_in_function_param() {
+    let source = r#"type EventName = `on${string}`
+
+function handle(event: EventName): void {
+  console.log(event);
+}
+
+function main() {
+  handle("onclick");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("type EventName = String;"),
+        "template literal type alias should lower to `type EventName = String;`.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("event: String") || rust.contains("event: EventName"),
+        "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
+    );
+}

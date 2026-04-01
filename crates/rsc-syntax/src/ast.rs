@@ -724,6 +724,16 @@ pub enum TypeKind {
     /// In variable position, this is informational (Rust `let` is immutable).
     /// In parameter position, arrays lower to borrowed slices `&[T]`.
     Readonly(Box<TypeAnnotation>),
+    /// A template literal type: `` `hello ${string}` ``.
+    /// Represents a compile-time string pattern. Lowers to `String` in Rust
+    /// since Rust's type system cannot express string patterns.
+    /// The `quasis` are the static string parts, `types` are the interpolated types.
+    TemplateLiteralType {
+        /// The static string fragments between interpolations.
+        quasis: Vec<String>,
+        /// The interpolated type annotations (one fewer than `quasis`).
+        types: Vec<TypeAnnotation>,
+    },
 }
 
 /// An identifier with its source span.
