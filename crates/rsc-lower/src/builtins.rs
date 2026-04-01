@@ -266,6 +266,19 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("console", "warn", lower_console_warn, true);
     registry.register_method("console", "debug", lower_console_debug, true);
 
+    // Task 141: Additional console extensions
+    registry.register_method("console", "table", lower_console_table, true);
+    registry.register_method("console", "dir", lower_console_dir, true);
+    registry.register_method("console", "assert", lower_console_assert, true);
+    registry.register_method("console", "time", lower_console_time, true);
+    registry.register_method("console", "timeEnd", lower_console_time_end, true);
+    registry.register_method("console", "count", lower_console_count, true);
+    registry.register_method("console", "countReset", lower_console_count_reset, true);
+    registry.register_method("console", "group", lower_console_group, true);
+    registry.register_method("console", "groupEnd", lower_console_group_end, true);
+    registry.register_method("console", "clear", lower_console_clear, true);
+    registry.register_method("console", "trace", lower_console_trace, true);
+
     // Phase 5: Number functions
     registry.register_method("Number", "parseInt", lower_number_parse_int, false);
     registry.register_method("Number", "parseFloat", lower_number_parse_float, false);
@@ -1714,6 +1727,234 @@ fn lower_console_warn(args: Vec<RustExpr>, span: Span) -> RustExpr {
 fn lower_console_debug(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let format_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
     let format_str = format!("debug: {format_placeholders}");
+    let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
+    macro_args.extend(args.into_iter().map(strip_to_string));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Task 141: Additional console extension lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `console.table(data)` to `println!("{:#?}", data)` (debug pretty-print).
+fn lower_console_table(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{:#?}".into())),
+        strip_to_string(arg),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "println".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.dir(obj)` to `println!("{:#?}", obj)` (debug pretty-print).
+///
+/// Same output as `console.table` — both use Rust's `Debug` pretty-print.
+fn lower_console_dir(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{:#?}".into())),
+        strip_to_string(arg),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "println".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.assert(cond, msg?)` to `assert!(cond, "{}", msg)`.
+///
+/// If no message is provided, emits `assert!(cond)` without a format string.
+fn lower_console_assert(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut args_iter = args.into_iter();
+    let cond = args_iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::BoolLit(false)));
+    let macro_args = if let Some(msg) = args_iter.next() {
+        vec![
+            cond,
+            RustExpr::synthetic(RustExprKind::StringLit("{}".into())),
+            strip_to_string(msg),
+        ]
+    } else {
+        vec![cond]
+    };
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "assert".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.time(label)` to `eprintln!("{}: timer started", label)`.
+///
+/// True timing requires runtime state tracking. This simplified version
+/// prints the label to stderr to indicate the timer was started.
+fn lower_console_time(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}: timer started".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.timeEnd(label)` to `eprintln!("{}: timer ended", label)`.
+///
+/// True timing requires runtime state tracking. This simplified version
+/// prints the label to stderr to indicate the timer was ended.
+fn lower_console_time_end(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}: timer ended".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.count(label?)` to `eprintln!("{}: count", label)`.
+///
+/// True counting requires runtime state. This simplified version
+/// prints the label to stderr.
+fn lower_console_count(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}: count".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.countReset(label?)` to `eprintln!("{}: count reset", label)`.
+///
+/// Stub — prints a message to stderr indicating the counter was reset.
+fn lower_console_count_reset(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}: count reset".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.group(label?)` to `eprintln!("{}", label)`.
+///
+/// Indentation-based grouping is not easily representable in compiled output.
+/// This simplified version prints the label to stderr.
+fn lower_console_group(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.groupEnd()` to a no-op (empty block expression).
+///
+/// Group tracking is not supported in compiled output.
+fn lower_console_group_end(_args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::BlockExpr(RustBlock {
+            stmts: vec![],
+            expr: None,
+        }),
+        span,
+    )
+}
+
+/// Lower `console.clear()` to `print!("\x1B[2J\x1B[H")` (ANSI terminal clear).
+fn lower_console_clear(_args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(
+        "\x1B[2J\x1B[H".into(),
+    ))];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "print".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.trace(args...)` to `eprintln!("Trace: {} {} ...", args...)`.
+///
+/// A simplified trace that prints "Trace:" followed by arguments.
+/// Does not produce actual stack traces in compiled output.
+fn lower_console_trace(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let format_placeholders = args.iter().map(|_| "{}").collect::<Vec<_>>().join(" ");
+    let format_str = if format_placeholders.is_empty() {
+        "Trace".to_owned()
+    } else {
+        format!("Trace: {format_placeholders}")
+    };
     let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(format_str))];
     macro_args.extend(args.into_iter().map(strip_to_string));
     RustExpr::new(
@@ -4299,6 +4540,252 @@ mod tests {
             }
             other => panic!("expected Macro(eprintln), got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 141: Additional console extensions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_console_table_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "table").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_dir_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "dir").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_assert_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "assert").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_time_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "time").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_time_end_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "timeEnd").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_count_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "count").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_count_reset_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "countReset").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_group_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "group").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_group_end_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "groupEnd").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_clear_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "clear").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_trace_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "trace").is_some());
+    }
+
+    #[test]
+    fn test_lower_console_table_produces_debug_println() {
+        let result = lower_console_table(vec![string_arg("data")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "println");
+                assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "{:#?}"));
+            }
+            other => panic!("expected Macro(println), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_dir_produces_debug_println() {
+        let result = lower_console_dir(vec![string_arg("obj")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "println");
+                assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "{:#?}"));
+            }
+            other => panic!("expected Macro(println), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_assert_with_message() {
+        let cond = RustExpr::new(RustExprKind::BoolLit(true), span());
+        let msg = string_arg("should be true");
+        let result = lower_console_assert(vec![cond, msg], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "assert");
+                assert_eq!(args.len(), 3); // cond + format string + message
+            }
+            other => panic!("expected Macro(assert), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_assert_without_message() {
+        let cond = RustExpr::new(RustExprKind::BoolLit(true), span());
+        let result = lower_console_assert(vec![cond], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "assert");
+                assert_eq!(args.len(), 1); // only condition
+            }
+            other => panic!("expected Macro(assert), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_time_produces_eprintln() {
+        let result = lower_console_time(vec![string_arg("benchmark")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("timer started"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_time_end_produces_eprintln() {
+        let result = lower_console_time_end(vec![string_arg("benchmark")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("timer ended"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_count_produces_eprintln() {
+        let result = lower_console_count(vec![string_arg("loop")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("count")));
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_count_reset_produces_eprintln() {
+        let result = lower_console_count_reset(vec![string_arg("loop")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("count reset"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_group_produces_eprintln() {
+        let result = lower_console_group(vec![string_arg("section")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, .. } => assert_eq!(name, "eprintln"),
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_group_end_produces_block_expr() {
+        let result = lower_console_group_end(vec![], span());
+        assert!(
+            matches!(&result.kind, RustExprKind::BlockExpr(_)),
+            "expected BlockExpr, got {:?}",
+            result.kind
+        );
+    }
+
+    #[test]
+    fn test_lower_console_clear_produces_print() {
+        let result = lower_console_clear(vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "print");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("\x1B[2J"))
+                );
+            }
+            other => panic!("expected Macro(print), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_trace_produces_eprintln() {
+        let result = lower_console_trace(vec![string_arg("here")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.starts_with("Trace:"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_console_trace_no_args_produces_trace_only() {
+        let result = lower_console_trace(vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "Trace"));
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_console_table_is_ref_args() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.is_ref_args("console", "table"));
+    }
+
+    #[test]
+    fn test_console_assert_is_ref_args() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.is_ref_args("console", "assert"));
     }
 
     // ---------------------------------------------------------------

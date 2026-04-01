@@ -200,7 +200,15 @@ impl Transform {
                 tag,
                 quasis,
                 expressions,
-            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
+            } => self.lower_tagged_template(
+                tag,
+                quasis,
+                expressions,
+                expr.span,
+                ctx,
+                use_map,
+                stmt_index,
+            ),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -682,9 +690,9 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::Macro {
                         name: "panic".to_owned(),
-                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
-                            format!("dynamic import not supported: {module}"),
-                        ))],
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(format!(
+                            "dynamic import not supported: {module}"
+                        )))],
                     },
                     expr.span,
                 )

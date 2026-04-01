@@ -2518,10 +2518,10 @@ fn test_dynamic_import_emits_diagnostic() {
             .collect::<Vec<_>>()
     );
     assert!(
-        result.diagnostics.iter().any(|d| d
-            .message
-            .contains("dynamic import")
-            && d.message.contains("not supported")),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("dynamic import") && d.message.contains("not supported")),
         "expected diagnostic about dynamic import, got: {:?}",
         result
             .diagnostics
@@ -2709,5 +2709,77 @@ function main() {
     assert!(
         rust.contains("event: String") || rust.contains("event: EventName"),
         "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
+    );
+}
+
+// -------------------------------------------------------------------
+// Task 141: Console extensions snapshot tests
+// -------------------------------------------------------------------
+
+#[test]
+fn test_console_table_snapshot() {
+    let source = r#"function main() {
+  const data: Array<i32> = [1, 2, 3];
+  console.table(data);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("println!(\"{:#?}\","),
+        "console.table should produce println!(\"{{:#?}}\", ...). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_assert_snapshot() {
+    let source = r#"function main() {
+  const x: i64 = 42;
+  console.assert(x > 0, "x must be positive");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("assert!("),
+        "console.assert should produce assert!(...). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_dir_snapshot() {
+    let source = r#"function main() {
+  const obj: string = "hello";
+  console.dir(obj);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("println!(\"{:#?}\","),
+        "console.dir should produce println!(\"{{:#?}}\", ...). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_time_snapshot() {
+    let source = r#"function main() {
+  console.time("bench");
+  console.timeEnd("bench");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("eprintln!") && rust.contains("timer started"),
+        "console.time should produce eprintln with timer started. Generated:\n{rust}"
+    );
+    assert!(
+        rust.contains("timer ended"),
+        "console.timeEnd should produce eprintln with timer ended. Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_trace_snapshot() {
+    let source = r#"function main() {
+  console.trace("checkpoint");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("eprintln!(\"Trace:"),
+        "console.trace should produce eprintln!(\"Trace: ...\"). Generated:\n{rust}"
     );
 }
