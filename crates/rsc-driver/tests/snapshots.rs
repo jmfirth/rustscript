@@ -5042,3 +5042,32 @@ function main() {
         "Object.fromEntries should generate .into_iter().collect::<HashMap<_, _>>(), got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// declare ambient declarations produce no output (Task 150)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_declare_produces_no_output() {
+    let source = "\
+declare function fetch(url: string): void;
+declare const API_KEY: string;
+
+function main() {
+  console.log(\"hello\");
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.contains("fetch"),
+        "declared function should not appear in output, got:\n{actual}"
+    );
+    assert!(
+        !actual.contains("API_KEY"),
+        "declared const should not appear in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn main()"),
+        "non-declared function should still appear in output, got:\n{actual}"
+    );
+}

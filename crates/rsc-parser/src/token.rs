@@ -122,6 +122,8 @@ pub(crate) enum TokenKind {
     In,
     /// `super` (access parent class members)
     Super,
+    /// `declare` (ambient declaration — type-only, no runtime code)
+    Declare,
 
     // Operators
     /// `+`

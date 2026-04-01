@@ -853,6 +853,7 @@ impl<'a> Lexer<'a> {
             "delete" => TokenKind::Delete,
             "void" => TokenKind::Void,
             "in" => TokenKind::In,
+            "declare" => TokenKind::Declare,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
@@ -1987,5 +1988,12 @@ mod tests {
         let tokens = tokenize("keyof User");
         assert_eq!(tokens[0].kind, TokenKind::KeyOf);
         assert!(matches!(tokens[1].kind, TokenKind::Ident(ref s) if s == "User"));
+    }
+
+    // `declare` is tokenized as a keyword
+    #[test]
+    fn test_lexer_declare_keyword() {
+        let tokens = tokenize("declare");
+        assert_eq!(tokens[0].kind, TokenKind::Declare);
     }
 }
