@@ -124,6 +124,8 @@ pub(crate) enum TokenKind {
     Super,
     /// `declare` (ambient declaration — type-only, no runtime code)
     Declare,
+    /// `var` (function-scoped variable declaration, treated as `let mut`)
+    Var,
 
     // Operators
     /// `+`

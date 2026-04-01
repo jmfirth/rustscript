@@ -9148,4 +9148,80 @@ function main() {}"#;
             file.uses.iter().map(|u| &u.path).collect::<Vec<_>>()
         );
     }
+
+    // Test: var x = 1 lowers to let mut x = 1 (always mutable)
+    #[test]
+    fn test_var_lowers_to_let_mut() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Var,
+                name: ident("x", 4, 5),
+                type_ann: None,
+                init: int_expr(1, 8, 9),
+                span: span(0, 10),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, _, _, _, _, _, _, _, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        assert_eq!(func.body.stmts.len(), 1);
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(
+                    let_stmt.mutable,
+                    "var should always lower to let mut, even without reassignment"
+                );
+                assert_eq!(let_stmt.name, "x");
+            }
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
+
+    // Test: var x = 1; x = 2; (reassignment) also works
+    #[test]
+    fn test_var_reassignment_works() {
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![
+                Stmt::VarDecl(VarDecl {
+                    binding: VarBinding::Var,
+                    name: ident("x", 4, 5),
+                    type_ann: None,
+                    init: int_expr(1, 8, 9),
+                    span: span(0, 10),
+                }),
+                Stmt::Expr(Expr {
+                    kind: ExprKind::Assign(AssignExpr {
+                        target: ident("x", 11, 12),
+                        value: Box::new(int_expr(2, 15, 16)),
+                    }),
+                    span: span(11, 17),
+                }),
+            ],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, _, _, _, _, _, _, _, _) = transform.lower_module(&module);
+
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function item");
+        };
+        assert_eq!(func.body.stmts.len(), 2);
+        match &func.body.stmts[0] {
+            RustStmt::Let(let_stmt) => {
+                assert!(let_stmt.mutable, "var with reassignment should be let mut");
+                assert_eq!(let_stmt.name, "x");
+            }
+            other => panic!("expected Let, got {other:?}"),
+        }
+    }
 }

@@ -818,6 +818,7 @@ fn find_hover_in_stmts(
                     let binding = match decl.binding {
                         VarBinding::Const => "const",
                         VarBinding::Let => "let",
+                        VarBinding::Var => "var",
                     };
                     let type_str = if let Some(type_ann) = &decl.type_ann {
                         format_type(type_ann)

@@ -805,6 +805,7 @@ impl<'a> Lexer<'a> {
             "function" => TokenKind::Function,
             "const" => TokenKind::Const,
             "let" => TokenKind::Let,
+            "var" => TokenKind::Var,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
@@ -1061,6 +1062,7 @@ mod tests {
             ("false", TokenKind::False),
             ("type", TokenKind::Type),
             ("extends", TokenKind::Extends),
+            ("var", TokenKind::Var),
         ];
 
         for (source, expected_kind) in cases {

@@ -908,6 +908,7 @@ impl Printer {
         match v.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
+            VarBinding::Var => self.write("var "),
         }
         self.write(&v.name.name);
         if let Some(ty) = &v.type_ann {
@@ -984,6 +985,7 @@ impl Printer {
         match d.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
+            VarBinding::Var => self.write("var "),
         }
         self.write("{ ");
         for (i, field) in d.fields.iter().enumerate() {
@@ -1018,6 +1020,7 @@ impl Printer {
         match a.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
+            VarBinding::Var => self.write("var "),
         }
         self.write("[");
         for (i, elem) in a.elements.iter().enumerate() {
@@ -1097,6 +1100,7 @@ impl Printer {
         match f.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
+            VarBinding::Var => self.write("var "),
         }
         self.write(&f.variable.name);
         self.write(" of ");
@@ -1116,6 +1120,7 @@ impl Printer {
         match f.binding {
             VarBinding::Const => self.write("const "),
             VarBinding::Let => self.write("let "),
+            VarBinding::Var => self.write("var "),
         }
         self.write(&f.variable.name);
         self.write(" in ");
