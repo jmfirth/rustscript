@@ -280,10 +280,7 @@ fn compile_to_rust(source: &str) -> String {
 
 #[test]
 fn test_roundtrip_idempotent_using_declaration() {
-    assert_idempotent(
-        "using_decl",
-        "function main() { using x = getResource(); }",
-    );
+    assert_idempotent("using_decl", "function main() { using x = getResource(); }");
 }
 
 #[test]

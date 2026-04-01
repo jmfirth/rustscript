@@ -800,6 +800,40 @@ impl Transform {
                 // For non-array (objects, literals): strip the `as const`, lower inner
                 self.lower_expr(inner, ctx, use_map, stmt_index)
             }
+            ast::ExprKind::RegexLit { pattern, flags } => {
+                // `/pattern/flags` → `Regex::new("(?flags)pattern").unwrap()`
+                // Same lowering as `new RegExp("pattern", "flags")`.
+                let mut rust_flags = String::new();
+                for ch in flags.chars() {
+                    match ch {
+                        'i' | 'm' | 's' => rust_flags.push(ch),
+                        _ => {} // g, u, y, d ignored
+                    }
+                }
+                let pattern_str = if rust_flags.is_empty() {
+                    pattern.clone()
+                } else {
+                    format!("(?{rust_flags}){pattern}")
+                };
+                let pattern_arg = RustExpr::new(RustExprKind::StringLit(pattern_str), expr.span);
+                let new_call = RustExpr::new(
+                    RustExprKind::StaticCall {
+                        type_name: "Regex".to_owned(),
+                        method: "new".to_owned(),
+                        args: vec![pattern_arg],
+                    },
+                    expr.span,
+                );
+                RustExpr::new(
+                    RustExprKind::MethodCall {
+                        receiver: Box::new(new_call),
+                        method: "unwrap".to_owned(),
+                        type_args: vec![],
+                        args: vec![],
+                    },
+                    expr.span,
+                )
+            }
         }
     }
 

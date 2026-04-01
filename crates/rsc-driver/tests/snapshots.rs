@@ -5139,3 +5139,64 @@ function main() {
         "non-declared function should still appear in output, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 154: Regex literal syntax
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_regex_literal_snapshot_simple() {
+    let source = "\
+function main() {
+  const re = /hello/;
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Regex::new(\"hello\").unwrap()"),
+        "expected Regex::new(\"hello\").unwrap(), got:\n{actual}"
+    );
+    assert!(
+        actual.contains("use regex::Regex;"),
+        "expected `use regex::Regex;`, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_regex_literal_snapshot_with_i_flag() {
+    let source = "\
+function main() {
+  const re = /pattern/i;
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Regex::new(\"(?i)pattern\").unwrap()"),
+        "expected Regex::new(\"(?i)pattern\").unwrap(), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_regex_literal_snapshot_global_flag_ignored() {
+    let source = "\
+function main() {
+  const re = /\\d+/g;
+}";
+    let actual = compile_to_rust(source);
+    // g flag ignored — no inline flags prepended
+    assert!(
+        actual.contains("Regex::new(\"\\\\d+\").unwrap()"),
+        "expected Regex::new(\"\\\\d+\").unwrap() (g flag ignored), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_regex_literal_snapshot_multiple_flags() {
+    let source = "\
+function main() {
+  const re = /test/ims;
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("Regex::new(\"(?ims)test\").unwrap()"),
+        "expected Regex::new(\"(?ims)test\").unwrap(), got:\n{actual}"
+    );
+}

@@ -1240,6 +1240,12 @@ impl Printer {
                 self.write(module);
                 self.write("\")");
             }
+            ExprKind::RegexLit { pattern, flags } => {
+                self.write("/");
+                self.write(pattern);
+                self.write("/");
+                self.write(flags);
+            }
         }
     }
 

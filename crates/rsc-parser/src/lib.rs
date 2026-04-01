@@ -29,7 +29,25 @@ pub fn parse(source: &str, file_id: FileId) -> (ast::Module, Vec<Diagnostic>) {
 
     let mut parser = Parser::new(tokens, file_id, source);
     let module = parser.parse_module();
-    let mut diagnostics = lexer_diagnostics;
+
+    // Filter out lexer diagnostics that fall within regex literal spans.
+    // The lexer cannot disambiguate `/` as regex vs division, so it may
+    // emit "unexpected character" errors for content inside regex patterns.
+    let regex_spans = parser.regex_literal_spans();
+    let mut diagnostics: Vec<Diagnostic> = if regex_spans.is_empty() {
+        lexer_diagnostics
+    } else {
+        lexer_diagnostics
+            .into_iter()
+            .filter(|diag| {
+                !diag
+                    .labels
+                    .iter()
+                    .any(|label| regex_spans.iter().any(|rs| rs.contains(label.span.start)))
+            })
+            .collect()
+    };
+
     diagnostics.extend(parser.into_diagnostics());
 
     (module, diagnostics)
