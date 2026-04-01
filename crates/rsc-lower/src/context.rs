@@ -32,6 +32,9 @@ pub(crate) struct LoweringContext {
     /// Set during class method lowering for classes that `extends` another class.
     /// Used to lower `super.method()` calls.
     current_base_class: Option<String>,
+    /// Variables that are catch bindings (e.g., `catch (e) { ... }`).
+    /// Used to handle `.message` and `.name` property access on error strings.
+    catch_variables: HashSet<String>,
 }
 
 /// A single scope level containing variable declarations.
@@ -58,6 +61,7 @@ impl LoweringContext {
             current_fn_throws: false,
             reference_variables: HashSet::new(),
             current_base_class: None,
+            catch_variables: HashSet::new(),
         }
     }
 
@@ -146,6 +150,24 @@ impl LoweringContext {
     /// Get the current class's base class name, if any.
     pub fn current_base_class(&self) -> Option<&str> {
         self.current_base_class.as_deref()
+    }
+
+    /// Mark a variable as a catch binding (e.g., the `e` in `catch (e)`).
+    ///
+    /// Catch variables are strings in the lowered Rust code, so `.message`
+    /// is identity and `.name` resolves to `"Error"`.
+    pub fn mark_as_catch_variable(&mut self, name: String) {
+        self.catch_variables.insert(name);
+    }
+
+    /// Remove a variable from the catch binding set.
+    pub fn unmark_catch_variable(&mut self, name: &str) {
+        self.catch_variables.remove(name);
+    }
+
+    /// Check whether a variable is a catch binding.
+    pub fn is_catch_variable(&self, name: &str) -> bool {
+        self.catch_variables.contains(name)
     }
 
     /// Add a diagnostic to the accumulated list.
