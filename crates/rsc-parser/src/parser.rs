@@ -305,6 +305,7 @@ impl<'src> Parser<'src> {
             TokenKind::Delete => "`delete`",
             TokenKind::Void => "`void`",
             TokenKind::In => "`in`",
+            TokenKind::Declare => "`declare`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -334,6 +335,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::Interface
                 | TokenKind::Class
                 | TokenKind::Abstract
+                | TokenKind::Declare
                 | TokenKind::At => return,
                 TokenKind::Semicolon => {
                     self.advance();
@@ -550,6 +552,11 @@ impl<'src> Parser<'src> {
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
             TokenKind::Const | TokenKind::Let => self.parse_top_level_const(),
+            TokenKind::Declare => {
+                // Ambient declaration — skip entirely (produces no AST node).
+                self.skip_declare_body();
+                None
+            }
             TokenKind::Ident(name) if matches!(name.as_str(), "test" | "describe" | "it") => {
                 self.parse_test_block()
             }
@@ -571,6 +578,55 @@ impl<'src> Parser<'src> {
                 self.advance();
                 self.synchronize();
                 None
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Ambient (declare) declarations
+    // ---------------------------------------------------------------
+
+    /// Skip an ambient declaration: `declare function foo(): void;`,
+    /// `declare const x: string;`, `declare class Foo { ... }`,
+    /// `declare module "x" { ... }`, etc.
+    ///
+    /// Ambient declarations are type-information only and produce no runtime
+    /// code. The parser consumes the `declare` keyword and then skips all
+    /// tokens until the end of the declaration (semicolon or matching closing
+    /// brace), producing no AST node.
+    fn skip_declare_body(&mut self) {
+        self.advance(); // consume `declare`
+
+        // Skip tokens until we hit a semicolon at brace depth 0,
+        // or close a brace that brings us back to depth 0.
+        let mut brace_depth: u32 = 0;
+        loop {
+            match self.peek() {
+                TokenKind::Eof => break,
+                TokenKind::Semicolon if brace_depth == 0 => {
+                    self.advance(); // consume the semicolon
+                    break;
+                }
+                TokenKind::LBrace => {
+                    brace_depth += 1;
+                    self.advance();
+                }
+                TokenKind::RBrace => {
+                    if brace_depth == 0 {
+                        break;
+                    }
+                    brace_depth -= 1;
+                    self.advance();
+                    // After closing a top-level brace block, the declaration is done
+                    if brace_depth == 0 {
+                        // Consume optional trailing semicolon
+                        self.eat(&TokenKind::Semicolon);
+                        break;
+                    }
+                }
+                _ => {
+                    self.advance();
+                }
             }
         }
     }
@@ -621,6 +677,7 @@ impl<'src> Parser<'src> {
     /// - `export type ...` — exported type/enum
     /// - `export interface ...` — exported interface
     /// - `export abstract class ...` — exported abstract class
+    /// - `export declare ...` — ambient declaration (skipped)
     /// - `export * from "path"` — wildcard re-export
     /// - `export { Name } from "path"` — re-export
     #[allow(clippy::too_many_lines)]
@@ -769,6 +826,11 @@ impl<'src> Parser<'src> {
                 item.exported = true;
                 item.span = start.merge(item.span);
                 Some(item)
+            }
+            TokenKind::Declare => {
+                // `export declare ...` — ambient declaration, skip entirely.
+                self.skip_declare_body();
+                None
             }
             _ => {
                 let current = self.current_token().clone();
@@ -11700,5 +11762,106 @@ async function fetch(url: string, options?: object): Promise<string> {
         assert_eq!(f.name.name, "fetch");
         assert!(f.is_async);
         assert_eq!(f.params.len(), 2);
+    }
+
+    // ---------------------------------------------------------------
+    // declare ambient declarations (Task 150)
+    // ---------------------------------------------------------------
+
+    // declare function is parsed and skipped (produces no AST items)
+    #[test]
+    fn test_parser_declare_function() {
+        let source = "declare function fetch(url: string): void;";
+        let module = parse_ok(source);
+        assert!(
+            module.items.is_empty(),
+            "declare function should produce no items"
+        );
+    }
+
+    // declare const is parsed and skipped
+    #[test]
+    fn test_parser_declare_const() {
+        let source = "declare const API_KEY: string;";
+        let module = parse_ok(source);
+        assert!(
+            module.items.is_empty(),
+            "declare const should produce no items"
+        );
+    }
+
+    // declare class is parsed and skipped
+    #[test]
+    fn test_parser_declare_class() {
+        let source = "declare class Window { title: string; close(): void; }";
+        let module = parse_ok(source);
+        assert!(
+            module.items.is_empty(),
+            "declare class should produce no items"
+        );
+    }
+
+    // declare module is parsed and skipped
+    #[test]
+    fn test_parser_declare_module() {
+        let source = r#"declare module "my-lib" { export function hello(): void; }"#;
+        let module = parse_ok(source);
+        assert!(
+            module.items.is_empty(),
+            "declare module should produce no items"
+        );
+    }
+
+    // export declare is parsed and skipped
+    #[test]
+    fn test_parser_export_declare() {
+        let source = "export declare function fetch(url: string): void;";
+        let module = parse_ok(source);
+        assert!(
+            module.items.is_empty(),
+            "export declare should produce no items"
+        );
+    }
+
+    // declare does not break normal items — regular functions still work
+    #[test]
+    fn test_declare_does_not_break_normal_items() {
+        let source = r#"
+            declare function fetch(url: string): void;
+            function main() {}
+            declare const API_KEY: string;
+        "#;
+        let module = parse_ok(source);
+        assert_eq!(
+            module.items.len(),
+            1,
+            "only the non-declared function should appear"
+        );
+        match &module.items[0].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "main"),
+            other => panic!("expected Function, got: {other:?}"),
+        }
+    }
+
+    // declare class with nested braces is skipped correctly
+    #[test]
+    fn test_parser_declare_class_nested_braces() {
+        let source = r#"
+            declare class Window {
+                document: { title: string; };
+                close(): void;
+            }
+            function main() {}
+        "#;
+        let module = parse_ok(source);
+        assert_eq!(
+            module.items.len(),
+            1,
+            "only the non-declared function should appear"
+        );
+        match &module.items[0].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "main"),
+            other => panic!("expected Function, got: {other:?}"),
+        }
     }
 }
