@@ -2518,10 +2518,10 @@ fn test_dynamic_import_emits_diagnostic() {
             .collect::<Vec<_>>()
     );
     assert!(
-        result.diagnostics.iter().any(|d| d
-            .message
-            .contains("dynamic import")
-            && d.message.contains("not supported")),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("dynamic import") && d.message.contains("not supported")),
         "expected diagnostic about dynamic import, got: {:?}",
         result
             .diagnostics
@@ -2709,5 +2709,176 @@ function main() {
     assert!(
         rust.contains("event: String") || rust.contains("event: EventName"),
         "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
+    );
+}
+
+// ===========================================================================
+//
+// CATEGORY: Array mutation methods (Task 140)
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// splice: arr.splice(start, deleteCount) → arr.drain(range).collect()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_splice_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30, 40, 50];
+  const removed: Array<i32> = items.splice(1, 2);
+  console.log(removed);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".drain("),
+        "splice should emit .drain(): {actual}"
+    );
+    assert!(
+        actual.contains(".collect"),
+        "splice should collect drained elements: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// copyWithin: arr.copyWithin(target, start, end) → arr.copy_within(range, target)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_copy_within_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [1, 2, 3, 4, 5];
+  items.copyWithin(0, 3, 5);
+  console.log(items);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".copy_within("),
+        "copyWithin should emit .copy_within(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific indexOf (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_index_of_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30, 40];
+  const idx: i64 = items.indexOf(30);
+  console.log(idx);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".position("),
+        "array indexOf should emit .iter().position(): {actual}"
+    );
+    assert!(
+        actual.contains("unwrap_or(-1)") || actual.contains("unwrap_or(- 1)"),
+        "array indexOf should default to -1: {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific lastIndexOf (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_last_index_of_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30, 20, 10];
+  const idx: i64 = items.lastIndexOf(20);
+  console.log(idx);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".rposition("),
+        "array lastIndexOf should emit .iter().rposition(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific includes (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_includes_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30];
+  const has_it: bool = items.includes(20);
+  console.log(has_it);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".contains("),
+        "array includes should emit .contains(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific at (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_at_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30];
+  const val = items.at(1);
+  console.log(val);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".get("),
+        "array at should emit .get(): {actual}"
+    );
+    assert!(
+        actual.contains(".cloned()"),
+        "array at should emit .cloned(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific slice (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_slice_snapshot() {
+    let source = "\
+function main() {
+  let items: Array<i32> = [10, 20, 30, 40, 50];
+  const sub: Array<i32> = items.slice(1, 3);
+  console.log(sub);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".to_vec()"),
+        "array slice should emit .to_vec(): {actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific concat (type-aware dispatch)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_array_concat_snapshot() {
+    let source = "\
+function main() {
+  let a: Array<i32> = [1, 2, 3];
+  let b: Array<i32> = [4, 5, 6];
+  const combined: Array<i32> = a.concat(b);
+  console.log(combined);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".concat()"),
+        "array concat should emit .concat(): {actual}"
     );
 }

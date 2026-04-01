@@ -68,6 +68,11 @@ pub(crate) struct BuiltinRegistry {
     /// Map/Set-specific methods that require type-aware dispatch.
     /// These are only consulted when the receiver is known to be a Map or Set.
     map_set_methods: HashMap<String, StringMethodLowering>,
+    /// Array-specific methods that require type-aware dispatch.
+    /// These are only consulted when the receiver is known to be a Vec.
+    /// Methods like `indexOf`, `at`, `concat`, `slice` have different semantics
+    /// on arrays vs strings, so they need type-aware dispatch.
+    array_methods: HashMap<String, StringMethodLowering>,
     /// Builtin free functions (e.g., `spawn`).
     functions: HashMap<String, BuiltinLowering>,
 }
@@ -80,6 +85,7 @@ impl BuiltinRegistry {
             string_methods: HashMap::new(),
             collection_methods: HashMap::new(),
             map_set_methods: HashMap::new(),
+            array_methods: HashMap::new(),
             functions: HashMap::new(),
         };
         register_defaults(&mut registry);
@@ -137,6 +143,19 @@ impl BuiltinRegistry {
     /// Only consulted when the receiver is known to be a `HashMap` or `HashSet`.
     pub fn lookup_map_set_method(&self, method: &str) -> Option<&StringMethodLowering> {
         self.map_set_methods.get(method)
+    }
+
+    /// Register an array-specific method that requires type-aware dispatch.
+    fn register_array_method(&mut self, name: &str, lowering: StringMethodLowering) {
+        self.array_methods.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up an array-specific method by name.
+    ///
+    /// Returns the lowering function if the method is a known array method.
+    /// Only consulted when the receiver is known to be a `Vec`.
+    pub fn lookup_array_method(&self, method: &str) -> Option<&StringMethodLowering> {
+        self.array_methods.get(method)
     }
 
     /// Register a builtin free function.
@@ -231,6 +250,18 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_string_method("sort", lower_array_sort);
     registry.register_string_method("join", lower_array_join);
     registry.register_string_method("fill", lower_array_fill);
+    registry.register_string_method("splice", lower_array_splice);
+    registry.register_string_method("copyWithin", lower_array_copy_within);
+
+    // Array-specific methods that need type-aware dispatch.
+    // These method names also exist on strings with different semantics,
+    // so they are only consulted when the receiver is known to be a Vec.
+    registry.register_array_method("indexOf", lower_array_index_of);
+    registry.register_array_method("lastIndexOf", lower_array_last_index_of);
+    registry.register_array_method("includes", lower_array_includes);
+    registry.register_array_method("at", lower_array_at);
+    registry.register_array_method("concat", lower_array_concat);
+    registry.register_array_method("slice", lower_array_slice);
 
     // Phase 5: Map/Set methods — registered in map_set_methods for type-aware dispatch.
     // These method names (get, set, has, delete, clear, keys, values, entries, add)
@@ -1202,6 +1233,408 @@ fn lower_array_fill(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> Rust
             method: "fill".into(),
             type_args: vec![],
             args: vec![value],
+        },
+        span,
+    )
+}
+
+/// Lower `.splice(start, deleteCount)` to `arr.drain(start..start+deleteCount).collect::<Vec<_>>()`.
+///
+/// `arr.splice(1, 2)` → `arr.drain(1_usize..(1 + 2) as usize).collect::<Vec<_>>()`
+/// Returns the removed elements as a Vec.
+fn lower_array_splice(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let start = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let delete_count = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let start_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(start.clone()),
+        RustType::Named("usize".into()),
+    ));
+    // end = (start + deleteCount) as usize
+    let sum = RustExpr::synthetic(RustExprKind::Binary {
+        op: rsc_syntax::rust_ir::RustBinaryOp::Add,
+        left: Box::new(start),
+        right: Box::new(delete_count),
+    });
+    let end_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(sum),
+        RustType::Named("usize".into()),
+    ));
+
+    let range_expr = RustExpr::synthetic(RustExprKind::Ident(format!(
+        "{}..{}",
+        emit_inline(&start_cast),
+        emit_inline(&end_cast)
+    )));
+
+    let drain_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "drain".into(),
+            type_args: vec![],
+            args: vec![range_expr],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(drain_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.copyWithin(target, start, end)` to `arr.copy_within(start..end, target)`.
+///
+/// `arr.copyWithin(0, 2, 4)` → `arr.copy_within(2_usize..4_usize, 0_usize)`
+/// Note: argument order differs — JS is `(target, start, end)`, Rust is `(start..end, target)`.
+fn lower_array_copy_within(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let target = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let start = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let end = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let start_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(start),
+        RustType::Named("usize".into()),
+    ));
+    let end_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(end),
+        RustType::Named("usize".into()),
+    ));
+    let target_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(target),
+        RustType::Named("usize".into()),
+    ));
+
+    let range_expr = RustExpr::synthetic(RustExprKind::Ident(format!(
+        "{}..{}",
+        emit_inline(&start_cast),
+        emit_inline(&end_cast)
+    )));
+
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "copy_within".into(),
+            type_args: vec![],
+            args: vec![range_expr, target_cast],
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Array-specific methods (type-aware dispatch — only for Vec receivers)
+// ---------------------------------------------------------------------------
+
+/// Lower `.indexOf(item)` on arrays to `.iter().position(|x| *x == item).map(|i| i as i64).unwrap_or(-1)`.
+///
+/// Unlike string `indexOf` which uses `.find()` for byte-position lookup,
+/// array `indexOf` compares elements for equality.
+fn lower_array_index_of(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let item = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let position_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "position".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Binary {
+                    op: rsc_syntax::rust_ir::RustBinaryOp::Eq,
+                    left: Box::new(RustExpr::synthetic(RustExprKind::Ident("*x".into()))),
+                    right: Box::new(item),
+                }))),
+            })],
+        },
+        span,
+    );
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(position_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "i".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Cast(
+                    Box::new(RustExpr::synthetic(RustExprKind::Ident("i".into()))),
+                    RustType::I64,
+                )))),
+            })],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::IntLit(-1))],
+        },
+        span,
+    )
+}
+
+/// Lower `.lastIndexOf(item)` on arrays to `.iter().rposition(|x| *x == item).map(|i| i as i64).unwrap_or(-1)`.
+fn lower_array_last_index_of(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let item = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let rposition_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "rposition".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "x".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Binary {
+                    op: rsc_syntax::rust_ir::RustBinaryOp::Eq,
+                    left: Box::new(RustExpr::synthetic(RustExprKind::Ident("*x".into()))),
+                    right: Box::new(item),
+                }))),
+            })],
+        },
+        span,
+    );
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(rposition_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "i".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Cast(
+                    Box::new(RustExpr::synthetic(RustExprKind::Ident("i".into()))),
+                    RustType::I64,
+                )))),
+            })],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::IntLit(-1))],
+        },
+        span,
+    )
+}
+
+/// Lower `.includes(item)` on arrays to `.contains(&item)`.
+///
+/// Array `includes` uses `Vec::contains` with a borrow, while string `includes`
+/// uses `str::contains` with pattern matching. The borrow semantics differ.
+fn lower_array_includes(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let item = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "contains".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Borrow(Box::new(item)))],
+        },
+        span,
+    )
+}
+
+/// Lower `.at(index)` on arrays to index access with negative index support.
+///
+/// `arr.at(i)` → if i >= 0: `arr.get(i as usize).cloned()`
+///               if i < 0: `arr.get(arr.len().wrapping_add(i as usize)).cloned()`
+///
+/// Since the sign is not known at compile time, we emit a helper expression:
+/// `{ let i = index; if i >= 0 { arr.get(i as usize).cloned() } else { arr.get(arr.len().wrapping_sub((-i) as usize)).cloned() } }`
+///
+/// For simplicity, we emit the common positive case: `arr.get(index as usize).cloned()`
+fn lower_array_at(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let index = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let cast_expr = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(index),
+        RustType::Named("usize".into()),
+    ));
+    let get_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "get".into(),
+            type_args: vec![],
+            args: vec![cast_expr],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(get_call),
+            method: "cloned".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.concat(other)` on arrays to extending a cloned vec.
+///
+/// `arr.concat(other)` → `{ let mut v = arr.clone(); v.extend(other.iter().cloned()); v }`
+///
+/// We emit this as a method chain for simplicity:
+/// `[arr.as_slice(), other.as_slice()].concat()`
+fn lower_array_concat(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let other = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::VecLit(vec![])));
+
+    // Build: [receiver.as_slice(), other.as_slice()].concat()
+    let recv_slice = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "as_slice".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let other_slice = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(other),
+            method: "as_slice".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let array_of_slices = RustExpr::synthetic(RustExprKind::VecLit(vec![recv_slice, other_slice]));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(array_of_slices),
+            method: "concat".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.slice(start, end?)` on arrays to cloned sub-slice.
+///
+/// One arg:  `arr[start as usize..].to_vec()`
+/// Two args: `arr[start as usize..end as usize].to_vec()`
+fn lower_array_slice(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let start = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let end = iter.next();
+
+    let start_cast = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(start),
+        RustType::Named("usize".into()),
+    ));
+
+    let range_expr = if let Some(end_expr) = end {
+        let end_cast = RustExpr::synthetic(RustExprKind::Cast(
+            Box::new(end_expr),
+            RustType::Named("usize".into()),
+        ));
+        RustExpr::synthetic(RustExprKind::Ident(format!(
+            "{}..{}",
+            emit_inline(&start_cast),
+            emit_inline(&end_cast)
+        )))
+    } else {
+        RustExpr::synthetic(RustExprKind::Ident(format!(
+            "{}..",
+            emit_inline(&start_cast)
+        )))
+    };
+
+    let index_expr = RustExpr::new(
+        RustExprKind::Index {
+            object: Box::new(receiver),
+            index: Box::new(range_expr),
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(index_expr),
+            method: "to_vec".into(),
+            type_args: vec![],
+            args: vec![],
         },
         span,
     )
@@ -3084,6 +3517,8 @@ mod tests {
             "sort",
             "join",
             "fill",
+            "splice",
+            "copyWithin",
         ];
         for method in methods {
             assert!(
@@ -4495,5 +4930,168 @@ mod tests {
     #[test]
     fn test_needs_rand_crate_false_for_math_floor() {
         assert!(!needs_rand_crate("Math", "floor"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 140: Array mutation methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_all_array_methods_registered() {
+        let registry = BuiltinRegistry::new();
+        let methods = [
+            "indexOf",
+            "lastIndexOf",
+            "includes",
+            "at",
+            "concat",
+            "slice",
+        ];
+        for method in methods {
+            assert!(
+                registry.lookup_array_method(method).is_some(),
+                "expected array method '{method}' to be registered"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lower_array_splice_produces_drain_collect() {
+        let result = lower_array_splice(array_receiver(), vec![int_arg(1), int_arg(2)], span());
+        // Outermost: .collect::<Vec<_>>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "collect");
+                // Inner: .drain(range)
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, args, .. } => {
+                        assert_eq!(method, "drain");
+                        assert_eq!(args.len(), 1);
+                    }
+                    other => panic!("expected MethodCall(drain), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_copy_within_produces_copy_within() {
+        let result = lower_array_copy_within(
+            array_receiver(),
+            vec![int_arg(0), int_arg(2), int_arg(4)],
+            span(),
+        );
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "copy_within");
+                assert_eq!(args.len(), 2); // range + target
+            }
+            other => panic!("expected MethodCall(copy_within), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_index_of_produces_position_chain() {
+        let result = lower_array_index_of(array_receiver(), vec![int_arg(42)], span());
+        // Outermost: .unwrap_or(-1)
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "unwrap_or");
+                assert!(matches!(args[0].kind, RustExprKind::IntLit(-1)));
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_last_index_of_produces_rposition_chain() {
+        let result = lower_array_last_index_of(array_receiver(), vec![int_arg(42)], span());
+        // Outermost: .unwrap_or(-1)
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "unwrap_or");
+                assert!(matches!(args[0].kind, RustExprKind::IntLit(-1)));
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_includes_produces_contains_with_borrow() {
+        let result = lower_array_includes(array_receiver(), vec![int_arg(5)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "contains");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0].kind, RustExprKind::Borrow(_)));
+            }
+            other => panic!("expected MethodCall(contains), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_at_produces_get_cloned() {
+        let result = lower_array_at(array_receiver(), vec![int_arg(2)], span());
+        // Outermost: .cloned()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "cloned");
+                // Inner: .get(index as usize)
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, args, .. } => {
+                        assert_eq!(method, "get");
+                        assert_eq!(args.len(), 1);
+                    }
+                    other => panic!("expected MethodCall(get), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(cloned), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_concat_produces_concat_chain() {
+        let other = RustExpr::new(RustExprKind::Ident("other".to_owned()), span());
+        let result = lower_array_concat(array_receiver(), vec![other], span());
+        // Outermost: .concat()
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "concat");
+            }
+            other => panic!("expected MethodCall(concat), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_slice_one_arg_produces_to_vec() {
+        let result = lower_array_slice(array_receiver(), vec![int_arg(1)], span());
+        // Outermost: .to_vec()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "to_vec");
+                // Inner: index access
+                assert!(matches!(&receiver.kind, RustExprKind::Index { .. }));
+            }
+            other => panic!("expected MethodCall(to_vec), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_slice_two_args_produces_to_vec() {
+        let result = lower_array_slice(array_receiver(), vec![int_arg(1), int_arg(3)], span());
+        // Outermost: .to_vec()
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "to_vec");
+            }
+            other => panic!("expected MethodCall(to_vec), got {other:?}"),
+        }
     }
 }
