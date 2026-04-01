@@ -38,6 +38,7 @@ fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_needs_async_runtime(expr),
         ast::Stmt::VarDecl(decl) => expr_needs_async_runtime(&decl.init),
+        ast::Stmt::Using(decl) => expr_needs_async_runtime(&decl.init),
         ast::Stmt::ArrayDestructure(adestr) => expr_needs_async_runtime(&adestr.init),
         ast::Stmt::If(if_stmt) => {
             expr_needs_async_runtime(&if_stmt.condition)
@@ -133,6 +134,7 @@ fn stmt_needs_futures(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_needs_futures(expr),
         ast::Stmt::VarDecl(decl) => expr_needs_futures(&decl.init),
+        ast::Stmt::Using(decl) => expr_needs_futures(&decl.init),
         ast::Stmt::ArrayDestructure(adestr) => expr_needs_futures(&adestr.init),
         ast::Stmt::If(if_stmt) => {
             expr_needs_futures(&if_stmt.condition)
@@ -193,6 +195,7 @@ fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_contains_await(expr),
         ast::Stmt::VarDecl(decl) => expr_contains_await(&decl.init),
+        ast::Stmt::Using(decl) => expr_contains_await(&decl.init),
         ast::Stmt::ArrayDestructure(adestr) => expr_contains_await(&adestr.init),
         ast::Stmt::If(if_stmt) => {
             expr_contains_await(&if_stmt.condition)

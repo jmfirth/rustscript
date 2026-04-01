@@ -797,6 +797,28 @@ pub enum Stmt {
     /// A raw Rust code block in a function body (`rust { ... }`).
     /// The contents are passed through to the generated `.rs` file unchanged.
     RustBlock(InlineRustBlock),
+    /// A `using` or `await using` declaration for explicit resource management.
+    /// Lowers to a normal `let` binding — Rust's RAII handles disposal via `Drop`.
+    Using(UsingDecl),
+}
+
+/// A `using` or `await using` declaration for explicit resource management.
+///
+/// Corresponds to TypeScript 5.2's `using x = expr` or `await using x = expr`.
+/// In Rust, RAII handles resource cleanup natively via the `Drop` trait, so these
+/// lower to plain `let` bindings.
+#[derive(Debug, Clone)]
+pub struct UsingDecl {
+    /// The variable name.
+    pub name: Ident,
+    /// The optional type annotation.
+    pub type_ann: Option<TypeAnnotation>,
+    /// The initializer expression.
+    pub init: Expr,
+    /// Whether this is an `await using` declaration.
+    pub is_await: bool,
+    /// The span covering the entire declaration.
+    pub span: Span,
 }
 
 /// A variable declaration with an initializer.

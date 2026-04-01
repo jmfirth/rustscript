@@ -5042,3 +5042,39 @@ function main() {
         "Object.fromEntries should generate .into_iter().collect::<HashMap<_, _>>(), got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// using / await using declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_using_lowers_to_let() {
+    let source = r#"
+function main() {
+  using file = openFile("data.txt");
+  console.log(file);
+}
+"#;
+    let actual = compile_to_rust(source);
+    // `using` should lower to a normal `let` binding — Rust RAII handles Drop
+    assert!(
+        actual.contains("let file = openFile("),
+        "using should lower to `let` binding, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_await_using_lowers_to_let() {
+    let source = r#"
+async function main() {
+  await using conn = getDbConnection();
+  console.log(conn);
+}
+"#;
+    let actual = compile_to_rust(source);
+    // `await using` should also lower to a normal `let` binding
+    assert!(
+        actual.contains("let conn = getDbConnection("),
+        "await using should lower to `let` binding, got:\n{actual}"
+    );
+}

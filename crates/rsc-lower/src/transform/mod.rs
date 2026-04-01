@@ -357,6 +357,12 @@ impl Transform {
                         self.resolve_and_register_type(ann, generic_names, &mut diags);
                     }
                 }
+                ast::Stmt::Using(decl) => {
+                    if let Some(ann) = &decl.type_ann {
+                        let mut diags = Vec::new();
+                        self.resolve_and_register_type(ann, generic_names, &mut diags);
+                    }
+                }
                 ast::Stmt::If(if_stmt) => {
                     self.scan_stmts_for_unions(&if_stmt.then_block.stmts, generic_names);
                     if let Some(else_clause) = &if_stmt.else_clause {
@@ -2460,6 +2466,19 @@ fn collect_locals_from_stmts(
             }
             ast::Stmt::ForIn(for_in) => {
                 collect_locals_from_stmts(&for_in.body.stmts, param_names, params, locals);
+            }
+            ast::Stmt::Using(decl) => {
+                if !param_names.contains(decl.name.name.as_str())
+                    && !locals.iter().any(|(n, _)| n == &decl.name.name)
+                {
+                    let ty = if let Some(ta) = decl.type_ann.as_ref() {
+                        let mut diags = Vec::new();
+                        resolve::resolve_type_annotation_to_rust_type(ta, &mut diags)
+                    } else {
+                        infer_generator_local_type(&decl.init, params, locals)
+                    };
+                    locals.push((decl.name.name.clone(), ty));
+                }
             }
             _ => {}
         }

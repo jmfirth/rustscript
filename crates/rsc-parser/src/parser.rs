@@ -18,7 +18,7 @@ use rsc_syntax::ast::{
     Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
     SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
     TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
+    UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -2615,6 +2615,31 @@ impl<'src> Parser<'src> {
             }
         }
 
+        // Check for `using ident =` (contextual keyword, not a reserved keyword)
+        if let TokenKind::Ident(name) = self.peek()
+            && name == "using"
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+        {
+            return self.parse_using_decl(false);
+        }
+
+        // Check for `await using ident =` (await is a real keyword)
+        if matches!(self.peek(), TokenKind::Await)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(name)) if name == "using"
+            )
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+        {
+            return self.parse_using_decl(true);
+        }
+
         match self.peek() {
             TokenKind::Const | TokenKind::Let => self.parse_var_decl(),
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
@@ -2709,6 +2734,61 @@ impl<'src> Parser<'src> {
             name,
             type_ann,
             init,
+            span: start.merge(end),
+        }))
+    }
+
+    /// Parse a `using` or `await using` declaration.
+    ///
+    /// `using name (: type)? = expr ;`
+    /// `await using name (: type)? = expr ;`
+    ///
+    /// Lowers to a normal `let` binding — Rust's RAII handles resource disposal.
+    fn parse_using_decl(&mut self, is_await: bool) -> Option<Stmt> {
+        let start = self.current_token().span;
+
+        if is_await {
+            self.advance(); // consume `await`
+        }
+        self.advance(); // consume `using` (contextual keyword ident)
+
+        let Some(name) = self.parse_ident() else {
+            self.synchronize();
+            return None;
+        };
+
+        // Optional type annotation
+        let type_ann = if self.eat(&TokenKind::Colon) {
+            let Some(t) = self.parse_type_annotation() else {
+                self.synchronize();
+                return None;
+            };
+            Some(t)
+        } else {
+            None
+        };
+
+        if self.expect(&TokenKind::Eq).is_none() {
+            self.synchronize();
+            return None;
+        }
+
+        let Some(init) = self.parse_expr() else {
+            self.synchronize();
+            return None;
+        };
+
+        let end = if let Some(semi) = self.expect(&TokenKind::Semicolon) {
+            semi.span
+        } else {
+            init.span
+        };
+
+        Some(Stmt::Using(UsingDecl {
+            name,
+            type_ann,
+            init,
+            is_await,
             span: start.merge(end),
         }))
     }
@@ -11237,6 +11317,86 @@ class Child extends Base {
                 }
             }
             other => panic!("expected TypeDef, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // using / await using declarations
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_using_declaration() {
+        let module = parse_ok("function main() { using x = getResource(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Using(decl) => {
+                assert_eq!(decl.name.name, "x");
+                assert!(!decl.is_await);
+                assert!(decl.type_ann.is_none());
+                match &decl.init.kind {
+                    ExprKind::Call(call) => {
+                        assert_eq!(call.callee.name, "getResource");
+                    }
+                    other => panic!("expected Call, got: {other:?}"),
+                }
+            }
+            other => panic!("expected Using, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_await_using_declaration() {
+        let module = parse_ok("function main() { await using conn = getDbConnection(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Using(decl) => {
+                assert_eq!(decl.name.name, "conn");
+                assert!(decl.is_await);
+                assert!(decl.type_ann.is_none());
+                match &decl.init.kind {
+                    ExprKind::Call(call) => {
+                        assert_eq!(call.callee.name, "getDbConnection");
+                    }
+                    other => panic!("expected Call, got: {other:?}"),
+                }
+            }
+            other => panic!("expected Using, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_using_with_type_annotation() {
+        let module = parse_ok("function main() { using f: File = openFile(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::Using(decl) => {
+                assert_eq!(decl.name.name, "f");
+                assert!(!decl.is_await);
+                assert!(decl.type_ann.is_some());
+            }
+            other => panic!("expected Using, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_using_not_confused_with_identifier() {
+        // `using` as a variable name in a call expression should not be parsed
+        // as a using declaration.
+        let module = parse_ok("function main() { using(42); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        // Should parse as expression statement (call to `using`), not Using decl
+        match stmt {
+            Stmt::Expr(expr) => match &expr.kind {
+                ExprKind::Call(call) => {
+                    assert_eq!(call.callee.name, "using");
+                }
+                other => panic!("expected Call expression, got: {other:?}"),
+            },
+            other => panic!("expected Expr statement, got: {other:?}"),
         }
     }
 }

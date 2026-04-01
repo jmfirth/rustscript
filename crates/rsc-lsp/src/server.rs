@@ -792,6 +792,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::Break(b) => b.span,
         Stmt::Continue(c) => c.span,
         Stmt::RustBlock(rb) => rb.span,
+        Stmt::Using(u) => u.span,
     }
 }
 
@@ -966,6 +967,31 @@ fn find_hover_in_stmts(
                     }
                 }
                 if let Some(info) = find_hover_in_expr(&a.init, pos, cache) {
+                    return Some(info);
+                }
+            }
+            Stmt::Using(decl) => {
+                if decl.name.span.contains(pos) {
+                    let keyword = if decl.is_await {
+                        "await using"
+                    } else {
+                        "using"
+                    };
+                    let type_str = if let Some(type_ann) = &decl.type_ann {
+                        format_type(type_ann)
+                    } else if let Some(ci) = cache
+                        && let Some(t) = ci.variable_types.get(&decl.name.name)
+                    {
+                        t.clone()
+                    } else {
+                        "(inferred)".to_owned()
+                    };
+                    return Some(format!(
+                        "```rustscript\n{keyword} {}: {type_str}\n```",
+                        decl.name.name
+                    ));
+                }
+                if let Some(info) = find_hover_in_expr(&decl.init, pos, cache) {
                     return Some(info);
                 }
             }
@@ -1632,6 +1658,13 @@ fn extract_inferred_var_types(
     use rsc_syntax::ast::Stmt;
     for stmt in stmts {
         if let Stmt::VarDecl(decl) = stmt
+            && decl.type_ann.is_none()
+            && !types.contains_key(&decl.name.name)
+            && let Some(type_str) = infer_literal_type_string(&decl.init.kind)
+        {
+            types.insert(decl.name.name.clone(), type_str);
+        }
+        if let Stmt::Using(decl) = stmt
             && decl.type_ann.is_none()
             && !types.contains_key(&decl.name.name)
             && let Some(type_str) = infer_literal_type_string(&decl.init.kind)

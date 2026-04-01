@@ -14,7 +14,7 @@ use rsc_syntax::ast::{
     OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation,
     StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind,
     TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr,
-    UnaryOp, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
+    UnaryOp, UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -870,7 +870,24 @@ impl Printer {
                 }
             }
             Stmt::RustBlock(rb) => self.print_rust_block(rb),
+            Stmt::Using(u) => self.print_using_decl(u),
         }
+    }
+
+    /// Print a `using` or `await using` declaration.
+    fn print_using_decl(&mut self, u: &UsingDecl) {
+        if u.is_await {
+            self.write("await ");
+        }
+        self.write("using ");
+        self.write(&u.name.name);
+        if let Some(ty) = &u.type_ann {
+            self.write(": ");
+            self.print_type_annotation(ty);
+        }
+        self.write(" = ");
+        self.print_expr(&u.init);
+        self.writeln(";");
     }
 
     /// Print a variable declaration.

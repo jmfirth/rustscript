@@ -49,6 +49,7 @@ fn stmt_uses_json(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_uses_json(expr),
         ast::Stmt::VarDecl(decl) => expr_uses_json(&decl.init),
+        ast::Stmt::Using(decl) => expr_uses_json(&decl.init),
         ast::Stmt::If(if_stmt) => {
             expr_uses_json(&if_stmt.condition)
                 || block_uses_json(&if_stmt.then_block)
@@ -102,6 +103,7 @@ fn stmt_uses_math_random(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_uses_math_random(expr),
         ast::Stmt::VarDecl(decl) => expr_uses_math_random(&decl.init),
+        ast::Stmt::Using(decl) => expr_uses_math_random(&decl.init),
         ast::Stmt::If(if_stmt) => {
             expr_uses_math_random(&if_stmt.condition)
                 || block_uses_math_random(&if_stmt.then_block)
@@ -158,6 +160,7 @@ fn stmt_uses_regexp(stmt: &ast::Stmt) -> bool {
             value: Some(expr), ..
         }) => expr_uses_regexp(expr),
         ast::Stmt::VarDecl(decl) => expr_uses_regexp(&decl.init),
+        ast::Stmt::Using(decl) => expr_uses_regexp(&decl.init),
         ast::Stmt::If(if_stmt) => {
             expr_uses_regexp(&if_stmt.condition)
                 || block_uses_regexp(&if_stmt.then_block)

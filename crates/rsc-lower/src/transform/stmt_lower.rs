@@ -148,6 +148,17 @@ impl Transform {
                 span: Some(cont.span),
             },
             ast::Stmt::RustBlock(rb) => RustStmt::RawRust(rb.code.clone()),
+            // `using`/`await using` → normal `let` binding (Rust RAII handles Drop)
+            ast::Stmt::Using(decl) => {
+                let equiv = ast::VarDecl {
+                    binding: ast::VarBinding::Const,
+                    name: decl.name.clone(),
+                    type_ann: decl.type_ann.clone(),
+                    init: decl.init.clone(),
+                    span: decl.span,
+                };
+                self.lower_var_decl(&equiv, ctx, use_map, stmt_index, reassigned)
+            }
         }
     }
 

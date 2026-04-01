@@ -273,3 +273,43 @@ fn compile_to_rust(source: &str) -> String {
     );
     result.rust_source
 }
+
+// ---------------------------------------------------------------------------
+// using / await using declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_roundtrip_idempotent_using_declaration() {
+    assert_idempotent(
+        "using_decl",
+        "function main() { using x = getResource(); }",
+    );
+}
+
+#[test]
+fn test_roundtrip_idempotent_await_using_declaration() {
+    assert_idempotent(
+        "await_using_decl",
+        "async function main() { await using conn = getDbConnection(); }",
+    );
+}
+
+#[test]
+fn test_format_using_outputs_using_keyword() {
+    let source = "function main() { using file = openFile(); }";
+    let formatted = rsc_fmt::format_source(source).expect("format failed");
+    assert!(
+        formatted.contains("using file = openFile();"),
+        "formatter should preserve `using` keyword, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_format_await_using_outputs_await_using_keyword() {
+    let source = "async function main() { await using conn = getConn(); }";
+    let formatted = rsc_fmt::format_source(source).expect("format failed");
+    assert!(
+        formatted.contains("await using conn = getConn();"),
+        "formatter should preserve `await using` keyword, got:\n{formatted}"
+    );
+}
