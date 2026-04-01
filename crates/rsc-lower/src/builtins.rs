@@ -281,6 +281,11 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
     registry.register_method("JSON", "parse", lower_json_parse, false);
+
+    // Phase 6: Static Array methods
+    registry.register_method("Array", "from", lower_array_from, false);
+    registry.register_method("Array", "isArray", lower_array_is_array, false);
+    registry.register_method("Array", "of", lower_array_of, false);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -2012,7 +2017,58 @@ fn lower_json_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
     )
 }
 
-/// Check whether an expression uses a `Math.*` constant property.
+// ---------------------------------------------------------------------------
+// Phase 6: Static Array method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `Array.from(iterable)` to `iterable.into_iter().collect::<Vec<_>>()`.
+///
+/// Converts any iterable argument into a `Vec` by chaining `.into_iter()` and
+/// `.collect::<Vec<_>>()`.
+fn lower_array_from(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::VecLit(vec![])));
+    let into_iter = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "into_iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(into_iter),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Array.isArray(x)` to `true`.
+///
+/// In RustScript, arrays are always `Vec`, so this is statically known to be
+/// `true` for any array argument. We emit the literal `true` directly.
+fn lower_array_is_array(_args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(RustExprKind::BoolLit(true), span)
+}
+
+/// Lower `Array.of(a, b, c)` to `vec![a, b, c]`.
+///
+/// Collects all arguments into a `VecLit` IR node that emits as `vec![...]`.
+fn lower_array_of(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(RustExprKind::VecLit(args), span)
+}
+
+/// Check whether an expression uses `Math.PI` or `Math.E` properties.
 ///
 /// This is called from the `FieldAccess` lowering in `expr_lower.rs` to
 /// intercept `Math.PI`, `Math.E`, `Math.LN2`, `Math.LN10`, `Math.LOG2E`,
@@ -4549,5 +4605,94 @@ mod tests {
     #[test]
     fn test_needs_rand_crate_false_for_math_floor() {
         assert!(!needs_rand_crate("Math", "floor"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 133: Static Array methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_array_from() {
+        let args = vec![RustExpr::new(
+            RustExprKind::Ident("items".to_owned()),
+            span(),
+        )];
+        let result = lower_array_from(args, span());
+        // Should produce: items.into_iter().collect::<Vec<_>>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                type_args,
+                ..
+            } => {
+                assert_eq!(method, "collect");
+                assert_eq!(type_args.len(), 1);
+                // Receiver should be .into_iter()
+                match &receiver.kind {
+                    RustExprKind::MethodCall {
+                        method: inner_method,
+                        receiver: inner_recv,
+                        ..
+                    } => {
+                        assert_eq!(inner_method, "into_iter");
+                        match &inner_recv.kind {
+                            RustExprKind::Ident(name) => assert_eq!(name, "items"),
+                            other => panic!("expected Ident, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected MethodCall(into_iter), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_is_array() {
+        let args = vec![RustExpr::new(RustExprKind::Ident("x".to_owned()), span())];
+        let result = lower_array_is_array(args, span());
+        match &result.kind {
+            RustExprKind::BoolLit(val) => assert!(val),
+            other => panic!("expected BoolLit(true), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_of() {
+        let args = vec![
+            RustExpr::new(RustExprKind::IntLit(1), span()),
+            RustExpr::new(RustExprKind::IntLit(2), span()),
+            RustExpr::new(RustExprKind::IntLit(3), span()),
+        ];
+        let result = lower_array_of(args, span());
+        match &result.kind {
+            RustExprKind::VecLit(elems) => {
+                assert_eq!(elems.len(), 3);
+                match &elems[0].kind {
+                    RustExprKind::IntLit(n) => assert_eq!(*n, 1),
+                    other => panic!("expected IntLit(1), got {other:?}"),
+                }
+            }
+            other => panic!("expected VecLit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_array_from() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Array", "from").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_array_is_array() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Array", "isArray").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_array_of() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Array", "of").is_some());
     }
 }

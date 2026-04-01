@@ -2441,7 +2441,11 @@ impl<'src> Parser<'src> {
                         "expected template literal type, found {}",
                         Self::describe_kind(&token.kind)
                     ))
-                    .with_label(token.span, self.file_id, "expected template literal"),
+                    .with_label(
+                        token.span,
+                        self.file_id,
+                        "expected template literal",
+                    ),
                 );
                 None
             }
@@ -2481,6 +2485,13 @@ impl<'src> Parser<'src> {
                 self.advance();
                 Some(Ident {
                     name: "in".to_owned(),
+                    span: token.span,
+                })
+            }
+            TokenKind::From => {
+                self.advance();
+                Some(Ident {
+                    name: "from".to_owned(),
                     span: token.span,
                 })
             }
@@ -6620,9 +6631,7 @@ mod tests {
         assert_eq!(quasis[0], "hello ");
         assert_eq!(quasis[1], "");
         assert_eq!(expressions.len(), 1);
-        assert!(
-            matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "name")
-        );
+        assert!(matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "name"));
     }
 
     // Test: Parse tagged template with multiple expressions
@@ -6648,12 +6657,8 @@ mod tests {
         assert_eq!(quasis[1], " and ");
         assert_eq!(quasis[2], "");
         assert_eq!(expressions.len(), 2);
-        assert!(
-            matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "a")
-        );
-        assert!(
-            matches!(&expressions[1].kind, ExprKind::Ident(ident) if ident.name == "b")
-        );
+        assert!(matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "a"));
+        assert!(matches!(&expressions[1].kind, ExprKind::Ident(ident) if ident.name == "b"));
     }
 
     // Test: Untagged template literal is not affected by tagged template parsing
@@ -11059,9 +11064,7 @@ class Child extends Base {
 
     #[test]
     fn test_parser_dynamic_import_expression() {
-        let module = parse_ok(
-            "function main() { const m = import(\"./utils\"); }",
-        );
+        let module = parse_ok("function main() { const m = import(\"./utils\"); }");
         let f = first_fn(&module);
         let stmt = first_stmt(f);
         if let Stmt::VarDecl(decl) = stmt {
@@ -11078,9 +11081,7 @@ class Child extends Base {
 
     #[test]
     fn test_parser_dynamic_import_with_await() {
-        let module = parse_ok(
-            "async function main() { const m = await import(\"./mod\"); }",
-        );
+        let module = parse_ok("async function main() { const m = await import(\"./mod\"); }");
         let f = first_fn(&module);
         let stmt = first_stmt(f);
         if let Stmt::VarDecl(decl) = stmt {
@@ -11115,9 +11116,7 @@ class Child extends Base {
 
     #[test]
     fn test_parser_dynamic_import_requires_string_literal() {
-        let (_module, diagnostics) = parse_source(
-            "function main() { const m = import(42); }",
-        );
+        let (_module, diagnostics) = parse_source("function main() { const m = import(42); }");
         assert!(
             !diagnostics.is_empty(),
             "expected diagnostic for non-string import argument"
