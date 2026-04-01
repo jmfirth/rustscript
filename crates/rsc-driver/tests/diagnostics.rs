@@ -221,3 +221,38 @@ function main() {
         "expected diagnostic to mention 'while' or 'expected', got: {messages:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Namespace diagnostic (Task 151)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_namespace_diagnostic_in_output() {
+    let source = "\
+namespace MyLib {
+  export function doStuff(): void {}
+}";
+
+    let messages = compile_diagnostics(source);
+
+    assert!(
+        !messages.is_empty(),
+        "expected at least one diagnostic for namespace"
+    );
+
+    let has_namespace = messages
+        .iter()
+        .any(|m| m.contains("namespaces are not supported"));
+    assert!(
+        has_namespace,
+        "expected diagnostic to mention 'namespaces are not supported', got: {messages:?}"
+    );
+
+    let has_suggestion = messages
+        .iter()
+        .any(|m| m.contains("import") && m.contains("export"));
+    assert!(
+        has_suggestion,
+        "expected diagnostic to suggest using import/export, got: {messages:?}"
+    );
+}
