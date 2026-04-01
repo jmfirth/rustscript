@@ -633,7 +633,8 @@ impl UseMap {
             | ast::ExprKind::This
             | ast::ExprKind::Super
             | ast::ExprKind::Closure(_)
-            | ast::ExprKind::DynamicImport(_) => {
+            | ast::ExprKind::DynamicImport(_)
+            | ast::ExprKind::RegexLit { .. } => {
                 // Closure bodies, `this`, and `super` are opaque for ownership
                 // analysis — variables captured by a closure are not tracked in
                 // the outer function's use map. This is the conservative Phase 1
@@ -1562,7 +1563,8 @@ fn collect_param_usage_expr(
         | ast::ExprKind::NullLit
         | ast::ExprKind::This
         | ast::ExprKind::Super
-        | ast::ExprKind::DynamicImport(_) => {}
+        | ast::ExprKind::DynamicImport(_)
+        | ast::ExprKind::RegexLit { .. } => {}
     }
 }
 
@@ -1728,7 +1730,8 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::NullLit
         | ast::ExprKind::This
         | ast::ExprKind::Super
-        | ast::ExprKind::DynamicImport(_) => {}
+        | ast::ExprKind::DynamicImport(_)
+        | ast::ExprKind::RegexLit { .. } => {}
     }
 }
 

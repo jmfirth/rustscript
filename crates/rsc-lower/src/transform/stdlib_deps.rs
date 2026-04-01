@@ -204,9 +204,10 @@ fn stmt_uses_regexp(stmt: &ast::Stmt) -> bool {
     }
 }
 
-/// Check if an expression uses `new RegExp()`.
+/// Check if an expression uses `new RegExp()` or a regex literal.
 fn expr_uses_regexp(expr: &ast::Expr) -> bool {
     match &expr.kind {
+        ast::ExprKind::RegexLit { .. } => return true,
         ast::ExprKind::New(new_expr) => {
             if crate::builtins::needs_regex_crate(&new_expr.type_name.name) {
                 return true;

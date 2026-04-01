@@ -1322,6 +1322,15 @@ pub enum ExprKind {
     /// Prefix decrement: `--i`.
     /// Lowers to `i -= 1`.
     PrefixDecrement(Box<Expr>),
+    /// A regex literal: `/pattern/flags`.
+    /// Lowers to `Regex::new("pattern").unwrap()` with flag conversion.
+    /// Flags `i`, `m`, `s` become inline flags `(?ims)`, `g` is ignored.
+    RegexLit {
+        /// The regex pattern between the delimiters.
+        pattern: String,
+        /// The flags after the closing delimiter (e.g., `gi`).
+        flags: String,
+    },
 }
 
 /// Logical assignment operators.

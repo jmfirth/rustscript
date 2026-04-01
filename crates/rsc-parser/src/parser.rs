@@ -74,6 +74,10 @@ pub(crate) struct Parser<'src> {
     /// Pending `JSDoc` comment from a `/** ... */` token. Drained and attached
     /// to the next declaration the parser encounters.
     pending_doc: Option<String>,
+    /// Spans of regex literals parsed from the source. Used to filter out
+    /// lexer diagnostics that fall within regex literal regions, since the
+    /// lexer cannot disambiguate `/` as regex vs division.
+    regex_literal_spans: Vec<Span>,
 }
 
 impl<'src> Parser<'src> {
@@ -88,12 +92,19 @@ impl<'src> Parser<'src> {
             block_depth: 0,
             source,
             pending_doc: None,
+            regex_literal_spans: Vec::new(),
         }
     }
 
     /// Consume the parser and return accumulated diagnostics.
     pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
+    }
+
+    /// Return the spans of any regex literals parsed from the source.
+    /// Used to filter out lexer diagnostics that fall within regex regions.
+    pub(crate) fn regex_literal_spans(&self) -> &[Span] {
+        &self.regex_literal_spans
     }
 
     /// Drain the pending `JSDoc` comment, if any, and return it.
@@ -5095,6 +5106,7 @@ impl<'src> Parser<'src> {
                     None
                 }
             }
+            TokenKind::Slash => self.parse_regex_literal(),
             TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
@@ -5155,6 +5167,96 @@ impl<'src> Parser<'src> {
                 None
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // ---------------------------------------------------------------
+    // Regex literals
+    // ---------------------------------------------------------------
+
+    /// Parse a regex literal: `/pattern/flags`.
+    ///
+    /// Called from `parse_primary` when a `Slash` token appears in expression-start
+    /// position — where a division operator is not expected. Rescans the source
+    /// text from the opening `/` to extract the pattern and flags.
+    fn parse_regex_literal(&mut self) -> Option<Expr> {
+        let slash_token = self.advance(); // consume the `Slash` token
+        let start = slash_token.span;
+        let src_start = start.start.0 as usize;
+
+        // Scan the source from just after the opening `/` for the pattern.
+        let source_bytes = self.source.as_bytes();
+        let mut i = src_start + 1; // skip the opening `/`
+        let mut pattern = String::new();
+
+        // Scan for the closing `/`, handling escape sequences.
+        loop {
+            if i >= source_bytes.len() {
+                self.diagnostics
+                    .push(Diagnostic::error("unterminated regex literal").with_label(
+                        start,
+                        self.file_id,
+                        "regex starts here",
+                    ));
+                return None;
+            }
+            let byte = source_bytes[i];
+            if byte == b'/' {
+                // Found the closing delimiter.
+                break;
+            }
+            if byte == b'\\' {
+                // Escape sequence: include both the backslash and the next char.
+                pattern.push('\\');
+                i += 1;
+                if i < source_bytes.len() {
+                    pattern.push(source_bytes[i] as char);
+                    i += 1;
+                }
+                continue;
+            }
+            if byte == b'\n' || byte == b'\r' {
+                self.diagnostics.push(
+                    Diagnostic::error("unterminated regex literal — newline in pattern")
+                        .with_label(start, self.file_id, "regex starts here"),
+                );
+                return None;
+            }
+            pattern.push(byte as char);
+            i += 1;
+        }
+
+        // `i` now points at the closing `/`. Skip it.
+        i += 1;
+
+        // Scan flags (identifier-like characters after the closing `/`).
+        let mut flags = String::new();
+        while i < source_bytes.len() && source_bytes[i].is_ascii_alphabetic() {
+            flags.push(source_bytes[i] as char);
+            i += 1;
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let end = i as u32;
+        let span = Span::new(start.start.0, end);
+
+        // Record this regex literal span so lexer diagnostics within it can be filtered.
+        self.regex_literal_spans.push(span);
+
+        // Skip past any tokens the lexer produced that fall within our regex literal span.
+        // The lexer would have tokenized the pattern content as various tokens.
+        while self.pos < self.tokens.len() {
+            let tok = &self.tokens[self.pos];
+            if tok.span.start.0 >= end || matches!(tok.kind, TokenKind::Eof) {
+                break;
+            }
+            self.pos += 1;
+        }
+
+        Some(Expr {
+            kind: ExprKind::RegexLit { pattern, flags },
+            span,
+        })
     }
 
     // ---------------------------------------------------------------
@@ -12437,6 +12539,100 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
                 );
             }
             other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Regex literal parsing (Task 154)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_regex_literal_simple() {
+        let module = parse_ok("function main() { const re = /hello/; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::RegexLit { pattern, flags } => {
+                    assert_eq!(pattern, "hello");
+                    assert!(flags.is_empty());
+                }
+                other => panic!("expected RegexLit, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_regex_literal_with_flags() {
+        let module = parse_ok("function main() { const re = /\\d+/gi; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::RegexLit { pattern, flags } => {
+                    assert_eq!(pattern, "\\d+");
+                    assert_eq!(flags, "gi");
+                }
+                other => panic!("expected RegexLit, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_regex_vs_division() {
+        // `a / b` in expression context should parse as division, not regex.
+        let module = parse_ok("function main() { const x = a / b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::Binary(bin) => {
+                    assert_eq!(bin.op, BinaryOp::Div);
+                }
+                other => panic!("expected Binary(Div), got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_regex_literal_with_escape() {
+        let module = parse_ok("function main() { const re = /foo\\/bar/; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::RegexLit { pattern, flags } => {
+                    assert_eq!(pattern, "foo\\/bar");
+                    assert!(flags.is_empty());
+                }
+                other => panic!("expected RegexLit, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_regex_literal_case_insensitive_flag() {
+        let module = parse_ok("function main() { const re = /pattern/i; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::RegexLit { pattern, flags } => {
+                    assert_eq!(pattern, "pattern");
+                    assert_eq!(flags, "i");
+                }
+                other => panic!("expected RegexLit, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
         }
     }
 }

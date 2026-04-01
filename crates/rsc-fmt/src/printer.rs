@@ -1301,6 +1301,12 @@ impl Printer {
                 self.write("--");
                 self.print_expr(operand);
             }
+            ExprKind::RegexLit { pattern, flags } => {
+                self.write("/");
+                self.write(pattern);
+                self.write("/");
+                self.write(flags);
+            }
         }
     }
 

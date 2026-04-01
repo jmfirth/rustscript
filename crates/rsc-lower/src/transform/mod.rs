@@ -9224,4 +9224,170 @@ function main() {}"#;
             other => panic!("expected Let, got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------
+    // Task 154: Regex literal syntax
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_regex_literal_simple() {
+        // /hello/ → Regex::new("hello").unwrap()
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("re", 0, 2),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::RegexLit {
+                        pattern: "hello".to_owned(),
+                        flags: String::new(),
+                    },
+                    span: span(0, 8),
+                },
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        // Should be: Regex::new("hello").unwrap()
+        match &let_stmt.init.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "unwrap");
+                match &receiver.kind {
+                    RustExprKind::StaticCall {
+                        type_name,
+                        method,
+                        args,
+                    } => {
+                        assert_eq!(type_name, "Regex");
+                        assert_eq!(method, "new");
+                        assert_eq!(args.len(), 1);
+                        assert!(
+                            matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "hello")
+                        );
+                    }
+                    other => panic!("expected StaticCall(Regex::new), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_regex_literal_with_flags() {
+        // /pattern/i → Regex::new("(?i)pattern").unwrap()
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("re", 0, 2),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::RegexLit {
+                        pattern: "pattern".to_owned(),
+                        flags: "i".to_owned(),
+                    },
+                    span: span(0, 11),
+                },
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        match &let_stmt.init.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "unwrap");
+                match &receiver.kind {
+                    RustExprKind::StaticCall {
+                        type_name,
+                        method,
+                        args,
+                    } => {
+                        assert_eq!(type_name, "Regex");
+                        assert_eq!(method, "new");
+                        assert_eq!(args.len(), 1);
+                        assert!(
+                            matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "(?i)pattern")
+                        );
+                    }
+                    other => panic!("expected StaticCall(Regex::new), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_regex_literal_global_flag_ignored() {
+        // /\d+/g → Regex::new("\\d+").unwrap() (g flag ignored)
+        let f = make_fn(
+            "main",
+            vec![],
+            None,
+            vec![Stmt::VarDecl(VarDecl {
+                binding: VarBinding::Const,
+                name: ident("re", 0, 2),
+                type_ann: None,
+                init: Expr {
+                    kind: ExprKind::RegexLit {
+                        pattern: "\\d+".to_owned(),
+                        flags: "g".to_owned(),
+                    },
+                    span: span(0, 7),
+                },
+                span: span(0, 20),
+            })],
+        );
+        let module = make_module(vec![fn_item(f)]);
+        let mut transform = Transform::new(false);
+        let (file, diags, _, _, _, _, _, _, _) = transform.lower_module(&module);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let RustItem::Function(func) = &file.items[0] else {
+            panic!("expected function");
+        };
+        let RustStmt::Let(let_stmt) = &func.body.stmts[0] else {
+            panic!("expected let");
+        };
+        match &let_stmt.init.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "unwrap");
+                match &receiver.kind {
+                    RustExprKind::StaticCall { args, .. } => {
+                        assert_eq!(args.len(), 1);
+                        // g flag ignored, pattern stays unchanged (no inline flags)
+                        assert!(matches!(&args[0].kind, RustExprKind::StringLit(s) if s == "\\d+"));
+                    }
+                    other => panic!("expected StaticCall(Regex::new), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap), got {other:?}"),
+        }
+    }
 }
