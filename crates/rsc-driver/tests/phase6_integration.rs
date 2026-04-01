@@ -2690,6 +2690,59 @@ function main() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Math constants — all 8 standard constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_math_constants_snapshot() {
+    let source = "\
+function main() {
+  console.log(Math.PI);
+  console.log(Math.E);
+  console.log(Math.LN2);
+  console.log(Math.LN10);
+  console.log(Math.LOG2E);
+  console.log(Math.LOG10E);
+  console.log(Math.SQRT2);
+  console.log(Math.SQRT1_2);
+}";
+
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("std::f64::consts::PI"),
+        "expected std::f64::consts::PI in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::E"),
+        "expected std::f64::consts::E in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::LN_2"),
+        "expected std::f64::consts::LN_2 in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::LN_10"),
+        "expected std::f64::consts::LN_10 in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::LOG2_E"),
+        "expected std::f64::consts::LOG2_E in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::LOG10_E"),
+        "expected std::f64::consts::LOG10_E in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::SQRT_2"),
+        "expected std::f64::consts::SQRT_2 in output:\n{rust}"
+    );
+    assert!(
+        rust.contains("std::f64::consts::FRAC_1_SQRT_2"),
+        "expected std::f64::consts::FRAC_1_SQRT_2 in output:\n{rust}"
+    );
+}
+
 #[test]
 fn test_template_literal_type_in_function_param() {
     let source = r#"type EventName = `on${string}`

@@ -2012,24 +2012,30 @@ fn lower_json_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
     )
 }
 
-/// Check whether an expression uses `Math.PI` or `Math.E` properties.
+/// Check whether an expression uses a `Math.*` constant property.
 ///
 /// This is called from the `FieldAccess` lowering in `expr_lower.rs` to
-/// intercept `Math.PI` and `Math.E` before they are lowered as normal
-/// field access expressions.
+/// intercept `Math.PI`, `Math.E`, `Math.LN2`, `Math.LN10`, `Math.LOG2E`,
+/// `Math.LOG10E`, `Math.SQRT2`, and `Math.SQRT1_2` before they are lowered
+/// as normal field access expressions.
 pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option<RustExpr> {
     if object_name != "Math" {
         return None;
     }
-    match field_name {
-        "PI" => Some(RustExpr::synthetic(RustExprKind::Ident(
-            "std::f64::consts::PI".into(),
-        ))),
-        "E" => Some(RustExpr::synthetic(RustExprKind::Ident(
-            "std::f64::consts::E".into(),
-        ))),
-        _ => None,
-    }
+    let rust_const = match field_name {
+        "PI" => "std::f64::consts::PI",
+        "E" => "std::f64::consts::E",
+        "LN2" => "std::f64::consts::LN_2",
+        "LN10" => "std::f64::consts::LN_10",
+        "LOG2E" => "std::f64::consts::LOG2_E",
+        "LOG10E" => "std::f64::consts::LOG10_E",
+        "SQRT2" => "std::f64::consts::SQRT_2",
+        "SQRT1_2" => "std::f64::consts::FRAC_1_SQRT_2",
+        _ => return None,
+    };
+    Some(RustExpr::synthetic(RustExprKind::Ident(
+        rust_const.into(),
+    )))
 }
 
 /// Check whether the given object and method pair uses JSON methods
@@ -4459,8 +4465,56 @@ mod tests {
     }
 
     #[test]
+    fn test_lower_math_constant_ln2() {
+        let result = lower_math_constant("Math", "LN2");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_2"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_ln10() {
+        let result = lower_math_constant("Math", "LN10");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_10"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_log2e() {
+        let result = lower_math_constant("Math", "LOG2E");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG2_E"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_log10e() {
+        let result = lower_math_constant("Math", "LOG10E");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG10_E"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_sqrt2() {
+        let result = lower_math_constant("Math", "SQRT2");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::SQRT_2"));
+    }
+
+    #[test]
+    fn test_lower_math_constant_sqrt1_2() {
+        let result = lower_math_constant("Math", "SQRT1_2");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::FRAC_1_SQRT_2"));
+    }
+
+    #[test]
     fn test_lower_math_constant_unknown_returns_none() {
-        assert!(lower_math_constant("Math", "LN2").is_none());
+        assert!(lower_math_constant("Math", "TAU").is_none());
     }
 
     #[test]

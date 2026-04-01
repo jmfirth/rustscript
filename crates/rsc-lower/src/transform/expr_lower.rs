@@ -155,7 +155,7 @@ impl Transform {
                     )));
                 }
 
-                // Math.PI / Math.E → std::f64::consts::PI / E
+                // Math.PI / Math.E / Math.LN2 / … → std::f64::consts::*
                 if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
                     && let Some(constant_expr) =
                         crate::builtins::lower_math_constant(&obj_ident.name, field_name)

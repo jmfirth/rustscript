@@ -56,7 +56,7 @@ static BUILTIN_IDENTIFIERS: LazyLock<HashMap<&'static str, BuiltinHover>> = Lazy
     m.insert(
         "Math",
         BuiltinHover {
-            markdown: "```rustscript\nobject Math\n```\n\nMathematical constants and functions.\n\n- `Math.floor(x)` --- `x.floor()`\n- `Math.ceil(x)` --- `x.ceil()`\n- `Math.round(x)` --- `x.round()`\n- `Math.abs(x)` --- `x.abs()`\n- `Math.sqrt(x)` --- `x.sqrt()`\n- `Math.min(a, b)` --- `a.min(b)`\n- `Math.max(a, b)` --- `a.max(b)`\n- `Math.random()` --- `rand::random::<f64>()`\n- `Math.PI` --- `std::f64::consts::PI`\n- `Math.E` --- `std::f64::consts::E`",
+            markdown: "```rustscript\nobject Math\n```\n\nMathematical constants and functions.\n\n- `Math.floor(x)` --- `x.floor()`\n- `Math.ceil(x)` --- `x.ceil()`\n- `Math.round(x)` --- `x.round()`\n- `Math.abs(x)` --- `x.abs()`\n- `Math.sqrt(x)` --- `x.sqrt()`\n- `Math.min(a, b)` --- `a.min(b)`\n- `Math.max(a, b)` --- `a.max(b)`\n- `Math.random()` --- `rand::random::<f64>()`\n- `Math.PI` --- `std::f64::consts::PI`\n- `Math.E` --- `std::f64::consts::E`\n- `Math.LN2` --- `std::f64::consts::LN_2`\n- `Math.LN10` --- `std::f64::consts::LN_10`\n- `Math.LOG2E` --- `std::f64::consts::LOG2_E`\n- `Math.LOG10E` --- `std::f64::consts::LOG10_E`\n- `Math.SQRT2` --- `std::f64::consts::SQRT_2`\n- `Math.SQRT1_2` --- `std::f64::consts::FRAC_1_SQRT_2`",
         },
     );
 
