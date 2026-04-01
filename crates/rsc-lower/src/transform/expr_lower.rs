@@ -200,7 +200,15 @@ impl Transform {
                 tag,
                 quasis,
                 expressions,
-            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
+            } => self.lower_tagged_template(
+                tag,
+                quasis,
+                expressions,
+                expr.span,
+                ctx,
+                use_map,
+                stmt_index,
+            ),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -682,9 +690,9 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::Macro {
                         name: "panic".to_owned(),
-                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
-                            format!("dynamic import not supported: {module}"),
-                        ))],
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(format!(
+                            "dynamic import not supported: {module}"
+                        )))],
                     },
                     expr.span,
                 )
@@ -1260,6 +1268,23 @@ impl Transform {
             if is_set && mc.method.name == "has" {
                 return crate::builtins::lower_set_has(receiver, lowered_args, span);
             }
+            return lowering_fn(receiver, lowered_args, span);
+        }
+
+        // Check for Regex method: type-aware dispatch for methods like
+        // test/exec that would conflict with user-defined methods if
+        // dispatched by name alone.
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+            && matches!(&var_info.ty, RustType::Named(n) if n == "Regex")
+            && let Some(lowering_fn) = self.builtins.lookup_regex_method(&mc.method.name)
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
             return lowering_fn(receiver, lowered_args, span);
         }
 
@@ -1844,6 +1869,29 @@ impl Transform {
                 // `new Array()` → `vec![]` (empty vec literal)
                 RustExpr::new(RustExprKind::VecLit(args), span)
             }
+            "Regex" => {
+                // `new RegExp("pattern")` → `Regex::new("pattern").unwrap()`
+                // `new RegExp("pattern", "gi")` → `Regex::new("(?i)pattern").unwrap()`
+                // Flags: i → (?i), m → (?m), s → (?s), g → ignored (affects method choice)
+                let pattern_arg = Self::build_regex_pattern_arg(&new_expr.args, &args, span);
+                let new_call = RustExpr::new(
+                    RustExprKind::StaticCall {
+                        type_name: "Regex".to_owned(),
+                        method: "new".to_owned(),
+                        args: vec![pattern_arg],
+                    },
+                    span,
+                );
+                RustExpr::new(
+                    RustExprKind::MethodCall {
+                        receiver: Box::new(new_call),
+                        method: "unwrap".to_owned(),
+                        type_args: vec![],
+                        args: vec![],
+                    },
+                    span,
+                )
+            }
             _ => {
                 // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`
                 // `new ClassName(args)` → `ClassName::new(args)` (class constructor)
@@ -1858,6 +1906,75 @@ impl Transform {
             }
         }
     }
+
+    /// Build the pattern argument for `Regex::new()`, incorporating flags.
+    ///
+    /// If the second argument to `new RegExp(pattern, flags)` is a string literal
+    /// containing JS regex flags, converts them to Rust regex inline flags:
+    /// `i` → `(?i)`, `m` → `(?m)`, `s` → `(?s)`, `g` → ignored.
+    /// The flags are prepended to the pattern string.
+    fn build_regex_pattern_arg(
+        raw_args: &[rsc_syntax::ast::Expr],
+        lowered_args: &[RustExpr],
+        span: rsc_syntax::span::Span,
+    ) -> RustExpr {
+        // Strip ToString wrapper — Regex::new() takes &str, not String
+        let pattern = if let Some(expr) = lowered_args.first().cloned() {
+            if let RustExprKind::ToString(inner) = expr.kind {
+                *inner
+            } else {
+                expr
+            }
+        } else {
+            RustExpr::synthetic(RustExprKind::StringLit(String::new()))
+        };
+
+        // Check for flags in the second argument (raw AST, not lowered)
+        let flags_str = raw_args.get(1).and_then(|expr| {
+            if let rsc_syntax::ast::ExprKind::StringLit(s) = &expr.kind {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        });
+
+        if let Some(flags) = flags_str {
+            // Convert JS flags to Rust regex inline flags
+            let mut rust_flags = String::new();
+            for ch in flags.chars() {
+                match ch {
+                    'i' | 'm' | 's' => rust_flags.push(ch),
+                    _ => {} // Ignored: g=global, u=unicode, y=sticky, d=indices
+                }
+            }
+
+            if !rust_flags.is_empty() {
+                // If the pattern is a string literal, prepend the flags inline
+                if let RustExprKind::StringLit(ref pat) = pattern.kind {
+                    return RustExpr::new(
+                        RustExprKind::StringLit(format!("(?{rust_flags}){pat}")),
+                        span,
+                    );
+                }
+                // For non-literal patterns, use format! to prepend flags
+                return RustExpr::new(
+                    RustExprKind::Macro {
+                        name: "format".into(),
+                        args: vec![
+                            RustExpr::synthetic(RustExprKind::StringLit(format!(
+                                "(?{rust_flags}){{}}"
+                            ))),
+                            pattern,
+                        ],
+                    },
+                    span,
+                );
+            }
+        }
+
+        pattern
+    }
+
     /// Lower a `super.method(args)` call.
     ///
     /// Constructs a temporary base class instance from the inherited fields

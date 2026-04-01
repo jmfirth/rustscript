@@ -68,6 +68,9 @@ pub(crate) struct BuiltinRegistry {
     /// Map/Set-specific methods that require type-aware dispatch.
     /// These are only consulted when the receiver is known to be a Map or Set.
     map_set_methods: HashMap<String, StringMethodLowering>,
+    /// Regex-specific methods that require type-aware dispatch.
+    /// These are only consulted when the receiver is known to be a `Regex`.
+    regex_methods: HashMap<String, StringMethodLowering>,
     /// Builtin free functions (e.g., `spawn`).
     functions: HashMap<String, BuiltinLowering>,
 }
@@ -80,6 +83,7 @@ impl BuiltinRegistry {
             string_methods: HashMap::new(),
             collection_methods: HashMap::new(),
             map_set_methods: HashMap::new(),
+            regex_methods: HashMap::new(),
             functions: HashMap::new(),
         };
         register_defaults(&mut registry);
@@ -137,6 +141,19 @@ impl BuiltinRegistry {
     /// Only consulted when the receiver is known to be a `HashMap` or `HashSet`.
     pub fn lookup_map_set_method(&self, method: &str) -> Option<&StringMethodLowering> {
         self.map_set_methods.get(method)
+    }
+
+    /// Register a Regex-specific method that requires type-aware dispatch.
+    fn register_regex_method(&mut self, name: &str, lowering: StringMethodLowering) {
+        self.regex_methods.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up a Regex method by name.
+    ///
+    /// Returns the lowering function if the method is a known Regex method.
+    /// Only consulted when the receiver is known to be a `Regex`.
+    pub fn lookup_regex_method(&self, method: &str) -> Option<&StringMethodLowering> {
+        self.regex_methods.get(method)
     }
 
     /// Register a builtin free function.
@@ -281,6 +298,12 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
     registry.register_method("JSON", "parse", lower_json_parse, false);
+
+    // RegExp methods — registered in regex_methods for type-aware dispatch.
+    // Method names like `test` and `exec` are common and would conflict
+    // with user-defined class methods if registered as string methods.
+    registry.register_regex_method("test", lower_regexp_test);
+    registry.register_regex_method("exec", lower_regexp_exec);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -2042,6 +2065,57 @@ pub(crate) fn needs_serde_json(object: &str, method: &str) -> bool {
 /// which requires the `rand` crate.
 pub(crate) fn needs_rand_crate(object: &str, method: &str) -> bool {
     object == "Math" && method == "random"
+}
+
+/// Check whether a `new` expression constructs a `RegExp`, requiring the `regex` crate.
+pub(crate) fn needs_regex_crate(type_name: &str) -> bool {
+    type_name == "RegExp"
+}
+
+// ---------------------------------------------------------------------------
+// RegExp method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `regex.test(str)` to `regex.is_match(&str)`.
+///
+/// `RegExp.prototype.test()` returns a boolean indicating whether the pattern
+/// matches the given string. The Rust `regex` crate equivalent is `is_match`.
+fn lower_regexp_test(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let borrow_arg = RustExpr::synthetic(RustExprKind::Borrow(Box::new(arg)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "is_match".into(),
+            type_args: vec![],
+            args: vec![borrow_arg],
+        },
+        span,
+    )
+}
+
+/// Lower `regex.exec(str)` to `regex.captures(&str)`.
+///
+/// `RegExp.prototype.exec()` returns an array of capture groups or null.
+/// The Rust `regex` crate equivalent is `captures`, which returns `Option<Captures>`.
+fn lower_regexp_exec(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let borrow_arg = RustExpr::synthetic(RustExprKind::Borrow(Box::new(arg)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "captures".into(),
+            type_args: vec![],
+            args: vec![borrow_arg],
+        },
+        span,
+    )
 }
 
 /// Inline emit a `RustExpr` to a Rust code string (mini-emitter for range expressions).
@@ -4495,5 +4569,79 @@ mod tests {
     #[test]
     fn test_needs_rand_crate_false_for_math_floor() {
         assert!(!needs_rand_crate("Math", "floor"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 130: RegExp class support
+    // ---------------------------------------------------------------
+
+    fn regex_receiver() -> RustExpr {
+        RustExpr::new(RustExprKind::Ident("re".to_owned()), span())
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_regex_method_test_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_regex_method("test").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_regex_method_exec_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_regex_method("exec").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_regex_method_unknown_returns_none() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_regex_method("foo").is_none());
+    }
+
+    #[test]
+    fn test_lower_regexp_test() {
+        let result = lower_regexp_test(regex_receiver(), vec![string_arg("hello")], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "is_match");
+                assert!(matches!(&receiver.kind, RustExprKind::Ident(name) if name == "re"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].kind, RustExprKind::Borrow(_)));
+            }
+            other => panic!("expected MethodCall(is_match), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_regexp_exec() {
+        let result = lower_regexp_exec(regex_receiver(), vec![string_arg("hello")], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "captures");
+                assert!(matches!(&receiver.kind, RustExprKind::Ident(name) if name == "re"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].kind, RustExprKind::Borrow(_)));
+            }
+            other => panic!("expected MethodCall(captures), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_needs_regex_crate_true_for_regexp() {
+        assert!(needs_regex_crate("RegExp"));
+    }
+
+    #[test]
+    fn test_needs_regex_crate_false_for_map() {
+        assert!(!needs_regex_crate("Map"));
     }
 }

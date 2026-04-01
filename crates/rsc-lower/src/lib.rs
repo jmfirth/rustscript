@@ -47,9 +47,9 @@ pub struct LowerOptions {
 /// Result of lowering a single module.
 ///
 /// Groups the Rust IR, diagnostics, external crate dependencies, and
-/// whether the module needs an async runtime, futures, `serde_json`, serde, or rand crate.
+/// whether the module needs an async runtime, futures, `serde_json`, serde, rand, or regex crate.
 #[allow(clippy::struct_excessive_bools)]
-// Five boolean flags for independent crate dependency tracking
+// Six boolean flags for independent crate dependency tracking
 pub struct LowerResult {
     /// The generated Rust IR.
     pub ir: RustFile,
@@ -69,6 +69,8 @@ pub struct LowerResult {
     /// Whether any type, enum, or class uses `derives Serialize` or `derives Deserialize`,
     /// requiring `serde = { version = "1", features = ["derive"] }`.
     pub needs_serde: bool,
+    /// Whether the source uses `new RegExp()` and needs the `regex` crate.
+    pub needs_regex: bool,
 }
 
 /// Lower a `RustScript` AST to Rust IR.
@@ -99,6 +101,7 @@ pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> Lower
         needs_serde_json,
         needs_rand,
         needs_serde,
+        needs_regex,
     ) = transform.lower_module(module);
     let crate_dependencies: Vec<CrateDependency> = crate_deps.into_iter().collect();
     LowerResult {
@@ -110,5 +113,6 @@ pub fn lower_with_options(module: &ast::Module, options: &LowerOptions) -> Lower
         needs_serde_json,
         needs_rand,
         needs_serde,
+        needs_regex,
     }
 }

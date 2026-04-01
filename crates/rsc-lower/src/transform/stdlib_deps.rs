@@ -130,6 +130,74 @@ fn stmt_uses_math_random(stmt: &ast::Stmt) -> bool {
     }
 }
 
+/// Check if a module uses `new RegExp()`.
+pub(super) fn module_needs_regex(module: &ast::Module) -> bool {
+    module.items.iter().any(|item| match &item.kind {
+        ast::ItemKind::Function(f) => block_uses_regexp(&f.body),
+        ast::ItemKind::Class(cls) => cls.members.iter().any(|m| {
+            if let ast::ClassMember::Method(method) = m {
+                block_uses_regexp(&method.body)
+            } else {
+                false
+            }
+        }),
+        _ => false,
+    })
+}
+
+/// Recursively scan a block for `new RegExp()` usage.
+fn block_uses_regexp(block: &ast::Block) -> bool {
+    block.stmts.iter().any(stmt_uses_regexp)
+}
+
+/// Check if a statement uses `new RegExp()`.
+fn stmt_uses_regexp(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Expr(expr)
+        | ast::Stmt::Return(ast::ReturnStmt {
+            value: Some(expr), ..
+        }) => expr_uses_regexp(expr),
+        ast::Stmt::VarDecl(decl) => expr_uses_regexp(&decl.init),
+        ast::Stmt::If(if_stmt) => {
+            expr_uses_regexp(&if_stmt.condition)
+                || block_uses_regexp(&if_stmt.then_block)
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::Block(b)) if block_uses_regexp(b))
+                || matches!(&if_stmt.else_clause, Some(ast::ElseClause::ElseIf(elif)) if stmt_uses_regexp(&ast::Stmt::If(*elif.clone())))
+        }
+        ast::Stmt::While(w) => expr_uses_regexp(&w.condition) || block_uses_regexp(&w.body),
+        ast::Stmt::DoWhile(dw) => block_uses_regexp(&dw.body) || expr_uses_regexp(&dw.condition),
+        ast::Stmt::For(f) => expr_uses_regexp(&f.iterable) || block_uses_regexp(&f.body),
+        ast::Stmt::ForIn(f) => expr_uses_regexp(&f.iterable) || block_uses_regexp(&f.body),
+        ast::Stmt::TryCatch(tc) => {
+            block_uses_regexp(&tc.try_block)
+                || tc.catch_block.as_ref().is_some_and(block_uses_regexp)
+                || tc.finally_block.as_ref().is_some_and(block_uses_regexp)
+        }
+        _ => false,
+    }
+}
+
+/// Check if an expression uses `new RegExp()`.
+fn expr_uses_regexp(expr: &ast::Expr) -> bool {
+    match &expr.kind {
+        ast::ExprKind::New(new_expr) => {
+            if crate::builtins::needs_regex_crate(&new_expr.type_name.name) {
+                return true;
+            }
+            new_expr.args.iter().any(expr_uses_regexp)
+        }
+        ast::ExprKind::MethodCall(mc) => {
+            expr_uses_regexp(&mc.object) || mc.args.iter().any(expr_uses_regexp)
+        }
+        ast::ExprKind::Call(call) => call.args.iter().any(expr_uses_regexp),
+        ast::ExprKind::Binary(bin) => expr_uses_regexp(&bin.left) || expr_uses_regexp(&bin.right),
+        ast::ExprKind::Unary(un) => expr_uses_regexp(&un.operand),
+        ast::ExprKind::Paren(inner) | ast::ExprKind::Await(inner) => expr_uses_regexp(inner),
+        ast::ExprKind::Assign(assign) => expr_uses_regexp(&assign.value),
+        _ => false,
+    }
+}
+
 /// Check if an expression uses `Math.random()`.
 fn expr_uses_math_random(expr: &ast::Expr) -> bool {
     match &expr.kind {
@@ -240,5 +308,37 @@ mod tests {
     fn test_module_does_not_need_rand_for_math_floor() {
         let module = make_module_with_stmts(vec![make_method_call("Math", "floor")]);
         assert!(!module_needs_rand(&module));
+    }
+
+    fn make_new_expr_stmt(type_name: &str) -> Stmt {
+        Stmt::VarDecl(VarDecl {
+            binding: VarBinding::Const,
+            name: ident("re"),
+            type_ann: None,
+            init: Expr {
+                kind: ExprKind::New(NewExpr {
+                    type_name: ident(type_name),
+                    type_args: vec![],
+                    args: vec![Expr {
+                        kind: ExprKind::StringLit("\\d+".to_owned()),
+                        span: span(),
+                    }],
+                }),
+                span: span(),
+            },
+            span: span(),
+        })
+    }
+
+    #[test]
+    fn test_module_needs_regex_for_new_regexp() {
+        let module = make_module_with_stmts(vec![make_new_expr_stmt("RegExp")]);
+        assert!(module_needs_regex(&module));
+    }
+
+    #[test]
+    fn test_module_does_not_need_regex_for_new_map() {
+        let module = make_module_with_stmts(vec![make_new_expr_stmt("Map")]);
+        assert!(!module_needs_regex(&module));
     }
 }

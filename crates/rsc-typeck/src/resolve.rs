@@ -31,6 +31,7 @@ pub fn resolve_type_name(name: &str) -> Option<Type> {
         "bool" => Some(Type::Primitive(PrimitiveType::Bool)),
         "string" => Some(Type::String),
         "void" => Some(Type::Unit),
+        "RegExp" => Some(Type::Named("Regex".to_owned())),
         _ => None,
     }
 }
@@ -749,8 +750,7 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         ast::TypeKind::Union(members) | ast::TypeKind::Intersection(members) => {
             members.iter().any(ast_contains_infer)
         }
-        ast::TypeKind::Tuple(types)
-        | ast::TypeKind::TemplateLiteralType { types, .. } => {
+        ast::TypeKind::Tuple(types) | ast::TypeKind::TemplateLiteralType { types, .. } => {
             types.iter().any(ast_contains_infer)
         }
         ast::TypeKind::Conditional {
@@ -813,6 +813,7 @@ pub fn map_collection_type_name(name: &str) -> String {
         "Array" | "ReadonlyArray" => "Vec".to_owned(),
         "Map" => "HashMap".to_owned(),
         "Set" => "HashSet".to_owned(),
+        "RegExp" => "Regex".to_owned(),
         other => other.to_owned(),
     }
 }

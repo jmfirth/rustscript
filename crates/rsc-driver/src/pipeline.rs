@@ -12,7 +12,7 @@ use rsc_syntax::span::Span;
 
 /// Result of compiling a single `RustScript` source file.
 #[allow(clippy::struct_excessive_bools)]
-// Five independent boolean flags for crate dependency tracking
+// Six independent boolean flags for crate dependency tracking
 pub struct CompileResult {
     /// The generated Rust source code (empty if compilation failed).
     pub rust_source: String,
@@ -34,6 +34,8 @@ pub struct CompileResult {
     /// Whether any type/enum/class uses `derives Serialize` or `derives Deserialize`,
     /// requiring the `serde` crate with derive feature.
     pub needs_serde: bool,
+    /// Whether the compiled code uses `new RegExp()` and needs the `regex` crate.
+    pub needs_regex: bool,
     /// External crate dependencies discovered from import statements.
     /// The driver adds these to the generated Cargo.toml.
     pub crate_dependencies: Vec<rsc_lower::CrateDependency>,
@@ -94,6 +96,7 @@ pub fn compile_source_with_options(
             needs_serde_json: false,
             needs_rand: false,
             needs_serde: false,
+            needs_regex: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -119,6 +122,7 @@ pub fn compile_source_with_options(
             needs_serde_json: false,
             needs_rand: false,
             needs_serde: false,
+            needs_regex: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -139,6 +143,7 @@ pub fn compile_source_with_options(
         needs_serde_json: lower_result.needs_serde_json,
         needs_rand: lower_result.needs_rand,
         needs_serde: lower_result.needs_serde,
+        needs_regex: lower_result.needs_regex,
         crate_dependencies: lower_result.crate_dependencies,
         source_map_lines: emit_result.source_map,
     }
@@ -186,6 +191,7 @@ pub fn compile_source_with_mods_and_options(
             needs_serde_json: false,
             needs_rand: false,
             needs_serde: false,
+            needs_regex: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -211,6 +217,7 @@ pub fn compile_source_with_mods_and_options(
             needs_serde_json: false,
             needs_rand: false,
             needs_serde: false,
+            needs_regex: false,
             crate_dependencies: Vec::new(),
             source_map_lines: Vec::new(),
         };
@@ -235,6 +242,7 @@ pub fn compile_source_with_mods_and_options(
         needs_serde_json: lower_result.needs_serde_json,
         needs_rand: lower_result.needs_rand,
         needs_serde: lower_result.needs_serde,
+        needs_regex: lower_result.needs_regex,
         crate_dependencies: lower_result.crate_dependencies,
         source_map_lines: emit_result.source_map,
     }
