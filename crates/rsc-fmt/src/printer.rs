@@ -451,6 +451,18 @@ impl Printer {
                 self.write("readonly ");
                 self.print_type_annotation(inner);
             }
+            TypeKind::TemplateLiteralType { quasis, types } => {
+                self.write("`");
+                for (i, quasi) in quasis.iter().enumerate() {
+                    self.write(quasi);
+                    if i < types.len() {
+                        self.write("${");
+                        self.print_type_annotation(&types[i]);
+                        self.write("}");
+                    }
+                }
+                self.write("`");
+            }
         }
     }
 

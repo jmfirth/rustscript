@@ -2266,6 +2266,9 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+            TokenKind::TemplateNoSub(_) | TokenKind::TemplateHead(_) => {
+                self.parse_template_literal_type()
+            }
             _ => {
                 self.diagnostics.push(
                     Diagnostic::error(format!(
@@ -2358,6 +2361,91 @@ impl<'src> Parser<'src> {
             kind: TypeKind::Tuple(types),
             span,
         })
+    }
+
+    /// Parse a template literal type: `` `hello ${string}` `` in type position.
+    ///
+    /// Template literal types represent compile-time string patterns in TypeScript.
+    /// They lower to `String` in Rust since Rust's type system cannot express string patterns.
+    /// The parser produces `TypeKind::TemplateLiteralType { quasis, types }` where
+    /// `quasis` are the static string fragments and `types` are the interpolated type annotations.
+    fn parse_template_literal_type(&mut self) -> Option<TypeAnnotation> {
+        let token = self.current_token().clone();
+        match &token.kind {
+            TokenKind::TemplateNoSub(text) => {
+                // No interpolation: `` `hello` ``
+                let text = text.clone();
+                self.advance();
+                Some(TypeAnnotation {
+                    kind: TypeKind::TemplateLiteralType {
+                        quasis: vec![text],
+                        types: Vec::new(),
+                    },
+                    span: token.span,
+                })
+            }
+            TokenKind::TemplateHead(head_text) => {
+                // With interpolations: `` `hello ${Type}...` ``
+                let head_text = head_text.clone();
+                let start_span = token.span;
+                self.advance(); // consume TemplateHead
+
+                let mut quasis = vec![head_text];
+                let mut types = Vec::new();
+
+                loop {
+                    // Parse the interpolated type
+                    let ty = self.parse_type_annotation()?;
+                    types.push(ty);
+
+                    // After the type, expect TemplateMiddle or TemplateTail
+                    let next = self.current_token().clone();
+                    match &next.kind {
+                        TokenKind::TemplateTail(tail_text) => {
+                            let tail_text = tail_text.clone();
+                            let tail_token = self.advance();
+                            quasis.push(tail_text);
+                            let end_span = tail_token.span;
+                            return Some(TypeAnnotation {
+                                kind: TypeKind::TemplateLiteralType { quasis, types },
+                                span: start_span.merge(end_span),
+                            });
+                        }
+                        TokenKind::TemplateMiddle(mid_text) => {
+                            let mid_text = mid_text.clone();
+                            self.advance();
+                            quasis.push(mid_text);
+                            // Continue loop to parse next type
+                        }
+                        _ => {
+                            self.diagnostics.push(
+                                Diagnostic::error(format!(
+                                    "expected template literal type continuation, found {}",
+                                    Self::describe_kind(&next.kind)
+                                ))
+                                .with_label(
+                                    next.span,
+                                    self.file_id,
+                                    "expected template middle or tail",
+                                ),
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Should not be called with other token kinds
+                self.diagnostics.push(
+                    Diagnostic::error(format!(
+                        "expected template literal type, found {}",
+                        Self::describe_kind(&token.kind)
+                    ))
+                    .with_label(token.span, self.file_id, "expected template literal"),
+                );
+                None
+            }
+        }
     }
 
     /// Parse an identifier token into an [`Ident`] AST node.
@@ -11040,5 +11128,116 @@ class Child extends Base {
                 .any(|d| d.message.contains("string literal")),
             "expected diagnostic about string literal, got: {diagnostics:?}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Template literal type parsing tests (Task 128)
+    // ---------------------------------------------------------------
+
+    // Test: Parse template literal type with no interpolation: `type X = `hello``
+    #[test]
+    fn test_parser_template_literal_type_simple() {
+        let source = "type X = `hello`";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "X");
+                let alias = td.type_alias.as_ref().expect("expected type alias");
+                match &alias.kind {
+                    TypeKind::TemplateLiteralType { quasis, types } => {
+                        assert_eq!(quasis.len(), 1);
+                        assert_eq!(quasis[0], "hello");
+                        assert!(types.is_empty());
+                    }
+                    other => panic!("expected TemplateLiteralType, got: {other:?}"),
+                }
+            }
+            other => panic!("expected TypeDef, got: {other:?}"),
+        }
+    }
+
+    // Test: Parse template literal type with one interpolation: `type X = `hello ${string}``
+    #[test]
+    fn test_parser_template_literal_type_with_interpolation() {
+        let source = "type X = `hello ${string}`";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "X");
+                let alias = td.type_alias.as_ref().expect("expected type alias");
+                match &alias.kind {
+                    TypeKind::TemplateLiteralType { quasis, types } => {
+                        assert_eq!(quasis.len(), 2);
+                        assert_eq!(quasis[0], "hello ");
+                        assert_eq!(quasis[1], "");
+                        assert_eq!(types.len(), 1);
+                        match &types[0].kind {
+                            TypeKind::Named(ident) => assert_eq!(ident.name, "string"),
+                            other => panic!("expected Named(string), got: {other:?}"),
+                        }
+                    }
+                    other => panic!("expected TemplateLiteralType, got: {other:?}"),
+                }
+            }
+            other => panic!("expected TypeDef, got: {other:?}"),
+        }
+    }
+
+    // Test: Parse template literal type with multiple interpolations: `type X = `${string}_${number}``
+    #[test]
+    fn test_parser_template_literal_type_multiple() {
+        let source = "type X = `${string}_${number}`";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "X");
+                let alias = td.type_alias.as_ref().expect("expected type alias");
+                match &alias.kind {
+                    TypeKind::TemplateLiteralType { quasis, types } => {
+                        assert_eq!(quasis.len(), 3);
+                        assert_eq!(quasis[0], "");
+                        assert_eq!(quasis[1], "_");
+                        assert_eq!(quasis[2], "");
+                        assert_eq!(types.len(), 2);
+                        match &types[0].kind {
+                            TypeKind::Named(ident) => assert_eq!(ident.name, "string"),
+                            other => panic!("expected Named(string), got: {other:?}"),
+                        }
+                        match &types[1].kind {
+                            TypeKind::Named(ident) => assert_eq!(ident.name, "number"),
+                            other => panic!("expected Named(number), got: {other:?}"),
+                        }
+                    }
+                    other => panic!("expected TemplateLiteralType, got: {other:?}"),
+                }
+            }
+            other => panic!("expected TypeDef, got: {other:?}"),
+        }
+    }
+
+    // Test: Parse empty template literal type: `type X = ``
+    #[test]
+    fn test_parser_template_literal_type_empty() {
+        let source = "type X = ``";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "X");
+                let alias = td.type_alias.as_ref().expect("expected type alias");
+                match &alias.kind {
+                    TypeKind::TemplateLiteralType { quasis, types } => {
+                        assert_eq!(quasis.len(), 1);
+                        assert_eq!(quasis[0], "");
+                        assert!(types.is_empty());
+                    }
+                    other => panic!("expected TemplateLiteralType, got: {other:?}"),
+                }
+            }
+            other => panic!("expected TypeDef, got: {other:?}"),
+        }
     }
 }
