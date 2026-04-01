@@ -4883,3 +4883,79 @@ function main() {
         "for-in should use .keys(), got:\n{actual_in}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Object static methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_object_keys_generates_keys_collect() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const k = Object.keys(m);
+  console.log(k);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".keys().cloned().collect::<Vec<_>>()"),
+        "Object.keys should generate .keys().cloned().collect::<Vec<_>>(), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_values_generates_values_collect() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const v = Object.values(m);
+  console.log(v);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".values().cloned().collect::<Vec<_>>()"),
+        "Object.values should generate .values().cloned().collect::<Vec<_>>(), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_entries_generates_iter_collect() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const e = Object.entries(m);
+  console.log(e);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".iter().map("),
+        "Object.entries should generate .iter().map(...), got:\n{actual}"
+    );
+    assert!(
+        actual.contains(".collect::<Vec<_>>()"),
+        "Object.entries should generate .collect::<Vec<_>>(), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_from_entries_generates_into_iter_collect() {
+    let source = r#"
+function main() {
+  const pairs: Array<[string, i32]> = [];
+  const m = Object.fromEntries(pairs);
+  console.log(m);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".into_iter().collect::<HashMap<_, _>>()"),
+        "Object.fromEntries should generate .into_iter().collect::<HashMap<_, _>>(), got:\n{actual}"
+    );
+}

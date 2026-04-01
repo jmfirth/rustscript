@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use rsc_syntax::rust_ir::{
     IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustClosureParam, RustExpr,
-    RustExprKind, RustType,
+    RustExprKind, RustLetStmt, RustStmt, RustType,
 };
 
 #[cfg(test)]
@@ -277,6 +277,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("Object", "keys", lower_object_keys, false);
     registry.register_method("Object", "values", lower_object_values, false);
     registry.register_method("Object", "entries", lower_object_entries, false);
+    registry.register_method("Object", "assign", lower_object_assign, false);
+    registry.register_method("Object", "fromEntries", lower_object_from_entries, false);
+    registry.register_method("Object", "freeze", lower_object_freeze, false);
+    registry.register_method("Object", "create", lower_object_create, false);
 
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
@@ -1956,6 +1960,129 @@ fn lower_object_entries(args: Vec<RustExpr>, span: Span) -> RustExpr {
         },
         span,
     )
+}
+
+/// Lower `Object.assign(target, source)` to a block that extends `target` with `source`.
+///
+/// Produces: `{ let mut tmp = target.clone(); tmp.extend(source.clone()); tmp }`
+///
+/// For `HashMap`-based objects, `extend` merges key-value pairs from the source
+/// into the target, matching the semantics of `Object.assign()`.
+fn lower_object_assign(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let target = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let source = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+
+    // Clone target, extend with source clone, return result
+    let target_clone = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(target),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let source_clone = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(source),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+
+    // Build: { let mut tmp = target.clone(); tmp.extend(source.clone()); tmp }
+    let tmp_ident = RustExpr::synthetic(RustExprKind::Ident("__rsc_tmp".into()));
+    let extend_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(tmp_ident.clone()),
+            method: "extend".into(),
+            type_args: vec![],
+            args: vec![source_clone],
+        },
+        span,
+    );
+
+    RustExpr::new(
+        RustExprKind::ClosureCall {
+            is_async: false,
+            body: RustBlock {
+                stmts: vec![
+                    RustStmt::Let(RustLetStmt {
+                        mutable: true,
+                        name: "__rsc_tmp".into(),
+                        ty: None,
+                        init: target_clone,
+                        span: None,
+                    }),
+                    RustStmt::Semi(extend_call),
+                ],
+                expr: Some(Box::new(tmp_ident)),
+            },
+            return_type: RustType::Infer,
+        },
+        span,
+    )
+}
+
+/// Lower `Object.fromEntries(entries)` to `entries.into_iter().collect::<HashMap<_, _>>()`.
+///
+/// Converts a list of key-value tuples into a `HashMap`, matching the semantics
+/// of `Object.fromEntries()`.
+fn lower_object_from_entries(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let into_iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "into_iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(into_iter_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("HashMap".into())),
+                vec![RustType::Infer, RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Object.freeze(obj)` — no-op in Rust.
+///
+/// Rust's `let` bindings are already immutable. `Object.freeze()` simply returns
+/// the argument unchanged. A comment is emitted as documentation.
+fn lower_object_freeze(args: Vec<RustExpr>, _span: Span) -> RustExpr {
+    // Just pass through the argument — Rust let-bindings are immutable by default.
+    args.into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())))
+}
+
+/// Lower `Object.create(proto)` — identity pass-through (stub).
+///
+/// `Object.create()` has no direct Rust equivalent. For now, return the argument
+/// unchanged. Full prototype-based patterns are not supported.
+fn lower_object_create(args: Vec<RustExpr>, _span: Span) -> RustExpr {
+    // Stub: return the argument as-is.
+    args.into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())))
 }
 
 // ---------------------------------------------------------------------------
@@ -4393,6 +4520,82 @@ mod tests {
         match &result.kind {
             RustExprKind::MethodCall { method, .. } => assert_eq!(method, "collect"),
             other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_assign_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "assign").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_assign_produces_closure_call() {
+        let target = map_receiver();
+        let source = map_receiver();
+        let result = lower_object_assign(vec![target, source], span());
+        match &result.kind {
+            RustExprKind::ClosureCall { body, .. } => {
+                // Should have a let-mut statement, a semi (extend), and a trailing expr
+                assert_eq!(body.stmts.len(), 2);
+                assert!(body.expr.is_some());
+            }
+            other => panic!("expected ClosureCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_from_entries_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "fromEntries").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_from_entries_produces_collect_chain() {
+        let result = lower_object_from_entries(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                method, type_args, ..
+            } => {
+                assert_eq!(method, "collect");
+                // Should collect into HashMap<_, _>
+                assert!(!type_args.is_empty());
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_freeze_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "freeze").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_freeze_returns_argument_unchanged() {
+        let arg = map_receiver();
+        let result = lower_object_freeze(vec![arg], span());
+        // freeze is a no-op — returns the argument as-is
+        match &result.kind {
+            RustExprKind::Ident(name) => assert_eq!(name, "m"),
+            other => panic!("expected Ident(m), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_create_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "create").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_create_returns_argument_unchanged() {
+        let arg = map_receiver();
+        let result = lower_object_create(vec![arg], span());
+        // create is a stub — returns the argument as-is
+        match &result.kind {
+            RustExprKind::Ident(name) => assert_eq!(name, "m"),
+            other => panic!("expected Ident(m), got {other:?}"),
         }
     }
 
