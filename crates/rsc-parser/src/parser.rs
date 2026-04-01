@@ -3969,6 +3969,13 @@ impl<'src> Parser<'src> {
                         span,
                     };
                 }
+            } else if matches!(
+                self.current_token().kind,
+                TokenKind::TemplateNoSub(_) | TokenKind::TemplateHead(_)
+            ) {
+                // Tagged template literal: `expr\`text ${v} text\``
+                // The previously parsed expression is the tag function.
+                expr = self.parse_tagged_template(expr)?;
             } else {
                 break;
             }
@@ -4824,6 +4831,98 @@ impl<'src> Parser<'src> {
                     );
                     return None;
                 }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Tagged template literals
+    // ---------------------------------------------------------------
+
+    /// Parse a tagged template literal: `` tag`text ${expr} more` ``.
+    ///
+    /// The `tag` expression has already been parsed. This method consumes the
+    /// template literal tokens and produces a `TaggedTemplate` node containing
+    /// the tag expression, the static string segments (quasis), and the
+    /// interpolated expressions.
+    fn parse_tagged_template(&mut self, tag: Expr) -> Option<Expr> {
+        let start_span = tag.span;
+
+        match &self.current_token().kind {
+            TokenKind::TemplateNoSub(_) => {
+                // No interpolations: `` tag`plain text` ``
+                let token = self.advance();
+                let TokenKind::TemplateNoSub(text) = token.kind else {
+                    unreachable!("parse_tagged_template called without TemplateNoSub");
+                };
+                let span = start_span.merge(token.span);
+                Some(Expr {
+                    kind: ExprKind::TaggedTemplate {
+                        tag: Box::new(tag),
+                        quasis: vec![text],
+                        expressions: vec![],
+                    },
+                    span,
+                })
+            }
+            TokenKind::TemplateHead(_) => {
+                // Has interpolations: `` tag`text ${expr} more` ``
+                let head_token = self.advance();
+                let TokenKind::TemplateHead(head_text) = head_token.kind else {
+                    unreachable!("parse_tagged_template called without TemplateHead");
+                };
+
+                let mut quasis = vec![head_text];
+                let mut expressions = Vec::new();
+
+                loop {
+                    let inner_expr = self.parse_expr()?;
+                    expressions.push(inner_expr);
+
+                    let next = self.current_token().clone();
+                    match &next.kind {
+                        TokenKind::TemplateTail(_) => {
+                            let tail_token = self.advance();
+                            let TokenKind::TemplateTail(tail_text) = tail_token.kind else {
+                                unreachable!();
+                            };
+                            quasis.push(tail_text);
+                            let span = start_span.merge(tail_token.span);
+                            return Some(Expr {
+                                kind: ExprKind::TaggedTemplate {
+                                    tag: Box::new(tag),
+                                    quasis,
+                                    expressions,
+                                },
+                                span,
+                            });
+                        }
+                        TokenKind::TemplateMiddle(_) => {
+                            let mid_token = self.advance();
+                            let TokenKind::TemplateMiddle(mid_text) = mid_token.kind else {
+                                unreachable!();
+                            };
+                            quasis.push(mid_text);
+                        }
+                        _ => {
+                            self.diagnostics.push(
+                                Diagnostic::error(format!(
+                                    "expected template literal continuation, found {}",
+                                    Self::describe_kind(&next.kind)
+                                ))
+                                .with_label(
+                                    next.span,
+                                    self.file_id,
+                                    "expected template middle or tail",
+                                ),
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+            _ => {
+                unreachable!("parse_tagged_template called without template token");
             }
         }
     }
@@ -6380,6 +6479,112 @@ mod tests {
             TemplatePart::String(s, _) => assert_eq!(s, " = "),
             _ => panic!("expected String part"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Tagged template literal parsing tests
+    // ---------------------------------------------------------------
+
+    // Test: Parse tagged template with no interpolations
+    #[test]
+    fn test_parser_tagged_template_basic() {
+        let module = parse_ok("function main() { const x = tag`hello`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TaggedTemplate {
+            tag,
+            quasis,
+            expressions,
+        } = &decl.init.kind
+        else {
+            panic!("expected TaggedTemplate, got {:?}", decl.init.kind);
+        };
+        // Tag is the identifier `tag`
+        assert!(matches!(&tag.kind, ExprKind::Ident(ident) if ident.name == "tag"));
+        // One quasi, no expressions
+        assert_eq!(quasis.len(), 1);
+        assert_eq!(quasis[0], "hello");
+        assert!(expressions.is_empty());
+    }
+
+    // Test: Parse tagged template with a single expression
+    #[test]
+    fn test_parser_tagged_template_with_expr() {
+        let module = parse_ok("function main() { const x = tag`hello ${name}`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TaggedTemplate {
+            tag,
+            quasis,
+            expressions,
+        } = &decl.init.kind
+        else {
+            panic!("expected TaggedTemplate, got {:?}", decl.init.kind);
+        };
+        assert!(matches!(&tag.kind, ExprKind::Ident(ident) if ident.name == "tag"));
+        assert_eq!(quasis.len(), 2);
+        assert_eq!(quasis[0], "hello ");
+        assert_eq!(quasis[1], "");
+        assert_eq!(expressions.len(), 1);
+        assert!(
+            matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "name")
+        );
+    }
+
+    // Test: Parse tagged template with multiple expressions
+    #[test]
+    fn test_parser_tagged_template_multiple_exprs() {
+        let module = parse_ok("function main() { const x = tag`${a} and ${b}`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TaggedTemplate {
+            tag,
+            quasis,
+            expressions,
+        } = &decl.init.kind
+        else {
+            panic!("expected TaggedTemplate, got {:?}", decl.init.kind);
+        };
+        assert!(matches!(&tag.kind, ExprKind::Ident(ident) if ident.name == "tag"));
+        assert_eq!(quasis.len(), 3);
+        assert_eq!(quasis[0], "");
+        assert_eq!(quasis[1], " and ");
+        assert_eq!(quasis[2], "");
+        assert_eq!(expressions.len(), 2);
+        assert!(
+            matches!(&expressions[0].kind, ExprKind::Ident(ident) if ident.name == "a")
+        );
+        assert!(
+            matches!(&expressions[1].kind, ExprKind::Ident(ident) if ident.name == "b")
+        );
+    }
+
+    // Test: Untagged template literal is not affected by tagged template parsing
+    #[test]
+    fn test_parser_untagged_template_not_affected() {
+        let module = parse_ok("function main() { const x = `hello ${name}`; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        let Stmt::VarDecl(decl) = stmt else {
+            panic!("expected VarDecl");
+        };
+        let ExprKind::TemplateLit(tpl) = &decl.init.kind else {
+            panic!(
+                "expected TemplateLit (not TaggedTemplate), got {:?}",
+                decl.init.kind
+            );
+        };
+        // Should still parse as regular template with 3 parts
+        assert_eq!(tpl.parts.len(), 3);
     }
 
     // ---- Task 015: Enum and Switch tests ----

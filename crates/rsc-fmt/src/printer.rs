@@ -1115,6 +1115,11 @@ impl Printer {
             ExprKind::StructLit(s) => self.print_struct_lit_expr(s),
             ExprKind::FieldAccess(fa) => self.print_field_access_expr(fa),
             ExprKind::TemplateLit(t) => self.print_template_lit_expr(t),
+            ExprKind::TaggedTemplate {
+                tag,
+                quasis,
+                expressions,
+            } => self.print_tagged_template(tag, quasis, expressions),
             ExprKind::ArrayLit(items) => self.print_array_lit(items),
             ExprKind::New(n) => self.print_new_expr(n),
             ExprKind::Index(idx) => self.print_index_expr(idx),
@@ -1322,6 +1327,21 @@ impl Printer {
                     self.print_expr(e);
                     self.write("}");
                 }
+            }
+        }
+        self.write("`");
+    }
+
+    /// Print a tagged template literal expression.
+    fn print_tagged_template(&mut self, tag: &Expr, quasis: &[String], expressions: &[Expr]) {
+        self.print_expr(tag);
+        self.write("`");
+        for (i, quasi) in quasis.iter().enumerate() {
+            self.write(quasi);
+            if i < expressions.len() {
+                self.write("${");
+                self.print_expr(&expressions[i]);
+                self.write("}");
             }
         }
         self.write("`");

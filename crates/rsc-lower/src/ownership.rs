@@ -492,6 +492,30 @@ impl UseMap {
                     }
                 }
             }
+            ast::ExprKind::TaggedTemplate {
+                tag,
+                expressions,
+                ..
+            } => {
+                Self::collect_expr_uses(
+                    tag,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+                for e in expressions {
+                    Self::collect_expr_uses(
+                        e,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+            }
             ast::ExprKind::ArrayLit(elements) => {
                 for elem in elements {
                     let inner = match elem {
@@ -1301,6 +1325,17 @@ fn collect_param_usage_expr(
                 }
             }
         }
+        ast::ExprKind::TaggedTemplate {
+            tag,
+            expressions,
+            ..
+        } => {
+            // Tagged template: tag function + interpolated expressions are reads
+            collect_param_usage_expr(tag, param_set, is_ref_call, result);
+            for e in expressions {
+                collect_param_usage_expr(e, param_set, is_ref_call, result);
+            }
+        }
         ast::ExprKind::ArrayLit(elements) => {
             // Array/vec literal elements are moves (stored in collection)
             for elem in elements {
@@ -1460,6 +1495,16 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
                 if let ast::TemplatePart::Expr(e) = part {
                     collect_idents_in_expr(e, names);
                 }
+            }
+        }
+        ast::ExprKind::TaggedTemplate {
+            tag,
+            expressions,
+            ..
+        } => {
+            collect_idents_in_expr(tag, names);
+            for e in expressions {
+                collect_idents_in_expr(e, names);
             }
         }
         ast::ExprKind::Assign(assign) => {

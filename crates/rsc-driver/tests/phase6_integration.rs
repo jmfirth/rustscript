@@ -2605,6 +2605,52 @@ function main() {
     );
 }
 
+// ===========================================================================
+//
+// CATEGORY: Tagged Template Literals
+//
+// ===========================================================================
+
+#[test]
+fn test_tagged_template_snapshot() {
+    let rust = compile_to_rust(
+        r#"function tag(strings: Array<string>, values: Array<string>): string {
+  return strings.join("");
+}
+
+function main() {
+  const name: string = "Alice";
+  const result: string = tag`hello ${name} world`;
+  console.log(result);
+}"#,
+    );
+    // Tagged template lowers to a function call with string slice + vec args.
+    // Verify the tag function is called with the correct arguments.
+    assert!(
+        rust.contains(r#"tag(&["hello ", " world"], vec![name"#),
+        "expected tagged template call in output, got:\n{rust}"
+    );
+}
+
+#[test]
+fn test_tagged_template_no_exprs_snapshot() {
+    let rust = compile_to_rust(
+        r#"function tag(strings: Array<string>, values: Array<string>): string {
+  return strings.join("");
+}
+
+function main() {
+  const result: string = tag`plain text`;
+  console.log(result);
+}"#,
+    );
+    // Tagged template with no interpolations still lowers to function call.
+    assert!(
+        rust.contains(r#"tag(&["plain text"], vec![])"#),
+        "expected tagged template call with no exprs in output, got:\n{rust}"
+    );
+}
+
 #[test]
 fn test_import_type_used_as_value_emits_error() {
     let diags = test_utils::compile_diagnostics(

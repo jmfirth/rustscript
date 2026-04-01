@@ -1137,6 +1137,17 @@ pub enum ExprKind {
     /// Template literal: `` `Hello, ${name}!` ``.
     /// Lowers to `format!("Hello, {}!", name)` or a simple string for no-interpolation cases.
     TemplateLit(TemplateLitExpr),
+    /// Tagged template literal: `` tag`text ${expr} more` ``.
+    /// The tag function is called with the static string parts and the interpolated values.
+    /// Lowers to `tag(&["text ", " more"], vec![expr])`.
+    TaggedTemplate {
+        /// The tag function expression (usually an identifier).
+        tag: Box<Expr>,
+        /// The static string segments between interpolations.
+        quasis: Vec<String>,
+        /// The interpolated expressions.
+        expressions: Vec<Expr>,
+    },
     /// Array literal: `[1, 2, 3]` or `[...arr, x]`.
     /// Without spread elements, lowers to `vec![1, 2, 3]`.
     /// With spread elements, lowers to a block with extend/push operations.

@@ -196,6 +196,11 @@ impl Transform {
             ast::ExprKind::TemplateLit(tpl) => {
                 self.lower_template_lit(tpl, expr.span, ctx, use_map, stmt_index)
             }
+            ast::ExprKind::TaggedTemplate {
+                tag,
+                quasis,
+                expressions,
+            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -1748,6 +1753,58 @@ impl Transform {
             RustExprKind::Macro {
                 name: "format".to_owned(),
                 args,
+            },
+            span,
+        )
+    }
+
+    /// Lower a tagged template literal to a function call.
+    ///
+    /// `` tag`hello ${name} world` `` lowers to:
+    /// `tag(&["hello ", " world"], vec![name.clone()])`
+    ///
+    /// The tag function receives:
+    /// 1. A static string slice of the template's string segments.
+    /// 2. A `vec![]` of the interpolated expression values.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_tagged_template(
+        &self,
+        tag: &ast::Expr,
+        quasis: &[String],
+        expressions: &[ast::Expr],
+        span: rsc_syntax::span::Span,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustExpr {
+        // Extract the tag function name from the expression.
+        let func_name = if let ast::ExprKind::Ident(ident) = &tag.kind {
+            ident.name.clone()
+        } else {
+            ctx.emit_diagnostic(Diagnostic::error(
+                "tagged template literal tag must be an identifier",
+            ));
+            "unknown_tag".to_owned()
+        };
+
+        // Build first arg: &["quasi0", "quasi1", ...]
+        let quasi_exprs: Vec<RustExpr> = quasis
+            .iter()
+            .map(|s| RustExpr::synthetic(RustExprKind::StringLit(s.clone())))
+            .collect();
+        let strings_arg = RustExpr::synthetic(RustExprKind::SliceLit(quasi_exprs));
+
+        // Build second arg: vec![expr1, expr2, ...]
+        let value_exprs: Vec<RustExpr> = expressions
+            .iter()
+            .map(|e| self.lower_expr(e, ctx, use_map, stmt_index))
+            .collect();
+        let values_arg = RustExpr::synthetic(RustExprKind::VecLit(value_exprs));
+
+        RustExpr::new(
+            RustExprKind::Call {
+                func: func_name,
+                args: vec![strings_arg, values_arg],
             },
             span,
         )
