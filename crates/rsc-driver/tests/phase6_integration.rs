@@ -2835,6 +2835,36 @@ fn test_string_from_char_code_snapshot() {
     );
 }
 
+// -------------------------------------------------------------------
+// Task 141: Console extensions snapshot tests
+// -------------------------------------------------------------------
+
+#[test]
+fn test_console_table_snapshot() {
+    let source = r#"function main() {
+  const data: Array<i32> = [1, 2, 3];
+  console.table(data);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("println!(\"{:#?}\","),
+        "console.table should produce println!(\"{{:#?}}\", ...). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_assert_snapshot() {
+    let source = r#"function main() {
+  const x: i64 = 42;
+  console.assert(x > 0, "x must be positive");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("assert!("),
+        "console.assert should produce assert!(...). Generated:\n{rust}"
+    );
+}
+
 #[test]
 fn test_array_of_snapshot() {
     let source = r#"function main() {
@@ -2849,6 +2879,19 @@ fn test_array_of_snapshot() {
 }
 
 #[test]
+fn test_console_dir_snapshot() {
+    let source = r#"function main() {
+  const obj: string = "hello";
+  console.dir(obj);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("println!(\"{:#?}\","),
+        "console.dir should produce println!(\"{{:#?}}\", ...). Generated:\n{rust}"
+    );
+}
+
+#[test]
 fn test_string_from_code_point_snapshot() {
     let source = r#"function main() {
   const emoji: string = String.fromCodePoint(128522);
@@ -2858,6 +2901,23 @@ fn test_string_from_code_point_snapshot() {
     assert!(
         rust.contains("char::from_u32"),
         "String.fromCodePoint should lower to char::from_u32.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_console_time_snapshot() {
+    let source = r#"function main() {
+  console.time("bench");
+  console.timeEnd("bench");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("eprintln!") && rust.contains("timer started"),
+        "console.time should produce eprintln with timer started. Generated:\n{rust}"
+    );
+    assert!(
+        rust.contains("timer ended"),
+        "console.timeEnd should produce eprintln with timer ended. Generated:\n{rust}"
     );
 }
 
@@ -3062,5 +3122,17 @@ function main() {
     assert!(
         actual.contains(".concat()"),
         "array concat should emit .concat(): {actual}"
+    );
+}
+
+#[test]
+fn test_console_trace_snapshot() {
+    let source = r#"function main() {
+  console.trace("checkpoint");
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("eprintln!(\"Trace:"),
+        "console.trace should produce eprintln!(\"Trace: ...\"). Generated:\n{rust}"
     );
 }

@@ -749,8 +749,7 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         ast::TypeKind::Union(members) | ast::TypeKind::Intersection(members) => {
             members.iter().any(ast_contains_infer)
         }
-        ast::TypeKind::Tuple(types)
-        | ast::TypeKind::TemplateLiteralType { types, .. } => {
+        ast::TypeKind::Tuple(types) | ast::TypeKind::TemplateLiteralType { types, .. } => {
             types.iter().any(ast_contains_infer)
         }
         ast::TypeKind::Conditional {
