@@ -1194,6 +1194,16 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             param,
             guarded_type,
         } => format!("{} is {}", param.name, format_type(guarded_type)),
+        TypeKind::Asserts {
+            param,
+            guarded_type,
+        } => {
+            if let Some(gt) = guarded_type {
+                format!("asserts {} is {}", param.name, format_type(gt))
+            } else {
+                format!("asserts {}", param.name)
+            }
+        }
         TypeKind::Readonly(inner) => format!("readonly {}", format_type(inner)),
         TypeKind::TemplateLiteralType { quasis, types } => {
             let mut result = String::from('`');

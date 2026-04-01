@@ -720,6 +720,16 @@ pub enum TypeKind {
         /// The type the parameter is narrowed to.
         guarded_type: Box<TypeAnnotation>,
     },
+    /// An assertion function return type: `asserts x is Type` or `asserts x`.
+    /// The function returns void and throws if the assertion fails.
+    /// Lowers to Rust void return (the throw → panic handles the failure case).
+    Asserts {
+        /// The parameter name being asserted.
+        param: Ident,
+        /// The type the parameter is narrowed to, if present.
+        /// `None` for `asserts x` (just asserts non-nullish).
+        guarded_type: Option<Box<TypeAnnotation>>,
+    },
     /// A `readonly` type modifier: `readonly T[]` or `readonly [T, U]`.
     /// In variable position, this is informational (Rust `let` is immutable).
     /// In parameter position, arrays lower to borrowed slices `&[T]`.
