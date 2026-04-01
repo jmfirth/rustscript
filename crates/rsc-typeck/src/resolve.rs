@@ -83,7 +83,8 @@ fn resolve_union_type(
 
 /// Infer the type of a literal expression.
 ///
-/// Returns `None` for non-literal expressions.
+/// Returns `None` for non-literal expressions, except for `new` expressions
+/// which infer to the constructed type name (`Type::Named`).
 #[must_use]
 pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
     match &expr.kind {
@@ -92,6 +93,7 @@ pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
         ast::ExprKind::StringLit(_) | ast::ExprKind::TemplateLit(_) => Some(Type::String),
         ast::ExprKind::BoolLit(_) => Some(Type::Primitive(PrimitiveType::Bool)),
         ast::ExprKind::NullLit => Some(Type::Option(Box::new(Type::Error))),
+        ast::ExprKind::New(new_expr) => Some(Type::Named(new_expr.type_name.name.clone())),
         _ => None,
     }
 }
@@ -749,8 +751,7 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         ast::TypeKind::Union(members) | ast::TypeKind::Intersection(members) => {
             members.iter().any(ast_contains_infer)
         }
-        ast::TypeKind::Tuple(types)
-        | ast::TypeKind::TemplateLiteralType { types, .. } => {
+        ast::TypeKind::Tuple(types) | ast::TypeKind::TemplateLiteralType { types, .. } => {
             types.iter().any(ast_contains_infer)
         }
         ast::TypeKind::Conditional {

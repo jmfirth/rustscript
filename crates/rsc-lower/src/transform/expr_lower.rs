@@ -200,7 +200,15 @@ impl Transform {
                 tag,
                 quasis,
                 expressions,
-            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
+            } => self.lower_tagged_template(
+                tag,
+                quasis,
+                expressions,
+                expr.span,
+                ctx,
+                use_map,
+                stmt_index,
+            ),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -682,9 +690,9 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::Macro {
                         name: "panic".to_owned(),
-                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
-                            format!("dynamic import not supported: {module}"),
-                        ))],
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(format!(
+                            "dynamic import not supported: {module}"
+                        )))],
                     },
                     expr.span,
                 )
@@ -1260,6 +1268,22 @@ impl Transform {
             if is_set && mc.method.name == "has" {
                 return crate::builtins::lower_set_has(receiver, lowered_args, span);
             }
+            return lowering_fn(receiver, lowered_args, span);
+        }
+
+        // Check for Date instance method: type-aware dispatch for methods like
+        // getTime/toISOString/toString that are specific to Date (SystemTime) values.
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+            && crate::builtins::is_date_type(&var_info.ty)
+            && let Some(lowering_fn) = self.builtins.lookup_date_method(&mc.method.name)
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
             return lowering_fn(receiver, lowered_args, span);
         }
 
@@ -1843,6 +1867,13 @@ impl Transform {
             "Vec" => {
                 // `new Array()` → `vec![]` (empty vec literal)
                 RustExpr::new(RustExprKind::VecLit(args), span)
+            }
+            "Date" => {
+                // `new Date()` → `std::time::SystemTime::now()`
+                RustExpr::new(
+                    RustExprKind::Raw("std::time::SystemTime::now()".to_owned()),
+                    span,
+                )
             }
             _ => {
                 // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`

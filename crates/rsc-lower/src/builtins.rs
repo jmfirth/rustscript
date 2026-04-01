@@ -68,6 +68,9 @@ pub(crate) struct BuiltinRegistry {
     /// Map/Set-specific methods that require type-aware dispatch.
     /// These are only consulted when the receiver is known to be a Map or Set.
     map_set_methods: HashMap<String, StringMethodLowering>,
+    /// Date-specific instance methods that require type-aware dispatch.
+    /// These are only consulted when the receiver is known to be a `Date` (`SystemTime`).
+    date_methods: HashMap<String, StringMethodLowering>,
     /// Builtin free functions (e.g., `spawn`).
     functions: HashMap<String, BuiltinLowering>,
 }
@@ -80,6 +83,7 @@ impl BuiltinRegistry {
             string_methods: HashMap::new(),
             collection_methods: HashMap::new(),
             map_set_methods: HashMap::new(),
+            date_methods: HashMap::new(),
             functions: HashMap::new(),
         };
         register_defaults(&mut registry);
@@ -137,6 +141,19 @@ impl BuiltinRegistry {
     /// Only consulted when the receiver is known to be a `HashMap` or `HashSet`.
     pub fn lookup_map_set_method(&self, method: &str) -> Option<&StringMethodLowering> {
         self.map_set_methods.get(method)
+    }
+
+    /// Register a Date-specific instance method that requires type-aware dispatch.
+    fn register_date_method(&mut self, name: &str, lowering: StringMethodLowering) {
+        self.date_methods.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up a Date instance method by name.
+    ///
+    /// Returns the lowering function if the method is a known Date method.
+    /// Only consulted when the receiver is known to be a `Date` (`SystemTime`).
+    pub fn lookup_date_method(&self, method: &str) -> Option<&StringMethodLowering> {
+        self.date_methods.get(method)
     }
 
     /// Register a builtin free function.
@@ -281,6 +298,14 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
     registry.register_method("JSON", "parse", lower_json_parse, false);
+
+    // Task 129: Date class — static methods
+    registry.register_method("Date", "now", lower_date_now, false);
+
+    // Task 129: Date class — instance methods (type-aware dispatch)
+    registry.register_date_method("getTime", lower_date_get_time);
+    registry.register_date_method("toISOString", lower_date_to_iso_string);
+    registry.register_date_method("toString", lower_date_to_string);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -2800,6 +2825,131 @@ fn merge_reduce_into_chain(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Date class lowering functions (Task 129)
+// ---------------------------------------------------------------------------
+
+/// Lower `Date.now()` to epoch milliseconds as `i64`.
+///
+/// Emits: `std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64`
+fn lower_date_now(_args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::Raw(
+            "std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64".to_owned(),
+        ),
+        span,
+    )
+}
+
+/// Lower `.getTime()` on a `Date` instance to epoch milliseconds as `i64`.
+///
+/// Emits: `receiver.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64`
+fn lower_date_get_time(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(RustExpr::new(
+                RustExprKind::MethodCall {
+                    receiver: Box::new(RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(receiver),
+                            method: "duration_since".to_owned(),
+                            type_args: vec![],
+                            args: vec![RustExpr::new(
+                                RustExprKind::Ident("std::time::UNIX_EPOCH".to_owned()),
+                                span,
+                            )],
+                        },
+                        span,
+                    )),
+                    method: "unwrap".to_owned(),
+                    type_args: vec![],
+                    args: vec![],
+                },
+                span,
+            )),
+            method: "as_millis".to_owned(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.toISOString()` on a `Date` instance to an ISO 8601 formatted string.
+///
+/// Uses a helper block that computes the ISO string from the unix timestamp.
+/// Emits a block expression that formats the date as `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+#[allow(clippy::needless_pass_by_value)] // Must match StringMethodLowering fn pointer type
+fn lower_date_to_iso_string(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    // Build a raw expression that computes ISO string from SystemTime
+    let receiver_code = emit_receiver(&receiver);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __d = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+            let __secs = __d.as_secs(); \
+            let __millis = __d.subsec_millis(); \
+            let __days = __secs / 86400; \
+            let __time_of_day = __secs % 86400; \
+            let __hours = __time_of_day / 3600; \
+            let __minutes = (__time_of_day % 3600) / 60; \
+            let __seconds = __time_of_day % 60; \
+            let mut __y = 1970i64; \
+            let mut __remaining = __days as i64; \
+            loop {{ \
+                let __days_in_year = if __y % 4 == 0 && (__y % 100 != 0 || __y % 400 == 0) {{ 366 }} else {{ 365 }}; \
+                if __remaining < __days_in_year {{ break; }} \
+                __remaining -= __days_in_year; \
+                __y += 1; \
+            }} \
+            let __leap = __y % 4 == 0 && (__y % 100 != 0 || __y % 400 == 0); \
+            let __mdays: [i64; 12] = [31, if __leap {{ 29 }} else {{ 28 }}, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]; \
+            let mut __m = 0usize; \
+            while __m < 12 && __remaining >= __mdays[__m] {{ \
+                __remaining -= __mdays[__m]; \
+                __m += 1; \
+            }} \
+            format!(\"{{:04}}-{{:02}}-{{:02}}T{{:02}}:{{:02}}:{{:02}}.{{:03}}Z\", __y, __m + 1, __remaining + 1, __hours, __minutes, __seconds, __millis) \
+            }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `.toString()` on a `Date` instance to a debug format string.
+///
+/// Emits: `format!("{:?}", receiver)`
+fn lower_date_to_string(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "format".to_owned(),
+            args: vec![
+                RustExpr::synthetic(RustExprKind::StringLit("{:?}".to_owned())),
+                receiver,
+            ],
+        },
+        span,
+    )
+}
+
+/// Emit a receiver expression as a Rust code string for use in raw blocks.
+fn emit_receiver(expr: &RustExpr) -> String {
+    match &expr.kind {
+        RustExprKind::Ident(name) => name.clone(),
+        RustExprKind::FieldAccess { object, field } => {
+            format!("{}.{}", emit_receiver(object), field)
+        }
+        _ => format!("{:?}", expr.kind),
+    }
+}
+
+/// Check whether a type represents a `Date` (`SystemTime`) value.
+///
+/// Used for type-aware dispatch of Date instance methods like `.getTime()`.
+pub(crate) fn is_date_type(ty: &RustType) -> bool {
+    matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4495,5 +4645,110 @@ mod tests {
     #[test]
     fn test_needs_rand_crate_false_for_math_floor() {
         assert!(!needs_rand_crate("Math", "floor"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 129: Date class lowering
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_date_now() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Date", "now").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_time() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getTime").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_to_iso_string() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("toISOString").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_to_string() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("toString").is_some());
+    }
+
+    #[test]
+    fn test_lower_date_now() {
+        let result = lower_date_now(vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("SystemTime::now()"));
+                assert!(code.contains("UNIX_EPOCH"));
+                assert!(code.contains("as_millis"));
+                assert!(code.contains("as i64"));
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_time() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_time(receiver, vec![], span());
+        // The outermost call should be .as_millis()
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "as_millis");
+            }
+            other => panic!("expected MethodCall(as_millis), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_to_string() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_to_string(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 2);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:?}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_to_iso_string() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_to_iso_string(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("UNIX_EPOCH"));
+                assert!(code.contains("format!"));
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_is_date_type_named_date() {
+        assert!(is_date_type(&RustType::Named("Date".to_owned())));
+    }
+
+    #[test]
+    fn test_is_date_type_named_system_time() {
+        assert!(is_date_type(&RustType::Named("SystemTime".to_owned())));
+    }
+
+    #[test]
+    fn test_is_date_type_named_other() {
+        assert!(!is_date_type(&RustType::Named("String".to_owned())));
+    }
+
+    #[test]
+    fn test_is_date_type_non_named() {
+        assert!(!is_date_type(&RustType::I64));
     }
 }
