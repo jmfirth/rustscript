@@ -2518,10 +2518,10 @@ fn test_dynamic_import_emits_diagnostic() {
             .collect::<Vec<_>>()
     );
     assert!(
-        result.diagnostics.iter().any(|d| d
-            .message
-            .contains("dynamic import")
-            && d.message.contains("not supported")),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("dynamic import") && d.message.contains("not supported")),
         "expected diagnostic about dynamic import, got: {:?}",
         result
             .diagnostics
@@ -2709,5 +2709,38 @@ function main() {
     assert!(
         rust.contains("event: String") || rust.contains("event: EventName"),
         "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
+    );
+}
+
+// ===========================================================================
+//
+// TASK 133: Static Array methods
+//
+// ===========================================================================
+
+#[test]
+fn test_array_from_snapshot() {
+    let source = r#"function main() {
+  const items: Array<i32> = [1, 2, 3];
+  const copied: Array<i32> = Array.from(items);
+  console.log(copied);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("into_iter") && rust.contains("collect"),
+        "Array.from should lower to .into_iter().collect().\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_array_of_snapshot() {
+    let source = r#"function main() {
+  const nums: Array<i32> = Array.of(1, 2, 3);
+  console.log(nums);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("vec!["),
+        "Array.of should lower to vec![...].\nGenerated:\n{rust}"
     );
 }
