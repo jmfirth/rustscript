@@ -190,6 +190,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 2: spawn builtin
     registry.register_function("spawn", lower_spawn);
 
+    // Phase 6: Global parseInt / parseFloat
+    registry.register_function("parseInt", lower_parse_int_global);
+    registry.register_function("parseFloat", lower_parse_float_global);
+
     // Phase 5: Additional string methods
     registry.register_string_method("charAt", lower_char_at);
     registry.register_string_method("charCodeAt", lower_char_code_at);
@@ -1766,6 +1770,79 @@ fn lower_number_parse_int(args: Vec<RustExpr>, span: Span) -> RustExpr {
 
 /// Lower `Number.parseFloat(str)` to `str.parse::<f64>().unwrap_or(0.0)`.
 fn lower_number_parse_float(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let parse_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "parse".into(),
+            type_args: vec![RustType::F64],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(parse_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::FloatLit(0.0))],
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: Global parseInt / parseFloat
+// ---------------------------------------------------------------------------
+
+/// Lower global `parseInt(str)` to `str.parse::<i64>().unwrap_or(0)`.
+/// Lower global `parseInt(str, radix)` to `i64::from_str_radix(str, radix).unwrap_or(0)`.
+fn lower_parse_int_global(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let str_arg = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let radix_arg = iter.next();
+
+    let parse_expr = if let Some(radix) = radix_arg {
+        // i64::from_str_radix(str, radix)
+        RustExpr::new(
+            RustExprKind::StaticCall {
+                type_name: "i64".into(),
+                method: "from_str_radix".into(),
+                args: vec![str_arg, radix],
+            },
+            span,
+        )
+    } else {
+        // str.parse::<i64>()
+        RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(str_arg),
+                method: "parse".into(),
+                type_args: vec![RustType::I64],
+                args: vec![],
+            },
+            span,
+        )
+    };
+
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(parse_expr),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::IntLit(0))],
+        },
+        span,
+    )
+}
+
+/// Lower global `parseFloat(str)` to `str.parse::<f64>().unwrap_or(0.0)`.
+fn lower_parse_float_global(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let arg = args
         .into_iter()
         .next()
@@ -4549,6 +4626,87 @@ mod tests {
                 ..
             } => {} // correct
             other => panic!("expected Binary(Eq), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 137: Global parseInt / parseFloat
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_function_parse_int_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("parseInt").is_some(),
+            "parseInt should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_parse_float_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("parseFloat").is_some(),
+            "parseFloat should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_lower_parse_int_global() {
+        let result = lower_parse_int_global(vec![string_arg("42")], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                method, receiver, ..
+            } => {
+                assert_eq!(method, "unwrap_or");
+                // The receiver should be a parse::<i64>() call
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, .. } => assert_eq!(method, "parse"),
+                    other => panic!("expected inner MethodCall(parse), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_parse_int_with_radix() {
+        let result = lower_parse_int_global(vec![string_arg("ff"), int_arg(16)], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                method, receiver, ..
+            } => {
+                assert_eq!(method, "unwrap_or");
+                // The receiver should be i64::from_str_radix(...)
+                match &receiver.kind {
+                    RustExprKind::StaticCall {
+                        type_name, method, ..
+                    } => {
+                        assert_eq!(type_name, "i64");
+                        assert_eq!(method, "from_str_radix");
+                    }
+                    other => panic!("expected StaticCall(i64::from_str_radix), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_parse_float_global() {
+        let result = lower_parse_float_global(vec![string_arg("3.14")], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                method, receiver, ..
+            } => {
+                assert_eq!(method, "unwrap_or");
+                // The receiver should be a parse::<f64>() call
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, .. } => assert_eq!(method, "parse"),
+                    other => panic!("expected inner MethodCall(parse), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
         }
     }
 
