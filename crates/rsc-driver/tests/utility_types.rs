@@ -346,3 +346,101 @@ type Bad = Omit<User, "nonexistent">"#,
         "expected diagnostic about unknown field, got: {diags:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 155: Mapped types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_mapped_type_nullable() {
+    let source = r#"type User = { name: string, age: i32 }
+type NullableUser = { [K in keyof User]: User[K] | null }"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    pub name: String,
+    pub age: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NullableUser {
+    pub name: Option<String>,
+    pub age: Option<i32>,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("mapped_nullable", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_mapped_type_identity() {
+    let source = r#"type Point = { x: f64, y: f64 }
+type SamePoint = { [K in keyof Point]: Point[K] }"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SamePoint {
+    pub x: f64,
+    pub y: f64,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("mapped_identity", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_mapped_type_optional_modifier() {
+    // { [K in keyof T]?: V } makes all fields optional
+    let source = r#"type User = { name: string, age: i32 }
+type PartialUser = { [K in keyof User]?: User[K] }"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct User {
+    pub name: String,
+    pub age: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PartialUser {
+    pub name: Option<String>,
+    pub age: Option<i32>,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("mapped_optional", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_mapped_type_remove_optional() {
+    // { [K in keyof T]-?: V } strips Option from fields
+    let source = r#"type Config = { name: string | null, debug: bool | null }
+type RequiredConfig = { [K in keyof Config]-?: Config[K] }"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Config {
+    pub name: Option<String>,
+    pub debug: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequiredConfig {
+    pub name: String,
+    pub debug: bool,
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("mapped_remove_optional", &actual, expected);
+}

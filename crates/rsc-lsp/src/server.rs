@@ -1136,6 +1136,8 @@ fn format_class_hover(class: &rsc_syntax::ast::ClassDef) -> String {
 }
 
 /// Format a type annotation to a display string.
+#[allow(clippy::too_many_lines)]
+// Match arms for all TypeKind variants; splitting would obscure the type display
 fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
     use rsc_syntax::ast::TypeKind;
     match &type_ann.kind {
@@ -1217,6 +1219,29 @@ fn format_type(type_ann: &rsc_syntax::ast::TypeAnnotation) -> String {
             }
             result.push('`');
             result
+        }
+        TypeKind::MappedType {
+            type_param,
+            constraint,
+            value_type,
+            optional,
+            readonly,
+        } => {
+            let ro = if readonly.is_some() { "readonly " } else { "" };
+            let opt = match optional {
+                Some(rsc_syntax::ast::MappedModifier::Add) => "?",
+                Some(rsc_syntax::ast::MappedModifier::Remove) => "-?",
+                None => "",
+            };
+            format!(
+                "{{ {ro}[{} in {}]{opt}: {} }}",
+                type_param.name,
+                format_type(constraint),
+                format_type(value_type)
+            )
+        }
+        TypeKind::IndexAccess(obj, idx) => {
+            format!("{}[{}]", format_type(obj), format_type(idx))
         }
     }
 }

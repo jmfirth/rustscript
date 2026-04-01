@@ -533,6 +533,11 @@ impl Transform {
                                 _ => {}
                             }
                             items.push(lowered);
+                        } else if matches!(alias.kind, ast::TypeKind::MappedType { .. }) {
+                            // Mapped type: type X = { [K in keyof T]: V }
+                            let mut lowered = self.lower_mapped_type(td, alias, &mut ctx);
+                            lowered.public = exported;
+                            items.push(RustItem::Struct(lowered));
                         } else if let ast::TypeKind::KeyOf(ref inner) = alias.kind {
                             // keyof T — generate a simple enum with field names as variants
                             if let Some(enum_def) =
@@ -754,6 +759,11 @@ impl Transform {
         if let Some(ref alias) = td.type_alias {
             if Self::identify_utility_type(alias).is_some() {
                 self.register_utility_type_def(td, alias, ctx);
+                return;
+            }
+            // Mapped type: { [K in keyof T]: V }
+            if matches!(alias.kind, ast::TypeKind::MappedType { .. }) {
+                self.register_mapped_type_def(td, alias, ctx);
                 return;
             }
             // keyof T — register as a simple enum with field name variants
@@ -1407,6 +1417,299 @@ impl Transform {
             doc_comment: td.doc_comment.clone(),
             span: Some(td.span),
         })
+    }
+
+    /// Register a mapped type alias in the type registry during the pre-pass.
+    ///
+    /// Resolves `{ [K in keyof T]: V }` by looking up T's fields and applying
+    /// the value type transformation to each field.
+    fn register_mapped_type_def(
+        &mut self,
+        td: &ast::TypeDef,
+        alias: &ast::TypeAnnotation,
+        ctx: &mut LoweringContext,
+    ) {
+        let fields = self.resolve_mapped_type_fields(td, alias, ctx);
+        self.type_registry.register(td.name.name.clone(), fields);
+    }
+
+    /// Resolve the fields produced by a mapped type.
+    ///
+    /// Given `{ [K in keyof T]: ValueType }`, looks up T's fields and applies
+    /// the value type transformation. Handles `T[K]` index access by substituting
+    /// the concrete field type for each key.
+    #[allow(clippy::too_many_lines)]
+    fn resolve_mapped_type_fields(
+        &self,
+        td: &ast::TypeDef,
+        alias: &ast::TypeAnnotation,
+        ctx: &mut LoweringContext,
+    ) -> Vec<(String, Type)> {
+        let ast::TypeKind::MappedType {
+            type_param,
+            constraint,
+            value_type,
+            optional,
+            ..
+        } = &alias.kind
+        else {
+            return Vec::new();
+        };
+
+        // Resolve the constraint to get source field names.
+        // Currently supports `keyof T` where T is a registered struct/class.
+        let source_type_name = if let ast::TypeKind::KeyOf(inner) = &constraint.kind {
+            if let ast::TypeKind::Named(ref ident) = inner.kind {
+                Some(ident.name.clone())
+            } else {
+                ctx.emit_diagnostic(Diagnostic::error(
+                    "mapped type constraint `keyof` requires a named type".to_owned(),
+                ));
+                None
+            }
+        } else {
+            ctx.emit_diagnostic(Diagnostic::error(
+                "mapped type constraint must be `keyof T`".to_owned(),
+            ));
+            None
+        };
+
+        let Some(source_name) = source_type_name else {
+            return Vec::new();
+        };
+
+        // Look up source type fields
+        let source_fields = self
+            .type_registry
+            .lookup(&source_name)
+            .and_then(|td| td.struct_fields())
+            .map(<[(String, Type)]>::to_vec);
+
+        let Some(source_fields) = source_fields else {
+            ctx.emit_diagnostic(Diagnostic::error(format!(
+                "unknown type `{source_name}` in mapped type"
+            )));
+            return Vec::new();
+        };
+
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+        let mut diags = Vec::new();
+
+        // For each field in the source type, resolve the value type
+        let new_fields: Vec<(String, Type)> = source_fields
+            .iter()
+            .map(|(field_name, field_type)| {
+                let resolved_value = self.resolve_mapped_value_type(
+                    value_type,
+                    &type_param.name,
+                    field_type,
+                    &source_name,
+                    &generic_names,
+                    &mut diags,
+                );
+
+                // Apply optional modifier
+                let final_type = match optional {
+                    Some(ast::MappedModifier::Add) => {
+                        // Make optional: wrap in Option if not already
+                        if matches!(resolved_value, Type::Option(_)) {
+                            resolved_value
+                        } else {
+                            Type::Option(Box::new(resolved_value))
+                        }
+                    }
+                    Some(ast::MappedModifier::Remove) => {
+                        // Remove optional: unwrap Option if present
+                        if let Type::Option(inner) = resolved_value {
+                            (*inner).clone()
+                        } else {
+                            resolved_value
+                        }
+                    }
+                    None => resolved_value,
+                };
+
+                (field_name.clone(), final_type)
+            })
+            .collect();
+
+        for d in diags {
+            ctx.emit_diagnostic(d);
+        }
+
+        new_fields
+    }
+
+    /// Resolve the value type of a mapped type for a specific field.
+    ///
+    /// Substitutes `T[K]` with the concrete field type, resolves unions like `V | null`
+    /// to `Option<V>`, etc.
+    fn resolve_mapped_value_type(
+        &self,
+        value_type: &ast::TypeAnnotation,
+        type_param_name: &str,
+        field_type: &Type,
+        source_type_name: &str,
+        generic_names: &[String],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Type {
+        match &value_type.kind {
+            // T[K] — the original field type
+            ast::TypeKind::IndexAccess(obj, idx) => {
+                if let ast::TypeKind::Named(ref obj_ident) = obj.kind
+                    && let ast::TypeKind::Named(ref idx_ident) = idx.kind
+                    && idx_ident.name == type_param_name
+                {
+                    // Check if the object type matches the source type
+                    if obj_ident.name == source_type_name
+                        || self.type_registry.lookup(&obj_ident.name).is_none()
+                    {
+                        return field_type.clone();
+                    }
+                }
+                // Try generic resolution
+                resolve::resolve_type_annotation_with_generics(
+                    value_type,
+                    &self.type_registry,
+                    generic_names,
+                    diagnostics,
+                )
+            }
+            // Union type: T[K] | null → Option<field_type>
+            ast::TypeKind::Union(members) => {
+                let mut resolved_members = Vec::new();
+                let mut has_null = false;
+
+                for member in members {
+                    if let ast::TypeKind::Named(ident) = &member.kind
+                        && ident.name == "null"
+                    {
+                        has_null = true;
+                        continue;
+                    }
+                    resolved_members.push(self.resolve_mapped_value_type(
+                        member,
+                        type_param_name,
+                        field_type,
+                        source_type_name,
+                        generic_names,
+                        diagnostics,
+                    ));
+                }
+
+                let inner = if resolved_members.len() == 1 {
+                    resolved_members.into_iter().next().unwrap_or(Type::Unit)
+                } else if resolved_members.is_empty() {
+                    Type::Unit
+                } else {
+                    Type::Union(resolved_members)
+                };
+
+                if has_null {
+                    Type::Option(Box::new(inner))
+                } else {
+                    inner
+                }
+            }
+            // Named type that matches the key type param — the field name (string literal)
+            ast::TypeKind::Named(ident) if ident.name == type_param_name => {
+                // K resolves to the field name — this is a string literal type
+                // In practice this means the field type stays the same
+                Type::String
+            }
+            // Any other type — resolve normally
+            _ => resolve::resolve_type_annotation_with_generics(
+                value_type,
+                &self.type_registry,
+                generic_names,
+                diagnostics,
+            ),
+        }
+    }
+
+    /// Lower a mapped type alias to a Rust struct definition.
+    ///
+    /// Generates a struct with fields derived from iterating over the source type's
+    /// fields and applying the mapped type's value transformation.
+    fn lower_mapped_type(
+        &self,
+        td: &ast::TypeDef,
+        alias: &ast::TypeAnnotation,
+        ctx: &mut LoweringContext,
+    ) -> RustStructDef {
+        // Look up the registered fields (already computed in pre-pass)
+        let registered_fields = self
+            .type_registry
+            .lookup(&td.name.name)
+            .and_then(|td| td.struct_fields())
+            .map(<[(String, Type)]>::to_vec)
+            .unwrap_or_default();
+
+        let fields: Vec<RustFieldDef> = registered_fields
+            .iter()
+            .map(|(name, ty)| {
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(ty);
+                RustFieldDef {
+                    public: true,
+                    name: name.clone(),
+                    ty: rust_ty,
+                    doc_comment: None,
+                    span: Some(td.span),
+                }
+            })
+            .collect();
+
+        let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
+        let type_params = lower_type_params(td.type_params.as_ref());
+        let has_type_params = !type_params.is_empty();
+
+        // Infer derives from the source type if possible
+        let source_name = Self::extract_mapped_source_name(alias);
+        let source_derives = source_name.and_then(|name| {
+            self.type_registry
+                .lookup(&name)
+                .and_then(|td| td.struct_fields())
+                .map(|source_fields| {
+                    let source_field_types: Vec<RustType> = source_fields
+                        .iter()
+                        .map(|(_, ty)| rsc_typeck::bridge::type_to_rust_type(ty))
+                        .collect();
+                    let refs: Vec<&RustType> = source_field_types.iter().collect();
+                    derive_inference::infer_struct_derives(&refs, has_type_params)
+                })
+        });
+
+        let auto_derives = source_derives.unwrap_or_else(|| {
+            derive_inference::infer_struct_derives(&field_types, has_type_params)
+        });
+        let derives = merge_derives(auto_derives, &td.derives);
+
+        let _ = ctx; // ctx available for future diagnostics
+
+        RustStructDef {
+            public: false,
+            name: td.name.name.clone(),
+            type_params,
+            fields,
+            derives,
+            attributes: vec![],
+            doc_comment: td.doc_comment.clone(),
+            span: Some(td.span),
+        }
+    }
+
+    /// Extract the source type name from a mapped type's constraint.
+    ///
+    /// For `{ [K in keyof T]: V }`, returns `Some("T")`.
+    fn extract_mapped_source_name(alias: &ast::TypeAnnotation) -> Option<String> {
+        if let ast::TypeKind::MappedType { constraint, .. } = &alias.kind
+            && let ast::TypeKind::KeyOf(inner) = &constraint.kind
+            && let ast::TypeKind::Named(ref ident) = inner.kind
+        {
+            Some(ident.name.clone())
+        } else {
+            None
+        }
     }
 
     /// Register an enum definition in the type registry during the pre-pass.
@@ -3023,7 +3326,9 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::TypeGuard { .. }
                         | ast::TypeKind::Asserts { .. }
                         | ast::TypeKind::Readonly(_)
-                        | ast::TypeKind::TemplateLiteralType { .. } => vec![],
+                        | ast::TypeKind::TemplateLiteralType { .. }
+                        | ast::TypeKind::MappedType { .. }
+                        | ast::TypeKind::IndexAccess(_, _) => vec![],
                     })
                     .unwrap_or_default();
                 RustTypeParam {

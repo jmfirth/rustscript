@@ -744,6 +744,32 @@ pub enum TypeKind {
         /// The interpolated type annotations (one fewer than `quasis`).
         types: Vec<TypeAnnotation>,
     },
+    /// A mapped type: `{ [K in keyof T]: ValueType }`.
+    /// Iterates over keys of a source type and applies a transformation.
+    MappedType {
+        /// The type variable name (e.g., `K`).
+        type_param: Ident,
+        /// The source of keys (e.g., `keyof T`).
+        constraint: Box<TypeAnnotation>,
+        /// The value type expression (may reference K and T[K]).
+        value_type: Box<TypeAnnotation>,
+        /// Whether properties are optional (`?` after `]`).
+        optional: Option<MappedModifier>,
+        /// Whether properties are readonly.
+        readonly: Option<MappedModifier>,
+    },
+    /// An index access type: `T[K]` or `T["field"]`.
+    /// Resolves to the type of field K in type T.
+    IndexAccess(Box<TypeAnnotation>, Box<TypeAnnotation>),
+}
+
+/// A modifier for mapped type properties (`?`, `-?`, `+?`, `readonly`, `-readonly`, `+readonly`).
+#[derive(Debug, Clone)]
+pub enum MappedModifier {
+    /// Add the modifier (`+?` or just `?`).
+    Add,
+    /// Remove the modifier (`-?` or `-readonly`).
+    Remove,
 }
 
 /// An identifier with its source span.
