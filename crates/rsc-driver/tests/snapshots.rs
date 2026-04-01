@@ -5078,3 +5078,35 @@ async function main() {
         "await using should lower to `let` binding, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Overload signatures
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_overload_only_implementation_emitted() {
+    let source = r#"
+function greet(name: string): string;
+function greet(name: string, greeting: string): string;
+function greet(name: string, greeting: Option<string>): string {
+  return "Hello " + name;
+}
+
+function main() {
+  console.log(greet("World", None));
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    // The overload signatures should be erased — only one `fn greet` in output
+    let fn_greet_count = actual.matches("fn greet").count();
+    assert_eq!(
+        fn_greet_count, 1,
+        "expected exactly one `fn greet` in output, got {fn_greet_count}:\n{actual}"
+    );
+    // The implementation body should be present
+    assert!(
+        actual.contains("fn greet("),
+        "expected implementation function in output:\n{actual}"
+    );
+}

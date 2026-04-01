@@ -391,7 +391,12 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
 
     // Phase 6: Static String methods
     registry.register_method("String", "fromCharCode", lower_string_from_char_code, false);
-    registry.register_method("String", "fromCodePoint", lower_string_from_code_point, false);
+    registry.register_method(
+        "String",
+        "fromCodePoint",
+        lower_string_from_code_point,
+        false,
+    );
 
     // Promise utility methods (bare, non-awaited usage)
     registry.register_method("Promise", "resolve", lower_promise_resolve, false);
@@ -3307,10 +3312,7 @@ fn lower_from_char_code_impl(args: Vec<RustExpr>, span: Span) -> RustExpr {
             .into_iter()
             .next()
             .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
-        let cast = RustExpr::synthetic(RustExprKind::Cast(
-            Box::new(arg),
-            RustType::U32,
-        ));
+        let cast = RustExpr::synthetic(RustExprKind::Cast(Box::new(arg), RustType::U32));
         let from_u32 = RustExpr::new(
             RustExprKind::Call {
                 func: "char::from_u32".into(),
@@ -3425,9 +3427,7 @@ pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option
         "SQRT1_2" => "std::f64::consts::FRAC_1_SQRT_2",
         _ => return None,
     };
-    Some(RustExpr::synthetic(RustExprKind::Ident(
-        rust_const.into(),
-    )))
+    Some(RustExpr::synthetic(RustExprKind::Ident(rust_const.into())))
 }
 
 /// Check whether an expression uses `Number.MAX_SAFE_INTEGER` or
@@ -6719,7 +6719,9 @@ mod tests {
         let result = lower_math_constant("Math", "LN2");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_2"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_2")
+        );
     }
 
     #[test]
@@ -6727,7 +6729,9 @@ mod tests {
         let result = lower_math_constant("Math", "LN10");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_10"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LN_10")
+        );
     }
 
     #[test]
@@ -6735,7 +6739,9 @@ mod tests {
         let result = lower_math_constant("Math", "LOG2E");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG2_E"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG2_E")
+        );
     }
 
     #[test]
@@ -6743,7 +6749,9 @@ mod tests {
         let result = lower_math_constant("Math", "LOG10E");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG10_E"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::LOG10_E")
+        );
     }
 
     #[test]
@@ -6751,7 +6759,9 @@ mod tests {
         let result = lower_math_constant("Math", "SQRT2");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::SQRT_2"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::SQRT_2")
+        );
     }
 
     #[test]
@@ -6759,7 +6769,9 @@ mod tests {
         let result = lower_math_constant("Math", "SQRT1_2");
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::FRAC_1_SQRT_2"));
+        assert!(
+            matches!(&expr.kind, RustExprKind::Ident(name) if name == "std::f64::consts::FRAC_1_SQRT_2")
+        );
     }
 
     #[test]
@@ -6900,11 +6912,7 @@ mod tests {
     #[test]
     fn test_builtin_registry_lookup_string_from_code_point_returns_some() {
         let registry = BuiltinRegistry::new();
-        assert!(
-            registry
-                .lookup_method("String", "fromCodePoint")
-                .is_some()
-        );
+        assert!(registry.lookup_method("String", "fromCodePoint").is_some());
     }
 
     // ---------------------------------------------------------------
@@ -7039,10 +7047,8 @@ mod tests {
 
     #[test]
     fn test_lower_string_from_char_code_multi_arg() {
-        let result = lower_string_from_char_code(
-            vec![int_arg(72), int_arg(101), int_arg(108)],
-            span(),
-        );
+        let result =
+            lower_string_from_char_code(vec![int_arg(72), int_arg(101), int_arg(108)], span());
         // Should produce: vec![72, 101, 108].into_iter().filter_map(...).collect::<String>()
         match &result.kind {
             RustExprKind::MethodCall {
