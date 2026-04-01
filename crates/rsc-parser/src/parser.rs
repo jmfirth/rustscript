@@ -4546,6 +4546,49 @@ impl<'src> Parser<'src> {
                     span: super_token.span,
                 })
             }
+            TokenKind::Import => {
+                // Dynamic import expression: `import("module")`
+                if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::LParen) {
+                    let start = self.advance(); // consume `import`
+                    self.advance(); // consume `(`
+                    let arg_token = self.current_token().clone();
+                    let module_path = match &arg_token.kind {
+                        TokenKind::StringLit(s) => s.clone(),
+                        _ => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "dynamic import requires a string literal argument",
+                                )
+                                .with_label(
+                                    arg_token.span,
+                                    self.file_id,
+                                    "expected string literal",
+                                ),
+                            );
+                            return None;
+                        }
+                    };
+                    self.advance(); // consume string literal
+                    let close = self.expect(&TokenKind::RParen)?;
+                    let span = start.span.merge(close.span);
+                    Some(Expr {
+                        kind: ExprKind::DynamicImport(module_path),
+                        span,
+                    })
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "unexpected `import` in expression position; use `import(\"...\")` for dynamic import",
+                        )
+                        .with_label(
+                            token.span,
+                            self.file_id,
+                            "expected `(` for dynamic import",
+                        ),
+                    );
+                    None
+                }
+            }
             TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
             TokenKind::TemplateHead(_) => self.parse_template_literal(),
@@ -10715,5 +10758,82 @@ class Child extends Base {
         } else {
             panic!("expected Return statement");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Dynamic import expression: import("module")
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_dynamic_import_expression() {
+        let module = parse_ok(
+            "function main() { const m = import(\"./utils\"); }",
+        );
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::DynamicImport(path) => {
+                    assert_eq!(path, "./utils");
+                }
+                other => panic!("expected DynamicImport, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_dynamic_import_with_await() {
+        let module = parse_ok(
+            "async function main() { const m = await import(\"./mod\"); }",
+        );
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::Await(inner) => match &inner.kind {
+                    ExprKind::DynamicImport(path) => {
+                        assert_eq!(path, "./mod");
+                    }
+                    other => panic!("expected DynamicImport inside Await, got {other:?}"),
+                },
+                other => panic!("expected Await, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_static_import_not_confused_with_dynamic() {
+        // Ensure static `import { X } from "mod"` still works correctly
+        let module = parse_ok("import { greet } from \"./utils\";");
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Import(decl) => {
+                assert_eq!(decl.source.value, "./utils");
+                assert_eq!(decl.names.len(), 1);
+                assert_eq!(decl.names[0].name, "greet");
+            }
+            other => panic!("expected Import, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_dynamic_import_requires_string_literal() {
+        let (_module, diagnostics) = parse_source(
+            "function main() { const m = import(42); }",
+        );
+        assert!(
+            !diagnostics.is_empty(),
+            "expected diagnostic for non-string import argument"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("string literal")),
+            "expected diagnostic about string literal, got: {diagnostics:?}"
+        );
     }
 }
