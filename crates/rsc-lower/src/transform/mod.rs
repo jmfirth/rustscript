@@ -8818,4 +8818,96 @@ function main() {}"#;
             "type-only import Post should not generate a use declaration"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Task 135: Promise utility methods
+    // ---------------------------------------------------------------
+
+    // T135-L1: await Promise.resolve(x) → just x
+    #[test]
+    fn test_lower_promise_resolve_awaited() {
+        let output =
+            compile_and_emit("async function main() { const val = await Promise.resolve(42); }");
+        assert!(
+            output.contains("let val = 42"),
+            "await Promise.resolve(42) should produce just the value: {output}"
+        );
+        assert!(
+            !output.contains("async {"),
+            "await Promise.resolve should not produce async block: {output}"
+        );
+    }
+
+    // T135-L2: await Promise.reject(msg) → panic!
+    #[test]
+    fn test_lower_promise_reject_awaited() {
+        let output = compile_and_emit(r#"async function main() { await Promise.reject("oops"); }"#);
+        assert!(
+            output.contains("panic!"),
+            "await Promise.reject should produce panic!: {output}"
+        );
+        assert!(
+            output.contains("rejected"),
+            "await Promise.reject should include 'rejected' in message: {output}"
+        );
+    }
+
+    // T135-L3: bare Promise.resolve(x) → async { x }
+    #[test]
+    fn test_lower_promise_resolve_bare() {
+        let output = compile_and_emit("async function main() { const p = Promise.resolve(42); }");
+        assert!(
+            output.contains("async { 42 }"),
+            "bare Promise.resolve(42) should produce async {{ 42 }}: {output}"
+        );
+    }
+
+    // T135-L4: bare Promise.reject(msg) → async { panic!(...) }
+    #[test]
+    fn test_lower_promise_reject_bare() {
+        let output =
+            compile_and_emit(r#"async function main() { const p = Promise.reject("oops"); }"#);
+        assert!(
+            output.contains("async { panic!"),
+            "bare Promise.reject should produce async {{ panic!(...) }}: {output}"
+        );
+    }
+
+    // T135-L5: await Promise.allSettled([...]) → tokio::join!(...)
+    #[test]
+    fn test_lower_promise_all_settled() {
+        let output = compile_and_emit(
+            "async function main() { const results = await Promise.allSettled([a(), b()]); }",
+        );
+        assert!(
+            output.contains("tokio::join!("),
+            "Promise.allSettled should produce tokio::join!: {output}"
+        );
+    }
+
+    // T135-L6: Promise.allSettled sets needs_async_runtime flag
+    #[test]
+    fn test_lower_promise_all_settled_sets_needs_async_runtime() {
+        let source =
+            "async function main() { const results = await Promise.allSettled([a(), b()]); }";
+        let module = parse_module(source);
+        let mut transform = Transform::new(false);
+        let (_, _, _, needs_async, _, _, _, _) = transform.lower_module(&module);
+        assert!(
+            needs_async,
+            "Promise.allSettled should set needs_async_runtime flag"
+        );
+    }
+
+    // T135-L7: Promise.resolve with string argument
+    #[test]
+    fn test_lower_promise_resolve_string() {
+        let output = compile_and_emit(
+            r#"async function main() { const val = await Promise.resolve("hello"); }"#,
+        );
+        assert!(
+            output.contains("let val = \"hello\""),
+            "await Promise.resolve(\"hello\") should produce the string value: {output}"
+        );
+    }
 }

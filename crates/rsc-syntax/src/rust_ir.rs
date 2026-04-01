@@ -1218,6 +1218,16 @@ pub enum RustExprKind {
     /// `futures::future::select_ok(vec![...]).await` — first-to-succeed.
     /// Produced by lowering `await Promise.any([...])`.
     FuturesSelectOk(Vec<RustExpr>),
+    /// `tokio::join!(expr1, expr2, ...)` — like `TokioJoin` but keeps each
+    /// result as-is (no `?` unwrapping). Used for `Promise.allSettled([...])`.
+    /// Each element's result is preserved whether it succeeded or failed.
+    TokioJoinSettled(Vec<RustExpr>),
+    /// `async { value }` — an immediately-resolved future.
+    /// Produced by lowering `Promise.resolve(value)`.
+    PromiseResolve(Box<RustExpr>),
+    /// `async { panic!("rejected: ...") }` — an immediately-rejected future.
+    /// Produced by lowering `Promise.reject(msg)`.
+    PromiseReject(Box<RustExpr>),
     /// A borrow expression: `&expr`.
     ///
     /// Inserted by Tier 2 ownership when a function takes a borrowed parameter.
