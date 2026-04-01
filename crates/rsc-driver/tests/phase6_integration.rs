@@ -2767,6 +2767,12 @@ function main() {
 
 // ===========================================================================
 //
+// TASK 131: Error class hierarchy
+//
+// ===========================================================================
+
+// ===========================================================================
+//
 // TASK 133: Static Array methods
 //
 // ===========================================================================
@@ -2849,6 +2855,21 @@ fn test_console_table_snapshot() {
     assert!(
         rust.contains("println!(\"{:#?}\","),
         "console.table should produce println!(\"{{:#?}}\", ...). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_type_error_snapshot() {
+    let source = r#"function fail() throws string {
+  throw new TypeError("bad type");
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("TypeError: bad type"),
+        "throw new TypeError should emit 'TypeError: bad type' in output.\nActual:\n{actual}"
     );
 }
 
@@ -3134,5 +3155,162 @@ fn test_console_trace_snapshot() {
     assert!(
         rust.contains("eprintln!(\"Trace:"),
         "console.trace should produce eprintln!(\"Trace: ...\"). Generated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_range_error_snapshot() {
+    let source = r#"function fail() throws string {
+  throw new RangeError("out of range");
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("RangeError: out of range"),
+        "throw new RangeError should emit 'RangeError: out of range' in output.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_error_subclass_names() {
+    // All error subclasses should be recognized and prefixed
+    let source = r#"function fail_type() throws string {
+  throw new TypeError("type");
+}
+
+function fail_range() throws string {
+  throw new RangeError("range");
+}
+
+function fail_ref() throws string {
+  throw new ReferenceError("ref");
+}
+
+function fail_syntax() throws string {
+  throw new SyntaxError("syntax");
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("TypeError: type"),
+        "TypeError not found.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("RangeError: range"),
+        "RangeError not found.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("ReferenceError: ref"),
+        "ReferenceError not found.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("SyntaxError: syntax"),
+        "SyntaxError not found.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_base_error_no_prefix() {
+    // `new Error("msg")` should NOT have a prefix — just the message
+    let source = r#"function fail() throws string {
+  throw new Error("something went wrong");
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("something went wrong"),
+        "Error message not found.\nActual:\n{actual}"
+    );
+    // Should NOT have "Error: something went wrong" prefix
+    assert!(
+        !actual.contains("Error: something went wrong"),
+        "base Error should not have 'Error:' prefix.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_error_message_property() {
+    // `e.message` in a catch block should work (identity — the string IS the message)
+    let source = r#"function risky() throws string {
+  throw new Error("oops");
+}
+
+function main() {
+  try {
+    const val = risky();
+  } catch (e) {
+    console.log(e.message);
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    // The catch variable `e` is a String, and `.message` should compile to
+    // the variable itself (clone). It should NOT emit `e.message` as a field access.
+    assert!(
+        !actual.contains("e.message"),
+        "e.message should not appear as literal field access in Rust output.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_error_name_property() {
+    // `e.name` in a catch block should resolve to "Error"
+    let source = r#"function risky() throws string {
+  throw new Error("oops");
+}
+
+function main() {
+  try {
+    const val = risky();
+  } catch (e) {
+    console.log(e.name);
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    // `.name` on a catch variable should emit a string literal "Error"
+    assert!(
+        !actual.contains("e.name"),
+        "e.name should not appear as literal field access in Rust output.\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains(r#""Error""#),
+        "e.name should resolve to the string literal \"Error\".\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_error_no_arg_constructor() {
+    // `new Error()` with no message arg should produce a string
+    let source = r#"function fail() throws string {
+  throw new Error();
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("\"Error\""),
+        "new Error() with no arg should produce string 'Error'.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_type_error_no_arg_constructor() {
+    // `new TypeError()` with no message arg should produce "TypeError"
+    let source = r#"function fail() throws string {
+  throw new TypeError();
+}
+
+function main() {
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("\"TypeError\""),
+        "new TypeError() with no arg should produce string 'TypeError'.\nActual:\n{actual}"
     );
 }

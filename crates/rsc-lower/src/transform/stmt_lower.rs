@@ -1064,7 +1064,17 @@ impl Transform {
         let needs_async = block_contains_await(&tc.try_block);
         let try_body = self.lower_block(&tc.try_block, ctx, use_map, stmt_index, reassigned);
         let catch_block = tc.catch_block.as_ref().expect("catch block checked above");
+
+        // Mark the catch binding as a catch variable so `.message`/`.name` are
+        // handled specially during lowering of the catch body.
+        let catch_var_name = tc.catch_binding.as_ref().map(|b| b.name.clone());
+        if let Some(ref name) = catch_var_name {
+            ctx.mark_as_catch_variable(name.clone());
+        }
         let catch_body = self.lower_block(catch_block, ctx, use_map, stmt_index, reassigned);
+        if let Some(ref name) = catch_var_name {
+            ctx.unmark_catch_variable(name);
+        }
 
         // Determine the error type from the catch annotation or default to String
         let err_ty = tc.catch_type.as_ref().map_or(RustType::String, |ann| {
@@ -1176,7 +1186,16 @@ impl Transform {
         };
 
         let catch_block = tc.catch_block.as_ref()?;
+
+        // Mark the catch binding so `.message`/`.name` are handled specially.
+        let catch_var_name = tc.catch_binding.as_ref().map(|b| b.name.clone());
+        if let Some(ref name) = catch_var_name {
+            ctx.mark_as_catch_variable(name.clone());
+        }
         let catch_body = self.lower_block(catch_block, ctx, use_map, stmt_index, reassigned);
+        if let Some(ref name) = catch_var_name {
+            ctx.unmark_catch_variable(name);
+        }
 
         let catch_binding_name = tc
             .catch_binding

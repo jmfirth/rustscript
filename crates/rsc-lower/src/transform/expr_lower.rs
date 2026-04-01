@@ -170,6 +170,25 @@ impl Transform {
                     }
                 }
 
+                // Error property access on catch variables:
+                // `e.message` → `e.clone()` (the caught error IS the message string)
+                // `e.name` → `"Error"` (errors are strings, name is always "Error")
+                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
+                    && ctx.is_catch_variable(&obj_ident.name)
+                {
+                    if field_name == "message" {
+                        // The caught error is already a String — `.message` is identity.
+                        let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                        return RustExpr::new(RustExprKind::Clone(Box::new(object)), expr.span);
+                    }
+                    if field_name == "name" {
+                        return RustExpr::new(
+                            RustExprKind::StringLit("Error".to_owned()),
+                            expr.span,
+                        );
+                    }
+                }
+
                 // `.length` / `.size` on strings/arrays/maps/sets → `.len() as i64`
                 // The cast to i64 matches RustScript's default numeric type and avoids
                 // type mismatches when assigning to numeric fields (usize vs i64/u32).
@@ -1850,6 +1869,8 @@ impl Transform {
     ///
     /// `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`,
     /// `new Array()` → `vec![]` (empty vec).
+    /// `new Error("msg")` → `"msg".to_string()` (error as string).
+    /// `new TypeError("msg")` → `"TypeError: msg".to_string()` (prefixed error string).
     /// `new ClassName(args)` → `ClassName::new(args)` (class constructor).
     fn lower_new_expr(
         &self,
@@ -1866,6 +1887,19 @@ impl Transform {
                 new_expr.type_name.name
             )));
         }
+
+        // Error class hierarchy: `new Error("msg")` → string expression.
+        // `new TypeError("msg")` → `"TypeError: msg"` etc.
+        let type_name = &new_expr.type_name.name;
+        if is_error_class(type_name) {
+            let args: Vec<RustExpr> = new_expr
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return lower_error_constructor(type_name, args, span);
+        }
+
         let rust_type_name =
             rsc_typeck::resolve::map_collection_type_name(&new_expr.type_name.name);
 
@@ -1990,4 +2024,87 @@ pub(super) fn is_hashmap_type(ty: &RustType) -> bool {
         ty,
         RustType::Generic(base, _) if matches!(base.as_ref(), RustType::Named(name) if name == "HashMap")
     )
+}
+
+/// Check whether a type name is a JavaScript `Error` class or subclass.
+///
+/// Recognizes `Error`, `TypeError`, `RangeError`, `ReferenceError`, and `SyntaxError`.
+pub(super) fn is_error_class(name: &str) -> bool {
+    matches!(
+        name,
+        "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+    )
+}
+
+/// Lower an error constructor to a string expression.
+///
+/// - `new Error("msg")` → `"msg".to_string()`
+/// - `new TypeError("msg")` → `"TypeError: msg".to_string()` (when static string literal)
+///   or `format!("TypeError: {}", msg)` (when dynamic)
+/// - No-arg: `new Error()` → `"Error".to_string()`
+fn lower_error_constructor(
+    type_name: &str,
+    args: Vec<RustExpr>,
+    span: rsc_syntax::span::Span,
+) -> RustExpr {
+    let is_base_error = type_name == "Error";
+    let msg_arg = args.into_iter().next();
+
+    match (is_base_error, msg_arg) {
+        // `new Error("msg")` → `"msg".to_string()`
+        (true, Some(msg)) => msg,
+        // `new Error()` → `"Error".to_string()`
+        (true, None) => RustExpr::new(
+            RustExprKind::ToString(Box::new(RustExpr::new(
+                RustExprKind::StringLit("Error".to_owned()),
+                span,
+            ))),
+            span,
+        ),
+        // `new TypeError("msg")` → `"TypeError: msg".to_string()`
+        (false, Some(msg)) => {
+            // Extract the string from `ToString(StringLit(s))` wrapper
+            // (string literals are lowered as `"s".to_string()`)
+            let static_str = match &msg.kind {
+                RustExprKind::StringLit(s) => Some(s.clone()),
+                RustExprKind::ToString(inner) => {
+                    if let RustExprKind::StringLit(s) = &inner.kind {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(s) = static_str {
+                return RustExpr::new(
+                    RustExprKind::ToString(Box::new(RustExpr::new(
+                        RustExprKind::StringLit(format!("{type_name}: {s}")),
+                        span,
+                    ))),
+                    span,
+                );
+            }
+            // For dynamic expressions, use format!
+            RustExpr::new(
+                RustExprKind::Macro {
+                    name: "format".to_owned(),
+                    args: vec![
+                        RustExpr::synthetic(RustExprKind::StringLit(format!("{type_name}: {{}}"))),
+                        msg,
+                    ],
+                },
+                span,
+            )
+        }
+        // `new TypeError()` → `"TypeError".to_string()`
+        (false, None) => RustExpr::new(
+            RustExprKind::ToString(Box::new(RustExpr::new(
+                RustExprKind::StringLit(type_name.to_owned()),
+                span,
+            ))),
+            span,
+        ),
+    }
 }
