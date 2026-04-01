@@ -1175,6 +1175,7 @@ impl Printer {
                     match v.binding {
                         VarBinding::Const => self.write("const "),
                         VarBinding::Let => self.write("let "),
+                        VarBinding::Var => self.write("var "),
                     }
                     self.write(&v.name.name);
                     if let Some(ty) = &v.type_ann {
