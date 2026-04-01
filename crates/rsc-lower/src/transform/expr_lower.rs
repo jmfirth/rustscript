@@ -1278,6 +1278,27 @@ impl Transform {
             return lowering_fn(receiver, lowered_args, span);
         }
 
+        // Check for array-specific method: type-aware dispatch for methods like
+        // indexOf, lastIndexOf, at, concat, slice, includes that have different
+        // semantics on arrays vs strings.
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+            && matches!(
+                &var_info.ty,
+                RustType::Generic(base, _)
+                    if matches!(base.as_ref(), RustType::Named(n) if n == "Vec")
+            )
+            && let Some(lowering_fn) = self.builtins.lookup_array_method(&mc.method.name)
+        {
+            let receiver = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            let lowered_args: Vec<RustExpr> = mc
+                .args
+                .iter()
+                .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
+                .collect();
+            return lowering_fn(receiver, lowered_args, span);
+        }
+
         // Check for string method: if the method name matches a registered
         // string method, lower via the string method lowering function.
         if let Some(lowering_fn) = self.builtins.lookup_string_method(&mc.method.name) {
