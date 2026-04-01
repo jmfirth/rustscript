@@ -3002,6 +3002,7 @@ fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<RustTypeParam
                         | ast::TypeKind::Infer(_)
                         | ast::TypeKind::TupleSpread(_)
                         | ast::TypeKind::TypeGuard { .. }
+                        | ast::TypeKind::Asserts { .. }
                         | ast::TypeKind::Readonly(_)
                         | ast::TypeKind::TemplateLiteralType { .. } => vec![],
                     })

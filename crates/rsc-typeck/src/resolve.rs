@@ -196,6 +196,10 @@ pub fn resolve_type_annotation(
             // At runtime they return bool; the guard metadata is for narrowing only.
             Type::Primitive(PrimitiveType::Bool)
         }
+        ast::TypeKind::Asserts { .. } => {
+            // Assertion functions return void — they throw/panic on failure.
+            Type::Unit
+        }
         ast::TypeKind::Conditional {
             check_type,
             extends_type,
@@ -437,6 +441,10 @@ pub fn resolve_type_annotation_with_generics(
             // Type guards are `param is Type` return annotations.
             // At runtime they return bool; the guard metadata is for narrowing only.
             Type::Primitive(PrimitiveType::Bool)
+        }
+        ast::TypeKind::Asserts { .. } => {
+            // Assertion functions return void — they throw/panic on failure.
+            Type::Unit
         }
         ast::TypeKind::Conditional {
             check_type,
@@ -780,7 +788,8 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         | ast::TypeKind::Inferred
         | ast::TypeKind::StringLiteral(_)
         | ast::TypeKind::TypeOf(_)
-        | ast::TypeKind::TypeGuard { .. } => false,
+        | ast::TypeKind::TypeGuard { .. }
+        | ast::TypeKind::Asserts { .. } => false,
     }
 }
 
@@ -1622,5 +1631,44 @@ mod tests {
             rsc_syntax::rust_ir::RustType::BoxDynAny,
             "unknown type should resolve to BoxDynAny"
         );
+    }
+
+    // ---- Task 148: assertion functions ----
+
+    #[test]
+    fn test_asserts_lowers_to_void() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Asserts {
+                param: ident("value", 0, 5),
+                guarded_type: Some(Box::new(TypeAnnotation {
+                    kind: TypeKind::Named(ident("string", 6, 12)),
+                    span: span(6, 12),
+                })),
+            },
+            span: span(0, 12),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(ty, Type::Unit, "asserts should resolve to void (Unit)");
+        assert!(diags.is_empty(), "asserts should not emit diagnostics");
+    }
+
+    #[test]
+    fn test_asserts_without_type_lowers_to_void() {
+        let ann = TypeAnnotation {
+            kind: TypeKind::Asserts {
+                param: ident("value", 0, 5),
+                guarded_type: None,
+            },
+            span: span(0, 5),
+        };
+        let mut diags = Vec::new();
+        let ty = resolve_type_annotation(&ann, &mut diags);
+        assert_eq!(
+            ty,
+            Type::Unit,
+            "bare asserts should also resolve to void (Unit)"
+        );
+        assert!(diags.is_empty());
     }
 }

@@ -3410,3 +3410,48 @@ fn test_p6_clear_interval_snapshot() {
         "clearInterval should lower to .abort().\nGenerated:\n{rust}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 148: Assertion functions (`asserts x is Type`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_asserts_function_body_compiles() {
+    let source = r#"function assertString(value: unknown): asserts value is string {
+  if (typeof value !== "string") {
+    throw new TypeError("Expected string");
+  }
+}
+
+function main() {
+  assertString("hello");
+}"#;
+    let actual = compile_to_rust(source);
+    // Assertion functions return void — no `-> bool`, no `-> String`, just no return type or `()`.
+    assert!(
+        !actual.contains("-> bool"),
+        "assertion function should NOT emit `-> bool` (that's type guards).\nActual:\n{actual}"
+    );
+    assert!(
+        actual.contains("fn assert_string") || actual.contains("fn assertString"),
+        "function name should be present in output.\nActual:\n{actual}"
+    );
+}
+
+#[test]
+fn test_asserts_bare_param_compiles() {
+    let source = r#"function assertDefined(value: unknown): asserts value {
+  if (value === null) {
+    throw new TypeError("Expected non-null");
+  }
+}
+
+function main() {
+  assertDefined("hello");
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        !actual.contains("-> bool"),
+        "bare asserts should NOT emit `-> bool`.\nActual:\n{actual}"
+    );
+}

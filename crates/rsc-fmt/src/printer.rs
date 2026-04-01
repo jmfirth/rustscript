@@ -447,6 +447,17 @@ impl Printer {
                 self.write(" is ");
                 self.print_type_annotation(guarded_type);
             }
+            TypeKind::Asserts {
+                param,
+                guarded_type,
+            } => {
+                self.write("asserts ");
+                self.write(&param.name);
+                if let Some(gt) = guarded_type {
+                    self.write(" is ");
+                    self.print_type_annotation(gt);
+                }
+            }
             TypeKind::Readonly(inner) => {
                 self.write("readonly ");
                 self.print_type_annotation(inner);

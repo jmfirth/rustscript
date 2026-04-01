@@ -924,6 +924,37 @@ impl<'src> Parser<'src> {
             let type_ann = self.parse_type_annotation()?;
             let start_span = type_ann.span;
 
+            // Check for assertion function: `asserts param is Type` or `asserts param`
+            // If the parsed type is `Named("asserts")` and the next token is an identifier,
+            // reinterpret as an assertion return type.
+            if let TypeKind::Named(ref asserts_ident) = type_ann.kind
+                && asserts_ident.name == "asserts"
+                && matches!(self.peek(), TokenKind::Ident(_))
+            {
+                let param = self.parse_ident()?;
+                let guarded_type = if self.check_contextual_keyword("is") {
+                    self.advance(); // consume `is`
+                    Some(Box::new(self.parse_type_annotation()?))
+                } else {
+                    None
+                };
+                let end_span = guarded_type
+                    .as_ref()
+                    .map_or(param.span, |t| t.span);
+                let asserts_ann = TypeAnnotation {
+                    kind: TypeKind::Asserts {
+                        param,
+                        guarded_type,
+                    },
+                    span: start_span.merge(end_span),
+                };
+                return Some(ReturnTypeAnnotation {
+                    type_ann: Some(asserts_ann.clone()),
+                    throws: None,
+                    span: asserts_ann.span,
+                });
+            }
+
             // Check for type guard: `param is Type`
             // If the parsed type is a plain identifier and the next token is `is`,
             // reinterpret as a type guard predicate.
@@ -11237,6 +11268,82 @@ class Child extends Base {
                 }
             }
             other => panic!("expected TypeDef, got: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // T148: Assertion functions (`asserts x is Type`)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_asserts_is_type() {
+        let source = r#"function assertString(value: unknown): asserts value is string {
+  if (typeof value !== "string") {
+    throw new TypeError("Expected string");
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "assertString");
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::Asserts {
+                param,
+                guarded_type,
+            } => {
+                assert_eq!(param.name, "value");
+                let gt = guarded_type.as_ref().expect("expected guarded type");
+                match &gt.kind {
+                    TypeKind::Named(ident) => assert_eq!(ident.name, "string"),
+                    other => panic!("expected Named(string), got {other:?}"),
+                }
+            }
+            other => panic!("expected Asserts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_asserts_without_type() {
+        let source = r#"function assertDefined(value: unknown): asserts value {
+  if (value === null) {
+    throw new TypeError("Expected non-null");
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "assertDefined");
+        let ret = f.return_type.as_ref().expect("expected return type");
+        let type_ann = ret.type_ann.as_ref().expect("expected type annotation");
+        match &type_ann.kind {
+            TypeKind::Asserts {
+                param,
+                guarded_type,
+            } => {
+                assert_eq!(param.name, "value");
+                assert!(
+                    guarded_type.is_none(),
+                    "expected no guarded type for bare `asserts value`"
+                );
+            }
+            other => panic!("expected Asserts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_asserts_not_reserved_keyword() {
+        // `asserts` should not be reserved — it should be a valid variable name
+        let source = r#"function main() {
+  const asserts: i32 = 5;
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::VarDecl(decl) => {
+                assert_eq!(decl.name.name, "asserts");
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
         }
     }
 }
