@@ -232,6 +232,17 @@ pub fn resolve_type_annotation(
             // Rust's type system cannot express string patterns, so they lower to String.
             Type::String
         }
+        ast::TypeKind::MappedType { .. } => {
+            // Mapped types require the type registry to resolve (they iterate
+            // over fields of a source type). Without registry context, treat as error
+            // and let the registry-aware resolution handle them.
+            Type::Error
+        }
+        ast::TypeKind::IndexAccess(_, _) => {
+            // Index access types require the type registry to look up field types.
+            // Without registry context, treat as error.
+            Type::Error
+        }
     }
 }
 
@@ -478,7 +489,88 @@ pub fn resolve_type_annotation_with_generics(
             // Rust's type system cannot express string patterns, so they lower to String.
             Type::String
         }
+        ast::TypeKind::MappedType { .. } => {
+            // Mapped types are resolved during the lowering pass where the full
+            // type registry is available. At type-resolution time, return Error
+            // and let the lowering pass handle field iteration and transformation.
+            Type::Error
+        }
+        ast::TypeKind::IndexAccess(object_type, index_type) => {
+            // Index access type: T[K] or T["field"]
+            // Look up the object type in the registry and find the field type.
+            resolve_index_access_type(
+                object_type,
+                index_type,
+                registry,
+                generic_param_names,
+                diagnostics,
+            )
+        }
     }
+}
+
+/// Resolve an index access type `T[K]` by looking up the field type in the registry.
+///
+/// For `T["field"]`, looks up field "field" in type T's registered fields.
+/// For `T[K]` where K is a type parameter, returns `Error` (resolved during lowering).
+fn resolve_index_access_type(
+    object_type: &ast::TypeAnnotation,
+    index_type: &ast::TypeAnnotation,
+    registry: &crate::registry::TypeRegistry,
+    generic_param_names: &[String],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    // Get the object type name
+    let type_name = match &object_type.kind {
+        ast::TypeKind::Named(ident) => {
+            if generic_param_names.contains(&ident.name) {
+                // T[K] where T is a generic param — cannot resolve statically
+                return Type::Error;
+            }
+            &ident.name
+        }
+        _ => {
+            // Complex object type in index access — defer to lowering
+            return Type::Error;
+        }
+    };
+
+    // Get the field name from the index
+    let field_name = match &index_type.kind {
+        ast::TypeKind::StringLiteral(name) => Some(name.as_str()),
+        ast::TypeKind::Named(ident) => {
+            if generic_param_names.contains(&ident.name) {
+                // T[K] where K is a generic param — cannot resolve statically
+                return Type::Error;
+            }
+            None
+        }
+        _ => None,
+    };
+
+    let Some(field_name) = field_name else {
+        // Non-literal index — cannot resolve at type-check time
+        return Type::Error;
+    };
+
+    // Look up the field in the registry
+    if let Some(type_def) = registry.lookup(type_name) {
+        if let Some(fields) = type_def.struct_fields() {
+            for (name, ty) in fields {
+                if name == field_name {
+                    return ty.clone();
+                }
+            }
+            diagnostics.push(Diagnostic::error(format!(
+                "type `{type_name}` has no field `{field_name}`"
+            )));
+        }
+    } else {
+        diagnostics.push(Diagnostic::error(format!(
+            "unknown type `{type_name}` in index access"
+        )));
+    }
+    Type::Error
 }
 
 /// Check whether `check` satisfies the `extends` constraint.
@@ -790,6 +882,12 @@ fn ast_contains_infer(ann: &ast::TypeAnnotation) -> bool {
         | ast::TypeKind::TypeOf(_)
         | ast::TypeKind::TypeGuard { .. }
         | ast::TypeKind::Asserts { .. } => false,
+        ast::TypeKind::MappedType {
+            constraint,
+            value_type,
+            ..
+        } => ast_contains_infer(constraint) || ast_contains_infer(value_type),
+        ast::TypeKind::IndexAccess(obj, idx) => ast_contains_infer(obj) || ast_contains_infer(idx),
     }
 }
 

@@ -475,6 +475,38 @@ impl Printer {
                 }
                 self.write("`");
             }
+            TypeKind::MappedType {
+                type_param,
+                constraint,
+                value_type,
+                optional,
+                readonly,
+            } => {
+                self.write("{ ");
+                if readonly.is_some() {
+                    self.write("readonly ");
+                }
+                self.write("[");
+                self.write(&type_param.name);
+                self.write(" in ");
+                self.print_type_annotation(constraint);
+                self.write("]");
+                if let Some(modifier) = optional {
+                    match modifier {
+                        rsc_syntax::ast::MappedModifier::Add => self.write("?"),
+                        rsc_syntax::ast::MappedModifier::Remove => self.write("-?"),
+                    }
+                }
+                self.write(": ");
+                self.print_type_annotation(value_type);
+                self.write(" }");
+            }
+            TypeKind::IndexAccess(object_type, index_type) => {
+                self.print_type_annotation(object_type);
+                self.write("[");
+                self.print_type_annotation(index_type);
+                self.write("]");
+            }
         }
     }
 

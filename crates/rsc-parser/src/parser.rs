@@ -14,12 +14,12 @@ use rsc_syntax::ast::{
     ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt,
     ForInStmt, ForInit, ForOfStmt, Ident, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr,
     IndexSignature, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
-    LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
-    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock,
-    TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
-    TypeParams, UnaryExpr, UnaryOp, UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt,
-    WildcardReExportDecl,
+    LogicalAssignExpr, LogicalAssignOp, MappedModifier, MethodCallExpr, Module, NewExpr,
+    NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
+    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
+    TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl,
+    VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -1234,33 +1234,65 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::LBrace => {
-                // Struct type def: type Name = { field: Type, ... }
-                // or index signature: type Name = { [key: string]: string }
+                // Could be:
+                // - Mapped type: type Name = { [K in keyof T]: V }
+                // - Struct type def: type Name = { field: Type, ... }
+                // - Index signature: type Name = { [key: string]: string }
+                let brace_start = self.current_token().span;
                 self.expect(&TokenKind::LBrace)?;
-                let (fields, index_signature) = self.parse_field_def_list();
-                let close = self.expect(&TokenKind::RBrace)?;
-                let derives = self.parse_derives_clause();
-                let span = if derives.is_empty() {
-                    start.merge(close.span)
+
+                // Check for mapped type: `[` ident `in` or `readonly [` ident `in`
+                if self.check_mapped_type_start() || self.check_readonly_mapped_type_start() {
+                    let is_readonly = self.check_readonly_mapped_type_start();
+                    let mapped = self.parse_mapped_type(brace_start, is_readonly)?;
+                    let derives = self.parse_derives_clause();
+                    let span = if derives.is_empty() {
+                        start.merge(mapped.span)
+                    } else {
+                        start.merge(self.previous_span())
+                    };
+                    let td = TypeDef {
+                        name,
+                        type_params,
+                        fields: Vec::new(),
+                        index_signature: None,
+                        type_alias: Some(mapped),
+                        derives,
+                        doc_comment,
+                        span,
+                    };
+                    Some(Item {
+                        kind: ItemKind::TypeDef(td),
+                        exported: false,
+                        decorators: vec![],
+                        span,
+                    })
                 } else {
-                    start.merge(self.previous_span())
-                };
-                let td = TypeDef {
-                    name,
-                    type_params,
-                    fields,
-                    index_signature,
-                    type_alias: None,
-                    derives,
-                    doc_comment,
-                    span,
-                };
-                Some(Item {
-                    kind: ItemKind::TypeDef(td),
-                    exported: false,
-                    decorators: vec![],
-                    span,
-                })
+                    let (fields, index_signature) = self.parse_field_def_list();
+                    let close = self.expect(&TokenKind::RBrace)?;
+                    let derives = self.parse_derives_clause();
+                    let span = if derives.is_empty() {
+                        start.merge(close.span)
+                    } else {
+                        start.merge(self.previous_span())
+                    };
+                    let td = TypeDef {
+                        name,
+                        type_params,
+                        fields,
+                        index_signature,
+                        type_alias: None,
+                        derives,
+                        doc_comment,
+                        span,
+                    };
+                    Some(Item {
+                        kind: ItemKind::TypeDef(td),
+                        exported: false,
+                        decorators: vec![],
+                        span,
+                    })
+                }
             }
             _ => {
                 // Type alias: type Name = SomeType or type Name = Utility<T>
@@ -1520,6 +1552,101 @@ impl<'src> Parser<'src> {
             key_name,
             key_type,
             value_type,
+            span,
+        })
+    }
+
+    /// Check whether the current position starts a mapped type: `[` ident `in`.
+    ///
+    /// This distinguishes `{ [K in keyof T]: V }` (mapped type) from
+    /// `{ [key: string]: V }` (index signature).
+    fn check_mapped_type_start(&self) -> bool {
+        if !self.check(&TokenKind::LBracket) {
+            return false;
+        }
+        // Lookahead: `[` ident `in`
+        let after_bracket = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+        let after_ident = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+        matches!(after_bracket, Some(TokenKind::Ident(_)))
+            && matches!(after_ident, Some(TokenKind::In))
+    }
+
+    /// Check whether the current position starts a readonly mapped type: `readonly` `[` ident `in`.
+    fn check_readonly_mapped_type_start(&self) -> bool {
+        let cur = self.peek();
+        let is_readonly = matches!(cur, TokenKind::Ident(name) if name == "readonly");
+        if !is_readonly {
+            return false;
+        }
+        let after_readonly = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+        let after_bracket = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+        let after_ident = self.tokens.get(self.pos + 3).map(|t| &t.kind);
+        matches!(after_readonly, Some(TokenKind::LBracket))
+            && matches!(after_bracket, Some(TokenKind::Ident(_)))
+            && matches!(after_ident, Some(TokenKind::In))
+    }
+
+    /// Parse a mapped type: `{ [K in keyof T]: V }`, `{ readonly [K in keyof T]?: V }`, etc.
+    ///
+    /// Called after `{` has been consumed. `has_readonly` indicates whether a `readonly` prefix
+    /// was detected by lookahead.
+    fn parse_mapped_type(&mut self, start: Span, has_readonly: bool) -> Option<TypeAnnotation> {
+        // Parse optional readonly modifier
+        let readonly = if has_readonly {
+            self.advance(); // consume `readonly`
+            Some(MappedModifier::Add)
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::LBracket)?; // consume `[`
+        let type_param = self.parse_ident()?;
+        self.expect(&TokenKind::In)?; // consume `in`
+        let constraint = self.parse_type_annotation()?;
+        self.expect(&TokenKind::RBracket)?; // consume `]`
+
+        // Parse optional modifier: `?`, `-?`, `+?`
+        let optional = if self.eat(&TokenKind::Question) {
+            Some(MappedModifier::Add)
+        } else if self.check(&TokenKind::Minus) {
+            // Lookahead: `-?`
+            if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Question) {
+                self.advance(); // consume `-`
+                self.advance(); // consume `?`
+                Some(MappedModifier::Remove)
+            } else {
+                None
+            }
+        } else if self.check(&TokenKind::Plus) {
+            // Lookahead: `+?`
+            if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Question) {
+                self.advance(); // consume `+`
+                self.advance(); // consume `?`
+                Some(MappedModifier::Add)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.expect(&TokenKind::Colon)?; // consume `:`
+        let value_type = self.parse_type_annotation()?;
+
+        // Allow optional semicolon or comma before closing brace
+        self.eat(&TokenKind::Semicolon);
+        self.eat(&TokenKind::Comma);
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+        Some(TypeAnnotation {
+            kind: TypeKind::MappedType {
+                type_param,
+                constraint: Box::new(constraint),
+                value_type: Box::new(value_type),
+                optional,
+                readonly,
+            },
             span,
         })
     }
@@ -2272,7 +2399,7 @@ impl<'src> Parser<'src> {
     // Base type annotation parsing covers all token kinds that start a type; splitting would obscure the match
     fn parse_base_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let token = self.current_token().clone();
-        match &token.kind {
+        let base_result = match &token.kind {
             TokenKind::LParen => {
                 // Function type: `(i32, i32) => i32`
                 self.parse_function_type_annotation()
@@ -2398,9 +2525,20 @@ impl<'src> Parser<'src> {
                 }
             }
             TokenKind::LBrace => {
-                // Inline index signature type: `{ [key: string]: T }`
+                // Could be:
+                // - Mapped type: `{ [K in keyof T]: V }` or `{ readonly [K in ...]: V }`
+                // - Index signature: `{ [key: string]: T }`
                 let start = token.span;
                 self.advance(); // consume `{`
+
+                // Check for mapped type with `readonly` prefix
+                if self.check_mapped_type_start() {
+                    return self.parse_mapped_type(start, false);
+                }
+                if self.check_readonly_mapped_type_start() {
+                    return self.parse_mapped_type(start, true);
+                }
+
                 if self.check(&TokenKind::LBracket) {
                     let sig = self.parse_index_signature()?;
                     // Allow trailing comma
@@ -2414,7 +2552,7 @@ impl<'src> Parser<'src> {
                 } else {
                     self.diagnostics.push(
                         Diagnostic::error(
-                            "expected index signature `[key: Type]: Type` in type annotation",
+                            "expected index signature or mapped type in type annotation",
                         )
                         .with_label(
                             self.current_token().span,
@@ -2480,7 +2618,27 @@ impl<'src> Parser<'src> {
                 );
                 None
             }
+        };
+
+        // Parse postfix index access types: `T[K]`, `T["field"]`
+        // Loop to handle chained access: `T[K][J]`
+        let mut result: Option<TypeAnnotation> = base_result;
+        while result.is_some() && self.check(&TokenKind::LBracket) {
+            let base_ty = result.take().expect("checked is_some");
+            self.advance(); // consume `[`
+            let Some(index_type) = self.parse_type_annotation() else {
+                result = Some(base_ty);
+                break;
+            };
+            let close = self.expect(&TokenKind::RBracket)?;
+            let span = base_ty.span.merge(close.span);
+            result = Some(TypeAnnotation {
+                kind: TypeKind::IndexAccess(Box::new(base_ty), Box::new(index_type)),
+                span,
+            });
         }
+
+        result
     }
 
     /// Parse a function type annotation: `(i32, string) => i32`.
@@ -12634,5 +12792,206 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
         } else {
             panic!("expected VarDecl, got {stmt:?}");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 155: Mapped types and index access types
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_mapped_type_basic() {
+        let source = "type Identity<T> = { [K in keyof T]: T[K] }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        assert_eq!(td.name.name, "Identity");
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::MappedType {
+                type_param,
+                constraint,
+                value_type,
+                optional,
+                readonly,
+            } => {
+                assert_eq!(type_param.name, "K");
+                assert!(matches!(constraint.kind, TypeKind::KeyOf(_)));
+                // value_type is T[K]
+                assert!(matches!(value_type.kind, TypeKind::IndexAccess(_, _)));
+                assert!(optional.is_none());
+                assert!(readonly.is_none());
+            }
+            other => panic!("expected MappedType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_mapped_type_optional() {
+        let source = "type PartialT<T> = { [K in keyof T]?: T[K] }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::MappedType { optional, .. } => {
+                assert!(
+                    matches!(optional, Some(MappedModifier::Add)),
+                    "expected Add modifier"
+                );
+            }
+            other => panic!("expected MappedType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_mapped_type_remove_optional() {
+        let source = "type RequiredT<T> = { [K in keyof T]-?: T[K] }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::MappedType { optional, .. } => {
+                assert!(
+                    matches!(optional, Some(MappedModifier::Remove)),
+                    "expected Remove modifier"
+                );
+            }
+            other => panic!("expected MappedType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_index_access_type() {
+        // T["name"] parses as IndexAccess
+        let source = r#"type X = User["name"]"#;
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::IndexAccess(obj, idx) => {
+                assert!(
+                    matches!(&obj.kind, TypeKind::Named(ident) if ident.name == "User"),
+                    "expected Named User, got {:?}",
+                    obj.kind
+                );
+                assert!(
+                    matches!(&idx.kind, TypeKind::StringLiteral(s) if s == "name"),
+                    "expected StringLiteral 'name', got {:?}",
+                    idx.kind
+                );
+            }
+            other => panic!("expected IndexAccess, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_index_access_type_ident_key() {
+        // T[K] parses as IndexAccess where K is a named type
+        let source = "type X<T, K> = T[K]";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::IndexAccess(obj, idx) => {
+                assert!(matches!(&obj.kind, TypeKind::Named(ident) if ident.name == "T"));
+                assert!(matches!(&idx.kind, TypeKind::Named(ident) if ident.name == "K"));
+            }
+            other => panic!("expected IndexAccess, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_mapped_vs_index_signature() {
+        // Index signature should still work: { [key: string]: T }
+        let source = "type Config = { [key: string]: string }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        // Index signatures are stored as index_signature field, not type_alias
+        assert!(td.type_alias.is_none(), "should not be a type alias");
+        let sig = td
+            .index_signature
+            .as_ref()
+            .expect("expected index signature");
+        assert_eq!(sig.key_name.name, "key");
+        assert!(matches!(sig.key_type.kind, TypeKind::Named(ref ident) if ident.name == "string"));
+        assert!(
+            matches!(sig.value_type.kind, TypeKind::Named(ref ident) if ident.name == "string")
+        );
+    }
+
+    #[test]
+    fn test_parser_mapped_type_nullable() {
+        // Type alias for mapped type that makes all fields nullable
+        let source = "type Nullable<T> = { [K in keyof T]: T[K] | null }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        assert_eq!(td.name.name, "Nullable");
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::MappedType {
+                type_param,
+                value_type,
+                ..
+            } => {
+                assert_eq!(type_param.name, "K");
+                // value_type should be a union: T[K] | null
+                assert!(
+                    matches!(value_type.kind, TypeKind::Union(_)),
+                    "expected Union value type, got {:?}",
+                    value_type.kind
+                );
+            }
+            other => panic!("expected MappedType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_mapped_type_readonly() {
+        let source = "type ReadonlyT<T> = { readonly [K in keyof T]: T[K] }";
+        let module = parse_ok(source);
+        let ItemKind::TypeDef(td) = &module.items[0].kind else {
+            panic!("expected TypeDef");
+        };
+        let alias = td.type_alias.as_ref().expect("expected type alias");
+        match &alias.kind {
+            TypeKind::MappedType { readonly, .. } => {
+                assert!(
+                    matches!(readonly, Some(MappedModifier::Add)),
+                    "expected readonly Add modifier"
+                );
+            }
+            other => panic!("expected MappedType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_inline_mapped_type_annotation() {
+        // Mapped type used as a type annotation (not just type alias)
+        let source = r#"
+            function foo(x: { [K in keyof User]: User[K] | null }): void {
+            }
+        "#;
+        let module = parse_ok(source);
+        let ItemKind::Function(f) = &module.items[0].kind else {
+            panic!("expected Function");
+        };
+        let param_type = &f.params[0].type_ann;
+        assert!(
+            matches!(param_type.kind, TypeKind::MappedType { .. }),
+            "expected MappedType param type, got {:?}",
+            param_type.kind
+        );
     }
 }
