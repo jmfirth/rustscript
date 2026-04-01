@@ -2711,3 +2711,99 @@ function main() {
         "parameter with template literal type alias should accept String.\nGenerated:\n{rust}"
     );
 }
+
+// ===========================================================================
+//
+// CATEGORY: Timer Functions (Task 136)
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// setTimeout: callback + delay → tokio::spawn with sleep
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_set_timeout_snapshot() {
+    let source = r#"async function main() {
+  const handle = setTimeout(() => {
+    console.log("timeout fired");
+  }, 1000);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("tokio::spawn"),
+        "setTimeout should lower to tokio::spawn.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("tokio::time::sleep"),
+        "setTimeout should include tokio::time::sleep.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("Duration::from_millis"),
+        "setTimeout should use Duration::from_millis.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("async move"),
+        "setTimeout should produce async move block.\nGenerated:\n{rust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// setInterval: callback + delay → tokio::spawn with loop + sleep
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_set_interval_snapshot() {
+    let source = r#"async function main() {
+  const handle = setInterval(() => {
+    console.log("tick");
+  }, 500);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("tokio::spawn"),
+        "setInterval should lower to tokio::spawn.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("loop {") || rust.contains("loop{"),
+        "setInterval should contain a loop.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("tokio::time::sleep"),
+        "setInterval should include tokio::time::sleep.\nGenerated:\n{rust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// clearTimeout / clearInterval: handle → .abort()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_clear_timeout_snapshot() {
+    let source = r#"async function main() {
+  const handle = setTimeout(() => {
+    console.log("timeout");
+  }, 1000);
+  clearTimeout(handle);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".abort()"),
+        "clearTimeout should lower to .abort().\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_p6_clear_interval_snapshot() {
+    let source = r#"async function main() {
+  const handle = setInterval(() => {
+    console.log("tick");
+  }, 500);
+  clearInterval(handle);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".abort()"),
+        "clearInterval should lower to .abort().\nGenerated:\n{rust}"
+    );
+}

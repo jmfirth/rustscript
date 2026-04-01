@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use rsc_syntax::rust_ir::{
     IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustClosureParam, RustExpr,
-    RustExprKind, RustType,
+    RustExprKind, RustLoopStmt, RustStmt, RustType,
 };
 
 #[cfg(test)]
@@ -190,6 +190,12 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 2: spawn builtin
     registry.register_function("spawn", lower_spawn);
 
+    // Timer functions: setTimeout, setInterval, clearTimeout, clearInterval
+    registry.register_function("setTimeout", lower_set_timeout);
+    registry.register_function("setInterval", lower_set_interval);
+    registry.register_function("clearTimeout", lower_clear_timeout);
+    registry.register_function("clearInterval", lower_clear_interval);
+
     // Phase 5: Additional string methods
     registry.register_string_method("charAt", lower_char_at);
     registry.register_string_method("charCodeAt", lower_char_code_at);
@@ -358,6 +364,211 @@ fn lower_spawn(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
         RustExprKind::Call {
             func: "tokio::spawn".into(),
             args: vec![async_block],
+        },
+        arg_span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Timer function lowering
+// ---------------------------------------------------------------------------
+
+/// Build `tokio::time::sleep(std::time::Duration::from_millis(ms)).await`.
+///
+/// Creates the Rust IR for the sleep-then-await expression used in both
+/// `setTimeout` and `setInterval` lowering.
+fn build_sleep_await(delay_expr: RustExpr, span: Span) -> RustExpr {
+    let duration = RustExpr::new(
+        RustExprKind::StaticCall {
+            type_name: "std::time::Duration".into(),
+            method: "from_millis".into(),
+            args: vec![delay_expr],
+        },
+        span,
+    );
+    let sleep_call = RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::time::sleep".into(),
+            args: vec![duration],
+        },
+        span,
+    );
+    RustExpr::new(RustExprKind::Await(Box::new(sleep_call)), span)
+}
+
+/// Extract callback body statements from a lowered callback argument.
+///
+/// If the argument is a `Closure`, extracts the body statements and inlines
+/// them directly. If the argument is an `Ident` (function reference), generates
+/// a `name()` call expression. For other expressions, wraps them in a
+/// statement as-is.
+fn callback_body_stmts(callback: RustExpr) -> Vec<RustStmt> {
+    match callback.kind {
+        RustExprKind::Closure { body, .. } => match body {
+            RustClosureBody::Block(b) => {
+                let mut stmts = b.stmts;
+                if let Some(trailing) = b.expr {
+                    stmts.push(RustStmt::Semi(*trailing));
+                }
+                stmts
+            }
+            RustClosureBody::Expr(e) => vec![RustStmt::Semi(*e)],
+        },
+        // Function reference — generate `name()`
+        RustExprKind::Ident(name) => {
+            vec![RustStmt::Semi(RustExpr::synthetic(RustExprKind::Call {
+                func: name,
+                args: vec![],
+            }))]
+        }
+        // Other expression — emit as-is (e.g., already a call)
+        other => vec![RustStmt::Semi(RustExpr::synthetic(other))],
+    }
+}
+
+/// Lower `setTimeout(callback, delay)` to:
+/// ```text
+/// tokio::spawn(async move {
+///     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+///     <callback body>
+/// })
+/// ```
+///
+/// Extracts the closure body from the callback argument and inlines it after
+/// the sleep. The result is a `tokio::spawn(...)` call that returns a `JoinHandle`.
+fn lower_set_timeout(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let mut args_iter = args.into_iter();
+    let callback = args_iter.next().unwrap_or_else(|| {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![],
+                expr: None,
+            }),
+        })
+    });
+    let delay = args_iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let sleep_await = build_sleep_await(delay, arg_span);
+    let body_stmts = callback_body_stmts(callback);
+
+    let mut stmts = vec![RustStmt::Semi(sleep_await)];
+    stmts.extend(body_stmts);
+
+    let async_block = RustExpr::synthetic(RustExprKind::AsyncBlock {
+        is_move: true,
+        body: RustBlock { stmts, expr: None },
+    });
+
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
+        },
+        arg_span,
+    )
+}
+
+/// Lower `setInterval(callback, delay)` to:
+/// ```text
+/// tokio::spawn(async move {
+///     loop {
+///         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+///         <callback body>
+///     }
+/// })
+/// ```
+///
+/// Wraps the sleep + callback in an infinite `loop` inside the spawned task.
+/// Returns a `JoinHandle` that can be aborted with `clearInterval`.
+fn lower_set_interval(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let mut args_iter = args.into_iter();
+    let callback = args_iter.next().unwrap_or_else(|| {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![],
+                expr: None,
+            }),
+        })
+    });
+    let delay = args_iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let sleep_await = build_sleep_await(delay, arg_span);
+    let body_stmts = callback_body_stmts(callback);
+
+    let mut loop_stmts = vec![RustStmt::Semi(sleep_await)];
+    loop_stmts.extend(body_stmts);
+
+    let loop_stmt = RustStmt::Loop(RustLoopStmt {
+        label: None,
+        body: RustBlock {
+            stmts: loop_stmts,
+            expr: None,
+        },
+        span: Some(arg_span),
+    });
+
+    let async_block = RustExpr::synthetic(RustExprKind::AsyncBlock {
+        is_move: true,
+        body: RustBlock {
+            stmts: vec![loop_stmt],
+            expr: None,
+        },
+    });
+
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
+        },
+        arg_span,
+    )
+}
+
+/// Lower `clearTimeout(handle)` to `handle.abort()`.
+///
+/// Cancels a spawned timeout task by calling `.abort()` on the `JoinHandle`.
+fn lower_clear_timeout(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let handle = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_handle".into())));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(handle),
+            method: "abort".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        arg_span,
+    )
+}
+
+/// Lower `clearInterval(handle)` to `handle.abort()`.
+///
+/// Cancels a spawned interval task by calling `.abort()` on the `JoinHandle`.
+fn lower_clear_interval(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let handle = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_handle".into())));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(handle),
+            method: "abort".into(),
+            type_args: vec![],
+            args: vec![],
         },
         arg_span,
     )
@@ -3489,6 +3700,234 @@ mod tests {
                 }
             }
             other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 136: Timer function tests
+    // ---------------------------------------------------------------
+
+    // Test: lookup_function("setTimeout") returns Some
+    #[test]
+    fn test_builtin_registry_lookup_function_set_timeout_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("setTimeout").is_some(),
+            "setTimeout should be registered as a builtin free function"
+        );
+    }
+
+    // Test: lookup_function("setInterval") returns Some
+    #[test]
+    fn test_builtin_registry_lookup_function_set_interval_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("setInterval").is_some(),
+            "setInterval should be registered as a builtin free function"
+        );
+    }
+
+    // Test: lookup_function("clearTimeout") returns Some
+    #[test]
+    fn test_builtin_registry_lookup_function_clear_timeout_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("clearTimeout").is_some(),
+            "clearTimeout should be registered as a builtin free function"
+        );
+    }
+
+    // Test: lookup_function("clearInterval") returns Some
+    #[test]
+    fn test_builtin_registry_lookup_function_clear_interval_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("clearInterval").is_some(),
+            "clearInterval should be registered as a builtin free function"
+        );
+    }
+
+    // Test: lower_set_timeout produces tokio::spawn(async move { sleep.await; body })
+    #[test]
+    fn test_lower_set_timeout_produces_tokio_spawn_with_sleep() {
+        let callback_body = RustExpr::synthetic(RustExprKind::Call {
+            func: "work".into(),
+            args: vec![],
+        });
+        let callback = RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![RustStmt::Semi(callback_body)],
+                expr: None,
+            }),
+        });
+        let delay = RustExpr::synthetic(RustExprKind::IntLit(1000));
+
+        let result = lower_set_timeout(vec![callback, delay], span());
+        match &result.kind {
+            RustExprKind::Call { func, args } => {
+                assert_eq!(func, "tokio::spawn");
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    RustExprKind::AsyncBlock { is_move, body } => {
+                        assert!(is_move, "setTimeout should produce async move block");
+                        // First stmt: sleep.await, second: the callback body
+                        assert_eq!(
+                            body.stmts.len(),
+                            2,
+                            "expected 2 stmts (sleep + callback body), got {}",
+                            body.stmts.len()
+                        );
+                        // Verify first statement is the sleep await
+                        match &body.stmts[0] {
+                            RustStmt::Semi(expr) => {
+                                assert!(
+                                    matches!(&expr.kind, RustExprKind::Await(_)),
+                                    "first stmt should be Await(sleep), got {:?}",
+                                    expr.kind
+                                );
+                            }
+                            other => panic!("expected Semi(Await), got {other:?}"),
+                        }
+                        // Verify second statement is the callback call
+                        match &body.stmts[1] {
+                            RustStmt::Semi(expr) => {
+                                assert!(
+                                    matches!(&expr.kind, RustExprKind::Call { func, .. } if func == "work"),
+                                    "second stmt should be work() call, got {:?}",
+                                    expr.kind
+                                );
+                            }
+                            other => panic!("expected Semi(Call), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected AsyncBlock, got {other:?}"),
+                }
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    // Test: lower_set_interval produces tokio::spawn(async move { loop { sleep.await; body } })
+    #[test]
+    fn test_lower_set_interval_produces_tokio_spawn_with_loop() {
+        let callback_body = RustExpr::synthetic(RustExprKind::Call {
+            func: "tick".into(),
+            args: vec![],
+        });
+        let callback = RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![RustStmt::Semi(callback_body)],
+                expr: None,
+            }),
+        });
+        let delay = RustExpr::synthetic(RustExprKind::IntLit(500));
+
+        let result = lower_set_interval(vec![callback, delay], span());
+        match &result.kind {
+            RustExprKind::Call { func, args } => {
+                assert_eq!(func, "tokio::spawn");
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    RustExprKind::AsyncBlock { is_move, body } => {
+                        assert!(is_move, "setInterval should produce async move block");
+                        // Single stmt: a Loop
+                        assert_eq!(
+                            body.stmts.len(),
+                            1,
+                            "expected 1 stmt (loop), got {}",
+                            body.stmts.len()
+                        );
+                        match &body.stmts[0] {
+                            RustStmt::Loop(loop_stmt) => {
+                                assert!(loop_stmt.label.is_none());
+                                // Loop body: sleep + callback
+                                assert_eq!(
+                                    loop_stmt.body.stmts.len(),
+                                    2,
+                                    "loop body should have 2 stmts (sleep + callback)"
+                                );
+                                // Verify sleep await
+                                match &loop_stmt.body.stmts[0] {
+                                    RustStmt::Semi(expr) => {
+                                        assert!(
+                                            matches!(&expr.kind, RustExprKind::Await(_)),
+                                            "first loop stmt should be Await(sleep)"
+                                        );
+                                    }
+                                    other => panic!("expected Semi(Await), got {other:?}"),
+                                }
+                                // Verify callback call
+                                match &loop_stmt.body.stmts[1] {
+                                    RustStmt::Semi(expr) => {
+                                        assert!(
+                                            matches!(&expr.kind, RustExprKind::Call { func, .. } if func == "tick"),
+                                            "second loop stmt should be tick() call"
+                                        );
+                                    }
+                                    other => panic!("expected Semi(Call), got {other:?}"),
+                                }
+                            }
+                            other => panic!("expected Loop, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected AsyncBlock, got {other:?}"),
+                }
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    // Test: lower_clear_timeout produces handle.abort()
+    #[test]
+    fn test_lower_clear_timeout_produces_abort() {
+        let handle = RustExpr::synthetic(RustExprKind::Ident("timer_handle".into()));
+        let result = lower_clear_timeout(vec![handle], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "abort");
+                assert!(args.is_empty());
+                assert!(
+                    matches!(&receiver.kind, RustExprKind::Ident(name) if name == "timer_handle"),
+                    "receiver should be the handle ident"
+                );
+            }
+            other => panic!("expected MethodCall(abort), got {other:?}"),
+        }
+    }
+
+    // Test: lower_clear_interval produces handle.abort()
+    #[test]
+    fn test_lower_clear_interval_produces_abort() {
+        let handle = RustExpr::synthetic(RustExprKind::Ident("interval_handle".into()));
+        let result = lower_clear_interval(vec![handle], span());
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "abort");
+                assert!(args.is_empty());
+                assert!(
+                    matches!(&receiver.kind, RustExprKind::Ident(name) if name == "interval_handle"),
+                    "receiver should be the handle ident"
+                );
+            }
+            other => panic!("expected MethodCall(abort), got {other:?}"),
         }
     }
 
