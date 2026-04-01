@@ -286,6 +286,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("Array", "from", lower_array_from, false);
     registry.register_method("Array", "isArray", lower_array_is_array, false);
     registry.register_method("Array", "of", lower_array_of, false);
+
+    // Phase 6: Static String methods
+    registry.register_method("String", "fromCharCode", lower_string_from_char_code, false);
+    registry.register_method("String", "fromCodePoint", lower_string_from_code_point, false);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -2066,6 +2070,133 @@ fn lower_array_is_array(_args: Vec<RustExpr>, span: Span) -> RustExpr {
 /// Collects all arguments into a `VecLit` IR node that emits as `vec![...]`.
 fn lower_array_of(args: Vec<RustExpr>, span: Span) -> RustExpr {
     RustExpr::new(RustExprKind::VecLit(args), span)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: Static String method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `String.fromCharCode(code)` to
+/// `char::from_u32(code as u32).map(|c| c.to_string()).unwrap_or_default()`.
+///
+/// For multiple arguments, lowers to
+/// `vec![c1, c2, ...].into_iter().filter_map(|c| char::from_u32(c as u32)).collect::<String>()`.
+fn lower_string_from_char_code(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    lower_from_char_code_impl(args, span)
+}
+
+/// Lower `String.fromCodePoint(code)` — same as `fromCharCode` in Rust,
+/// since `char` is a Unicode scalar value.
+fn lower_string_from_code_point(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    lower_from_char_code_impl(args, span)
+}
+
+/// Shared implementation for `fromCharCode` and `fromCodePoint`.
+///
+/// Single arg: `char::from_u32(code as u32).map(|c| c.to_string()).unwrap_or_default()`
+/// Multiple args: `vec![c1, c2, ...].into_iter().filter_map(|c| char::from_u32(c as u32)).collect::<String>()`
+fn lower_from_char_code_impl(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    if args.len() <= 1 {
+        // Single argument (or zero — use 0 as default)
+        let arg = args
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+        let cast = RustExpr::synthetic(RustExprKind::Cast(
+            Box::new(arg),
+            RustType::U32,
+        ));
+        let from_u32 = RustExpr::new(
+            RustExprKind::Call {
+                func: "char::from_u32".into(),
+                args: vec![cast],
+            },
+            span,
+        );
+        let map_call = RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(from_u32),
+                method: "map".into(),
+                type_args: vec![],
+                args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                    is_async: false,
+                    is_move: false,
+                    params: vec![RustClosureParam {
+                        name: "c".into(),
+                        ty: None,
+                    }],
+                    return_type: None,
+                    body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                                "c".into(),
+                            ))),
+                            method: "to_string".into(),
+                            type_args: vec![],
+                            args: vec![],
+                        },
+                    ))),
+                })],
+            },
+            span,
+        );
+        RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(map_call),
+                method: "unwrap_or_default".into(),
+                type_args: vec![],
+                args: vec![],
+            },
+            span,
+        )
+    } else {
+        // Multiple arguments: vec![c1, c2, ...].into_iter().filter_map(|c| char::from_u32(c as u32)).collect::<String>()
+        let vec_lit = RustExpr::new(RustExprKind::VecLit(args), span);
+        let into_iter = RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(vec_lit),
+                method: "into_iter".into(),
+                type_args: vec![],
+                args: vec![],
+            },
+            span,
+        );
+        let filter_map = RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(into_iter),
+                method: "filter_map".into(),
+                type_args: vec![],
+                args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                    is_async: false,
+                    is_move: false,
+                    params: vec![RustClosureParam {
+                        name: "c".into(),
+                        ty: None,
+                    }],
+                    return_type: None,
+                    body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(
+                        RustExprKind::Call {
+                            func: "char::from_u32".into(),
+                            args: vec![RustExpr::synthetic(RustExprKind::Cast(
+                                Box::new(RustExpr::synthetic(RustExprKind::Ident("c".into()))),
+                                RustType::U32,
+                            ))],
+                        },
+                    ))),
+                })],
+            },
+            span,
+        );
+        RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(filter_map),
+                method: "collect".into(),
+                type_args: vec![RustType::String],
+                args: vec![],
+            },
+            span,
+        )
+    }
 }
 
 /// Check whether an expression uses `Math.PI` or `Math.E` properties.
@@ -4648,6 +4779,57 @@ mod tests {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Task 134: Static String methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_string_from_char_code_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("String", "fromCharCode").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_string_from_code_point_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry
+                .lookup_method("String", "fromCodePoint")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_lower_string_from_char_code_single_arg() {
+        let result = lower_string_from_char_code(vec![int_arg(65)], span());
+        // Should produce: char::from_u32(65 as u32).map(|c| c.to_string()).unwrap_or_default()
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "unwrap_or_default");
+            }
+            other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_string_from_char_code_multi_arg() {
+        let result = lower_string_from_char_code(
+            vec![int_arg(72), int_arg(101), int_arg(108)],
+            span(),
+        );
+        // Should produce: vec![72, 101, 108].into_iter().filter_map(...).collect::<String>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                method, type_args, ..
+            } => {
+                assert_eq!(method, "collect");
+                assert_eq!(type_args.len(), 1);
+                assert_eq!(type_args[0].to_string(), "String");
+            }
+            other => panic!("expected MethodCall(collect::<String>), got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_lower_array_is_array() {
         let args = vec![RustExpr::new(RustExprKind::Ident("x".to_owned()), span())];
@@ -4679,6 +4861,18 @@ mod tests {
     }
 
     #[test]
+    fn test_lower_string_from_code_point_single_arg() {
+        let result = lower_string_from_code_point(vec![int_arg(128522)], span());
+        // Should produce same shape as fromCharCode
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "unwrap_or_default");
+            }
+            other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_builtin_registry_lookup_array_from() {
         let registry = BuiltinRegistry::new();
         assert!(registry.lookup_method("Array", "from").is_some());
@@ -4694,5 +4888,17 @@ mod tests {
     fn test_builtin_registry_lookup_array_of() {
         let registry = BuiltinRegistry::new();
         assert!(registry.lookup_method("Array", "of").is_some());
+    }
+
+    #[test]
+    fn test_lower_string_from_char_code_no_args() {
+        let result = lower_string_from_char_code(vec![], span());
+        // Zero args should still produce a valid expression (defaults to code 0)
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => {
+                assert_eq!(method, "unwrap_or_default");
+            }
+            other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
+        }
     }
 }

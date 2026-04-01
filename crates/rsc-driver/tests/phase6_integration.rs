@@ -2785,6 +2785,27 @@ fn test_array_from_snapshot() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 134: Static String methods — String.fromCharCode / String.fromCodePoint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_string_from_char_code_snapshot() {
+    let source = r#"function main() {
+  const a: string = String.fromCharCode(65);
+  console.log(a);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("char::from_u32"),
+        "String.fromCharCode should lower to char::from_u32.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("unwrap_or_default"),
+        "String.fromCharCode should include unwrap_or_default fallback.\nGenerated:\n{rust}"
+    );
+}
+
 #[test]
 fn test_array_of_snapshot() {
     let source = r#"function main() {
@@ -2795,5 +2816,35 @@ fn test_array_of_snapshot() {
     assert!(
         rust.contains("vec!["),
         "Array.of should lower to vec![...].\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_string_from_code_point_snapshot() {
+    let source = r#"function main() {
+  const emoji: string = String.fromCodePoint(128522);
+  console.log(emoji);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("char::from_u32"),
+        "String.fromCodePoint should lower to char::from_u32.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+fn test_string_from_char_code_multi_arg_snapshot() {
+    let source = r#"function main() {
+  const hello: string = String.fromCharCode(72, 101, 108, 108, 111);
+  console.log(hello);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("collect::<String>"),
+        "Multi-arg String.fromCharCode should use collect::<String>.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("filter_map"),
+        "Multi-arg String.fromCharCode should use filter_map.\nGenerated:\n{rust}"
     );
 }
