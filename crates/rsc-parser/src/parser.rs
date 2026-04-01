@@ -11,14 +11,15 @@ use rsc_syntax::ast::{
     Block, BreakStmt, CallExpr, ClassConstructor, ClassDef, ClassField, ClassGetter, ClassMember,
     ClassMethod, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam, ContinueStmt, Decorator,
     DestructureField, DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr,
-    ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForInStmt, ForOfStmt,
-    Ident, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, IndexSignature, InlineRustBlock,
-    InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, LogicalAssignOp,
-    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
-    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr,
-    SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
-    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
-    UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
+    ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt,
+    ForInStmt, ForInit, ForOfStmt, Ident, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr,
+    IndexSignature, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    LogicalAssignExpr, LogicalAssignOp, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
+    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, Stmt,
+    StringLiteral, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock,
+    TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam,
+    TypeParams, UnaryExpr, UnaryOp, UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt,
+    WildcardReExportDecl,
 };
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::source::FileId;
@@ -306,6 +307,8 @@ impl<'src> Parser<'src> {
             TokenKind::Void => "`void`",
             TokenKind::In => "`in`",
             TokenKind::Declare => "`declare`",
+            TokenKind::PlusPlus => "`++`",
+            TokenKind::MinusMinus => "`--`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -1077,9 +1080,7 @@ impl<'src> Parser<'src> {
                 } else {
                     None
                 };
-                let end_span = guarded_type
-                    .as_ref()
-                    .map_or(param.span, |t| t.span);
+                let end_span = guarded_type.as_ref().map_or(param.span, |t| t.span);
                 let asserts_ann = TypeAnnotation {
                     kind: TypeKind::Asserts {
                         param,
@@ -3081,10 +3082,11 @@ impl<'src> Parser<'src> {
         })
     }
 
-    /// Parse a for loop statement, dispatching to `for...of` or `for...in`.
+    /// Parse a for loop statement, dispatching to `for...of`, `for...in`, or classic.
     ///
     /// `for (const/let IDENT of EXPR) BLOCK` → `Stmt::For`
     /// `for (const/let IDENT in EXPR) BLOCK` → `Stmt::ForIn`
+    /// `for (init; cond; update) BLOCK` → `Stmt::ForClassic`
     fn parse_for_stmt(&mut self, label: Option<String>) -> Option<Stmt> {
         let for_token = self.advance(); // consume `for`
         let start = for_token.span;
@@ -3097,56 +3099,157 @@ impl<'src> Parser<'src> {
 
         self.expect(&TokenKind::LParen)?;
 
-        // Parse binding kind: `const` or `let`
-        let binding_token = self.current_token().clone();
-        let binding = match &binding_token.kind {
-            TokenKind::Const => {
-                self.advance();
-                VarBinding::Const
-            }
-            TokenKind::Let => {
-                self.advance();
-                VarBinding::Let
-            }
-            _ => {
-                self.diagnostics.push(
-                    Diagnostic::error("expected `const` or `let` in for loop").with_label(
-                        binding_token.span,
-                        self.file_id,
-                        "expected `const` or `let`",
-                    ),
-                );
-                return None;
-            }
-        };
-
-        let Some(variable) = self.parse_ident() else {
-            self.synchronize();
-            return None;
-        };
-
-        // Distinguish `of` vs `in` keyword
-        let is_for_in = self.check(&TokenKind::In);
-        let is_for_of = self.check_contextual_keyword("of");
-
-        if !is_for_in && !is_for_of {
-            let current = self.current_token().clone();
-            self.diagnostics.push(
-                Diagnostic::error("expected `of` or `in` in for loop").with_label(
-                    current.span,
-                    self.file_id,
-                    "expected `of` or `in`",
-                ),
-            );
-            return None;
+        // Check for `for (;;)` — empty init means classic for
+        if self.check(&TokenKind::Semicolon) {
+            // Classic for loop with empty init: `for (; cond; update)`
+            return self.parse_for_classic_rest(label, start, None);
         }
 
-        // Consume the `of` or `in` keyword
-        self.advance();
+        // Check for binding keyword (const/let) — could be for-of/for-in or classic
+        let binding_token = self.current_token().clone();
+        let has_binding = matches!(&binding_token.kind, TokenKind::Const | TokenKind::Let);
 
-        let Some(iterable) = self.parse_expr() else {
+        if has_binding {
+            let binding = match &binding_token.kind {
+                TokenKind::Const => {
+                    self.advance();
+                    VarBinding::Const
+                }
+                TokenKind::Let => {
+                    self.advance();
+                    VarBinding::Let
+                }
+                _ => unreachable!(),
+            };
+
+            let Some(variable) = self.parse_ident() else {
+                self.synchronize();
+                return None;
+            };
+
+            // Check what follows the variable: `of`, `in`, or `=` / `:` / `;`
+            let is_for_in = self.check(&TokenKind::In);
+            let is_for_of = self.check_contextual_keyword("of");
+
+            if is_for_in || is_for_of {
+                // for-of or for-in
+                self.advance(); // consume `of` or `in`
+
+                let Some(iterable) = self.parse_expr() else {
+                    self.synchronize();
+                    return None;
+                };
+
+                self.expect(&TokenKind::RParen)?;
+
+                let body = self.parse_block()?;
+                let body_span = body.span;
+
+                if is_for_in {
+                    return Some(Stmt::ForIn(ForInStmt {
+                        label,
+                        binding,
+                        variable,
+                        iterable,
+                        body,
+                        span: start.merge(body_span),
+                    }));
+                }
+                return Some(Stmt::For(ForOfStmt {
+                    label,
+                    binding,
+                    variable,
+                    iterable,
+                    body,
+                    is_await,
+                    span: start.merge(body_span),
+                }));
+            }
+
+            // Classic for loop with variable declaration: `for (let i = 0; ...)`
+            // Parse optional type annotation
+            let type_ann = if self.check(&TokenKind::Colon) {
+                self.advance();
+                Some(self.parse_type_annotation()?)
+            } else {
+                None
+            };
+
+            // Parse initializer `= expr`
+            let init_expr = if self.eat(&TokenKind::Eq) {
+                self.parse_expr()?
+            } else {
+                // Default to 0 if no initializer
+                Expr {
+                    kind: ExprKind::IntLit(0),
+                    span: variable.span,
+                }
+            };
+
+            let init_span = variable.span.merge(init_expr.span);
+            let init = Some(ForInit::VarDecl(VarDecl {
+                binding,
+                name: variable,
+                type_ann,
+                init: init_expr,
+                span: init_span,
+            }));
+
+            return self.parse_for_classic_rest(label, start, init);
+        }
+
+        // No binding keyword — either an expression init or error for for-of/for-in
+        // Try to parse as expression init (e.g., `for (i = 0; ...)`)
+        let Some(init_expr) = self.parse_expr() else {
             self.synchronize();
             return None;
+        };
+
+        if self.check(&TokenKind::Semicolon) {
+            // Classic for loop with expression init
+            let init = Some(ForInit::Expr(init_expr));
+            return self.parse_for_classic_rest(label, start, init);
+        }
+
+        // Not a classic for loop and no binding keyword — error
+        let current = self.current_token().clone();
+        self.diagnostics.push(
+            Diagnostic::error("expected `;`, `of`, or `in` in for loop").with_label(
+                current.span,
+                self.file_id,
+                "expected `;`, `of`, or `in`",
+            ),
+        );
+        None
+    }
+
+    /// Parse the rest of a classic for loop after the init has been parsed.
+    ///
+    /// Expects: `; condition ; update ) body`
+    fn parse_for_classic_rest(
+        &mut self,
+        label: Option<String>,
+        start: Span,
+        init: Option<ForInit>,
+    ) -> Option<Stmt> {
+        // Consume the first `;` (after init)
+        self.expect(&TokenKind::Semicolon)?;
+
+        // Parse optional condition
+        let condition = if self.check(&TokenKind::Semicolon) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
+
+        // Consume the second `;` (after condition)
+        self.expect(&TokenKind::Semicolon)?;
+
+        // Parse optional update
+        let update = if self.check(&TokenKind::RParen) {
+            None
+        } else {
+            Some(self.parse_expr()?)
         };
 
         self.expect(&TokenKind::RParen)?;
@@ -3154,26 +3257,14 @@ impl<'src> Parser<'src> {
         let body = self.parse_block()?;
         let body_span = body.span;
 
-        if is_for_in {
-            Some(Stmt::ForIn(ForInStmt {
-                label,
-                binding,
-                variable,
-                iterable,
-                body,
-                span: start.merge(body_span),
-            }))
-        } else {
-            Some(Stmt::For(ForOfStmt {
-                label,
-                binding,
-                variable,
-                iterable,
-                body,
-                is_await,
-                span: start.merge(body_span),
-            }))
-        }
+        Some(Stmt::ForClassic(ForClassicStmt {
+            init,
+            condition,
+            update,
+            body,
+            label,
+            span: start.merge(body_span),
+        }))
     }
 
     /// Parse a `break [label];` statement.
@@ -4073,6 +4164,9 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse unary: `("-" | "!" | "~" | "typeof") unary | "throw" expr | "await" unary | postfix`.
+    #[allow(clippy::too_many_lines)]
+    // Unary parsing covers negation, not, bitwise not, typeof, throw, await, yield,
+    // delete, void, and prefix increment/decrement — splitting would fragment precedence logic.
     fn parse_unary(&mut self) -> Option<Expr> {
         match self.peek() {
             TokenKind::Minus => {
@@ -4165,6 +4259,24 @@ impl<'src> Parser<'src> {
                     span,
                 })
             }
+            TokenKind::PlusPlus => {
+                let op_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = op_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::PrefixIncrement(Box::new(operand)),
+                    span,
+                })
+            }
+            TokenKind::MinusMinus => {
+                let op_token = self.advance();
+                let operand = self.parse_unary()?;
+                let span = op_token.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::PrefixDecrement(Box::new(operand)),
+                    span,
+                })
+            }
             _ => self.parse_postfix(),
         }
     }
@@ -4212,6 +4324,20 @@ impl<'src> Parser<'src> {
                 let span = expr.span.merge(bang.span);
                 expr = Expr {
                     kind: ExprKind::NonNullAssert(Box::new(expr)),
+                    span,
+                };
+            } else if self.check(&TokenKind::PlusPlus) {
+                let pp = self.advance();
+                let span = expr.span.merge(pp.span);
+                expr = Expr {
+                    kind: ExprKind::PostfixIncrement(Box::new(expr)),
+                    span,
+                };
+            } else if self.check(&TokenKind::MinusMinus) {
+                let mm = self.advance();
+                let span = expr.span.merge(mm.span);
+                expr = Expr {
+                    kind: ExprKind::PostfixDecrement(Box::new(expr)),
                     span,
                 };
             } else {
@@ -11920,10 +12046,15 @@ async function fetch(url: string, options?: object): Promise<string> {
     #[test]
     fn test_parser_namespace_emits_diagnostic() {
         let (module, diagnostics) = parse_source("namespace Foo { }");
-        assert!(module.items.is_empty(), "namespace should not produce an item");
+        assert!(
+            module.items.is_empty(),
+            "namespace should not produce an item"
+        );
         assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
         assert!(
-            diagnostics[0].message.contains("namespaces are not supported"),
+            diagnostics[0]
+                .message
+                .contains("namespaces are not supported"),
             "unexpected message: {}",
             diagnostics[0].message
         );
@@ -11940,7 +12071,11 @@ async function fetch(url: string, options?: object): Promise<string> {
             ItemKind::Function(f) => assert_eq!(f.name.name, "main"),
             other => panic!("expected Function, got: {other:?}"),
         }
-        assert_eq!(diagnostics.len(), 1, "expected one diagnostic for namespace");
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "expected one diagnostic for namespace"
+        );
     }
 
     // declare class with nested braces is skipped correctly
@@ -11999,10 +12134,15 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
     #[test]
     fn test_parser_module_keyword_as_namespace_emits_diagnostic() {
         let (module, diagnostics) = parse_source("module Foo { }");
-        assert!(module.items.is_empty(), "module-as-namespace should not produce an item");
+        assert!(
+            module.items.is_empty(),
+            "module-as-namespace should not produce an item"
+        );
         assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
         assert!(
-            diagnostics[0].message.contains("namespaces are not supported"),
+            diagnostics[0]
+                .message
+                .contains("namespaces are not supported"),
             "unexpected message: {}",
             diagnostics[0].message
         );
@@ -12011,12 +12151,223 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
     #[test]
     fn test_parser_export_namespace_emits_diagnostic() {
         let (module, diagnostics) = parse_source("export namespace Foo { }");
-        assert!(module.items.is_empty(), "export namespace should not produce an item");
+        assert!(
+            module.items.is_empty(),
+            "export namespace should not produce an item"
+        );
         assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
         assert!(
-            diagnostics[0].message.contains("namespaces are not supported"),
+            diagnostics[0]
+                .message
+                .contains("namespaces are not supported"),
             "unexpected message: {}",
             diagnostics[0].message
         );
+    }
+
+    // ---------------------------------------------------------------
+    // T152: Classic C-style for loops
+    // ---------------------------------------------------------------
+
+    // T152-1: Parse `for (let i = 0; i < 10; i++) {}` → ForClassicStmt
+    #[test]
+    fn test_parser_classic_for_loop() {
+        let source = r#"function main() {
+  for (let i = 0; i < 10; i++) {
+    console.log(i);
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                // Check init
+                assert!(fc.init.is_some());
+                if let Some(ForInit::VarDecl(decl)) = &fc.init {
+                    assert_eq!(decl.binding, VarBinding::Let);
+                    assert_eq!(decl.name.name, "i");
+                    assert!(matches!(decl.init.kind, ExprKind::IntLit(0)));
+                } else {
+                    panic!("expected VarDecl init");
+                }
+                // Check condition
+                assert!(fc.condition.is_some());
+                if let Some(ref cond) = fc.condition {
+                    assert!(matches!(cond.kind, ExprKind::Binary(ref b) if b.op == BinaryOp::Lt));
+                }
+                // Check update
+                assert!(fc.update.is_some());
+                if let Some(ref update) = fc.update {
+                    assert!(
+                        matches!(&update.kind, ExprKind::PostfixIncrement(inner) if matches!(inner.kind, ExprKind::Ident(ref id) if id.name == "i")),
+                        "expected PostfixIncrement(i), got: {:?}",
+                        update.kind
+                    );
+                }
+                assert!(!fc.body.stmts.is_empty());
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-2: Parse `i++` as update in classic for
+    #[test]
+    fn test_parser_classic_for_with_increment() {
+        let source = r#"function main() {
+  for (let i = 0; i < 5; i++) {}
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                let update = fc.update.as_ref().expect("expected update");
+                assert!(
+                    matches!(&update.kind, ExprKind::PostfixIncrement(_)),
+                    "expected PostfixIncrement, got: {:?}",
+                    update.kind
+                );
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-3: Parse `for (;;) {}` (infinite loop)
+    #[test]
+    fn test_parser_classic_for_empty_parts() {
+        let source = r#"function main() {
+  for (;;) {
+    break;
+  }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                assert!(fc.init.is_none(), "expected no init");
+                assert!(fc.condition.is_none(), "expected no condition");
+                assert!(fc.update.is_none(), "expected no update");
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-4: Parse `for (i = 0; i < 10; i++)` without let (expression init)
+    #[test]
+    fn test_parser_classic_for_expr_init() {
+        let source = r#"function main() {
+  for (i = 0; i < 10; i++) {}
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                assert!(
+                    matches!(&fc.init, Some(ForInit::Expr(_))),
+                    "expected Expr init, got: {:?}",
+                    fc.init
+                );
+                assert!(fc.condition.is_some());
+                assert!(fc.update.is_some());
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-5: Regression: for-in still works
+    #[test]
+    fn test_parser_for_in_still_works() {
+        let source = r#"function main() {
+  for (const k in obj) { console.log(k); }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        assert!(
+            matches!(stmt, Stmt::ForIn(_)),
+            "for-in should produce ForIn"
+        );
+    }
+
+    // T152-6: Regression: for-of still works
+    #[test]
+    fn test_parser_for_of_still_works() {
+        let source = r#"function main() {
+  for (const x of items) { console.log(x); }
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        assert!(matches!(stmt, Stmt::For(_)), "for-of should produce For");
+    }
+
+    // T152-7: Parse prefix increment in for loop
+    #[test]
+    fn test_parser_classic_for_prefix_increment() {
+        let source = r#"function main() {
+  for (let i = 0; i < 5; ++i) {}
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                let update = fc.update.as_ref().expect("expected update");
+                assert!(
+                    matches!(&update.kind, ExprKind::PrefixIncrement(_)),
+                    "expected PrefixIncrement, got: {:?}",
+                    update.kind
+                );
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-8: Parse postfix decrement in for loop
+    #[test]
+    fn test_parser_classic_for_decrement() {
+        let source = r#"function main() {
+  for (let i = 10; i > 0; i--) {}
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                let update = fc.update.as_ref().expect("expected update");
+                assert!(
+                    matches!(&update.kind, ExprKind::PostfixDecrement(_)),
+                    "expected PostfixDecrement, got: {:?}",
+                    update.kind
+                );
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
+    }
+
+    // T152-9: Parse compound assignment as update
+    #[test]
+    fn test_parser_classic_for_compound_update() {
+        let source = r#"function main() {
+  for (let i = 0; i < 20; i += 2) {}
+}"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        match stmt {
+            Stmt::ForClassic(fc) => {
+                // i += 2 is desugared to i = i + 2 (Assign with Binary)
+                let update = fc.update.as_ref().expect("expected update");
+                assert!(
+                    matches!(&update.kind, ExprKind::Assign(_)),
+                    "expected Assign (desugared compound), got: {:?}",
+                    update.kind
+                );
+            }
+            other => panic!("expected ForClassic, got: {other:?}"),
+        }
     }
 }

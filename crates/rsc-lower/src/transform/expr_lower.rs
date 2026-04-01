@@ -770,6 +770,35 @@ impl Transform {
                     expr.span,
                 )
             }
+            // Increment/decrement: lower to compound assignment
+            ast::ExprKind::PostfixIncrement(operand) | ast::ExprKind::PrefixIncrement(operand) => {
+                if let ast::ExprKind::Ident(ident) = &operand.kind {
+                    RustExpr::new(
+                        RustExprKind::CompoundAssign {
+                            target: ident.name.clone(),
+                            op: rsc_syntax::rust_ir::RustCompoundAssignOp::AddAssign,
+                            value: Box::new(RustExpr::new(RustExprKind::IntLit(1), expr.span)),
+                        },
+                        expr.span,
+                    )
+                } else {
+                    self.lower_expr(operand, ctx, use_map, stmt_index)
+                }
+            }
+            ast::ExprKind::PostfixDecrement(operand) | ast::ExprKind::PrefixDecrement(operand) => {
+                if let ast::ExprKind::Ident(ident) = &operand.kind {
+                    RustExpr::new(
+                        RustExprKind::CompoundAssign {
+                            target: ident.name.clone(),
+                            op: rsc_syntax::rust_ir::RustCompoundAssignOp::SubAssign,
+                            value: Box::new(RustExpr::new(RustExprKind::IntLit(1), expr.span)),
+                        },
+                        expr.span,
+                    )
+                } else {
+                    self.lower_expr(operand, ctx, use_map, stmt_index)
+                }
+            }
             ast::ExprKind::AsConst(inner) => {
                 // `as const` on array literals → static slice literal `&[elem1, elem2, ...]`
                 // `as const` on other expressions → lower the inner expression unchanged

@@ -60,6 +60,14 @@ fn stmt_uses_json(stmt: &ast::Stmt) -> bool {
         ast::Stmt::DoWhile(dw) => block_uses_json(&dw.body) || expr_uses_json(&dw.condition),
         ast::Stmt::For(f) => expr_uses_json(&f.iterable) || block_uses_json(&f.body),
         ast::Stmt::ForIn(f) => expr_uses_json(&f.iterable) || block_uses_json(&f.body),
+        ast::Stmt::ForClassic(fc) => {
+            fc.init.as_ref().is_some_and(|init| match init {
+                ast::ForInit::VarDecl(d) => expr_uses_json(&d.init),
+                ast::ForInit::Expr(e) => expr_uses_json(e),
+            }) || fc.condition.as_ref().is_some_and(expr_uses_json)
+                || fc.update.as_ref().is_some_and(expr_uses_json)
+                || block_uses_json(&fc.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_uses_json(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_uses_json)
@@ -120,6 +128,14 @@ fn stmt_uses_math_random(stmt: &ast::Stmt) -> bool {
         ast::Stmt::ForIn(f) => {
             expr_uses_math_random(&f.iterable) || block_uses_math_random(&f.body)
         }
+        ast::Stmt::ForClassic(fc) => {
+            fc.init.as_ref().is_some_and(|init| match init {
+                ast::ForInit::VarDecl(d) => expr_uses_math_random(&d.init),
+                ast::ForInit::Expr(e) => expr_uses_math_random(e),
+            }) || fc.condition.as_ref().is_some_and(expr_uses_math_random)
+                || fc.update.as_ref().is_some_and(expr_uses_math_random)
+                || block_uses_math_random(&fc.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_uses_math_random(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_uses_math_random)
@@ -171,6 +187,14 @@ fn stmt_uses_regexp(stmt: &ast::Stmt) -> bool {
         ast::Stmt::DoWhile(dw) => block_uses_regexp(&dw.body) || expr_uses_regexp(&dw.condition),
         ast::Stmt::For(f) => expr_uses_regexp(&f.iterable) || block_uses_regexp(&f.body),
         ast::Stmt::ForIn(f) => expr_uses_regexp(&f.iterable) || block_uses_regexp(&f.body),
+        ast::Stmt::ForClassic(fc) => {
+            fc.init.as_ref().is_some_and(|init| match init {
+                ast::ForInit::VarDecl(d) => expr_uses_regexp(&d.init),
+                ast::ForInit::Expr(e) => expr_uses_regexp(e),
+            }) || fc.condition.as_ref().is_some_and(expr_uses_regexp)
+                || fc.update.as_ref().is_some_and(expr_uses_regexp)
+                || block_uses_regexp(&fc.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_uses_regexp(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_uses_regexp)

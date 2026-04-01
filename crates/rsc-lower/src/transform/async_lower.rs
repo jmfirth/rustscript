@@ -60,6 +60,7 @@ fn stmt_needs_async_runtime(stmt: &ast::Stmt) -> bool {
         ast::Stmt::ForIn(f) => {
             expr_needs_async_runtime(&f.iterable) || block_needs_async_runtime(&f.body)
         }
+        ast::Stmt::ForClassic(fc) => block_needs_async_runtime(&fc.body),
         ast::Stmt::TryCatch(tc) => {
             block_needs_async_runtime(&tc.try_block)
                 || tc
@@ -129,6 +130,7 @@ fn stmt_needs_futures(stmt: &ast::Stmt) -> bool {
     match stmt {
         ast::Stmt::For(f) => f.is_await || block_needs_futures(&f.body),
         ast::Stmt::ForIn(f) => block_needs_futures(&f.body),
+        ast::Stmt::ForClassic(fc) => block_needs_futures(&fc.body),
         ast::Stmt::Expr(expr)
         | ast::Stmt::Return(ast::ReturnStmt {
             value: Some(expr), ..
@@ -211,6 +213,11 @@ fn stmt_contains_await(stmt: &ast::Stmt) -> bool {
             f.is_await || expr_contains_await(&f.iterable) || block_contains_await(&f.body)
         }
         ast::Stmt::ForIn(f) => expr_contains_await(&f.iterable) || block_contains_await(&f.body),
+        ast::Stmt::ForClassic(fc) => {
+            fc.condition.as_ref().is_some_and(expr_contains_await)
+                || fc.update.as_ref().is_some_and(expr_contains_await)
+                || block_contains_await(&fc.body)
+        }
         ast::Stmt::TryCatch(tc) => {
             block_contains_await(&tc.try_block)
                 || tc.catch_block.as_ref().is_some_and(block_contains_await)

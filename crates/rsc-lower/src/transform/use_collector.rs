@@ -819,6 +819,10 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         RustExprKind::BlockExpr(block) => {
             scan_block_for_collections(block, needs_hashmap, needs_hashset);
         }
+        RustExprKind::Range { start, end } => {
+            scan_expr_for_collections(start, needs_hashmap, needs_hashset);
+            scan_expr_for_collections(end, needs_hashmap, needs_hashset);
+        }
     }
 }
 

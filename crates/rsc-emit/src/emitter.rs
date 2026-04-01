@@ -1708,6 +1708,11 @@ impl Emitter {
             RustExprKind::BlockExpr(block) => {
                 self.emit_block(block);
             }
+            RustExprKind::Range { start, end } => {
+                self.emit_expr(start);
+                self.write("..");
+                self.emit_expr(end);
+            }
         }
     }
 

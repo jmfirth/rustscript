@@ -259,6 +259,61 @@ impl UseMap {
                     );
                 }
             }
+            ast::Stmt::ForClassic(fc) => {
+                if let Some(init) = &fc.init {
+                    match init {
+                        ast::ForInit::VarDecl(decl) => {
+                            Self::collect_expr_uses(
+                                &decl.init,
+                                stmt_index,
+                                false,
+                                is_ref_call,
+                                callee_param_modes,
+                                uses,
+                            );
+                        }
+                        ast::ForInit::Expr(expr) => {
+                            Self::collect_expr_uses(
+                                expr,
+                                stmt_index,
+                                false,
+                                is_ref_call,
+                                callee_param_modes,
+                                uses,
+                            );
+                        }
+                    }
+                }
+                if let Some(cond) = &fc.condition {
+                    Self::collect_expr_uses(
+                        cond,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+                if let Some(update) = &fc.update {
+                    Self::collect_expr_uses(
+                        update,
+                        stmt_index,
+                        false,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+                for inner_stmt in &fc.body.stmts {
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+            }
             ast::Stmt::ArrayDestructure(adestr) => {
                 Self::collect_expr_uses(
                     &adestr.init,
@@ -739,6 +794,19 @@ impl UseMap {
                     uses,
                 );
             }
+            ast::ExprKind::PostfixIncrement(inner)
+            | ast::ExprKind::PostfixDecrement(inner)
+            | ast::ExprKind::PrefixIncrement(inner)
+            | ast::ExprKind::PrefixDecrement(inner) => {
+                Self::collect_expr_uses(
+                    inner,
+                    stmt_index,
+                    false,
+                    is_ref_call,
+                    callee_param_modes,
+                    uses,
+                );
+            }
         }
     }
 }
@@ -879,6 +947,14 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 collect_assignments(inner, reassigned);
             }
         }
+        ast::Stmt::ForClassic(fc) => {
+            if let Some(update) = &fc.update {
+                collect_assignments_from_expr(update, reassigned);
+            }
+            for inner in &fc.body.stmts {
+                collect_assignments(inner, reassigned);
+            }
+        }
         ast::Stmt::Switch(switch) => {
             for case in &switch.cases {
                 for inner in &case.body {
@@ -931,6 +1007,14 @@ fn collect_assignments_from_expr(expr: &ast::Expr, reassigned: &mut HashSet<Stri
         }
         ast::ExprKind::LogicalAssign(la) => {
             reassigned.insert(la.target.name.clone());
+        }
+        ast::ExprKind::PostfixIncrement(operand)
+        | ast::ExprKind::PostfixDecrement(operand)
+        | ast::ExprKind::PrefixIncrement(operand)
+        | ast::ExprKind::PrefixDecrement(operand) => {
+            if let ast::ExprKind::Ident(ident) = &operand.kind {
+                reassigned.insert(ident.name.clone());
+            }
         }
         // FieldAssign (e.g., `this.field = value`) does not create new variable
         // bindings — it modifies an existing object. Handled by the wildcard.
@@ -994,6 +1078,11 @@ fn collect_method_call_receivers(stmt: &ast::Stmt, receivers: &mut HashSet<Strin
         }
         ast::Stmt::ForIn(for_in) => {
             for s in &for_in.body.stmts {
+                collect_method_call_receivers(s, receivers);
+            }
+        }
+        ast::Stmt::ForClassic(fc) => {
+            for s in &fc.body.stmts {
                 collect_method_call_receivers(s, receivers);
             }
         }
@@ -1122,6 +1211,8 @@ fn record_usage(
 }
 
 /// Collect parameter usage from a statement.
+#[allow(clippy::too_many_lines)]
+// All statement variants must be handled; splitting would lose the coherent analysis.
 fn collect_param_usage_stmt(
     stmt: &ast::Stmt,
     param_set: &HashSet<&str>,
@@ -1205,6 +1296,27 @@ fn collect_param_usage_stmt(
                 collect_param_usage_expr(&for_in.iterable, param_set, is_ref_call, result);
             }
             for inner in &for_in.body.stmts {
+                collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+            }
+        }
+        ast::Stmt::ForClassic(fc) => {
+            if let Some(init) = &fc.init {
+                match init {
+                    ast::ForInit::VarDecl(decl) => {
+                        collect_param_usage_expr(&decl.init, param_set, is_ref_call, result);
+                    }
+                    ast::ForInit::Expr(expr) => {
+                        collect_param_usage_expr(expr, param_set, is_ref_call, result);
+                    }
+                }
+            }
+            if let Some(cond) = &fc.condition {
+                collect_param_usage_expr(cond, param_set, is_ref_call, result);
+            }
+            if let Some(update) = &fc.update {
+                collect_param_usage_expr(update, param_set, is_ref_call, result);
+            }
+            for inner in &fc.body.stmts {
                 collect_param_usage_stmt(inner, param_set, is_ref_call, result);
             }
         }
@@ -1433,6 +1545,16 @@ fn collect_param_usage_expr(
             collect_param_usage_expr(then_expr, param_set, is_ref_call, result);
             collect_param_usage_expr(else_expr, param_set, is_ref_call, result);
         }
+        ast::ExprKind::PostfixIncrement(inner)
+        | ast::ExprKind::PostfixDecrement(inner)
+        | ast::ExprKind::PrefixIncrement(inner)
+        | ast::ExprKind::PrefixDecrement(inner) => {
+            if let ast::ExprKind::Ident(ident) = &inner.kind {
+                record_usage(&ident.name, ParamUsage::Mutated, param_set, result);
+            } else {
+                collect_param_usage_expr(inner, param_set, is_ref_call, result);
+            }
+        }
         ast::ExprKind::IntLit(_)
         | ast::ExprKind::FloatLit(_)
         | ast::ExprKind::StringLit(_)
@@ -1592,6 +1714,12 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
             collect_idents_in_expr(then_expr, names);
             collect_idents_in_expr(else_expr, names);
         }
+        ast::ExprKind::PostfixIncrement(inner)
+        | ast::ExprKind::PostfixDecrement(inner)
+        | ast::ExprKind::PrefixIncrement(inner)
+        | ast::ExprKind::PrefixDecrement(inner) => {
+            collect_idents_in_expr(inner, names);
+        }
         ast::ExprKind::Closure(_)
         | ast::ExprKind::IntLit(_)
         | ast::ExprKind::FloatLit(_)
@@ -1605,6 +1733,8 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
 }
 
 /// Collect all identifier names referenced in a statement (for closure capture scanning).
+#[allow(clippy::too_many_lines)]
+// All statement variants must be handled; splitting would lose the coherent analysis.
 fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
     match stmt {
         ast::Stmt::VarDecl(decl) => collect_idents_in_expr(&decl.init, names),
@@ -1656,6 +1786,27 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
         ast::Stmt::ForIn(f) => {
             collect_idents_in_expr(&f.iterable, names);
             for s in &f.body.stmts {
+                collect_idents_in_stmt(s, names);
+            }
+        }
+        ast::Stmt::ForClassic(fc) => {
+            if let Some(init) = &fc.init {
+                match init {
+                    ast::ForInit::VarDecl(decl) => {
+                        collect_idents_in_expr(&decl.init, names);
+                    }
+                    ast::ForInit::Expr(expr) => {
+                        collect_idents_in_expr(expr, names);
+                    }
+                }
+            }
+            if let Some(cond) = &fc.condition {
+                collect_idents_in_expr(cond, names);
+            }
+            if let Some(update) = &fc.update {
+                collect_idents_in_expr(update, names);
+            }
+            for s in &fc.body.stmts {
                 collect_idents_in_stmt(s, names);
             }
         }

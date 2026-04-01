@@ -8,13 +8,14 @@ use rsc_syntax::ast::{
     ArrayDestructureStmt, ArrayElement, AssignExpr, BinaryExpr, Block, CallExpr, ClassDef,
     ClassGetter, ClassMember, ClassSetter, ClosureBody, ClosureExpr, ConstructorParam,
     DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
-    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForInStmt, ForOfStmt, IfStmt,
-    ImportDecl, IndexAssignExpr, IndexExpr, InlineRustBlock, InterfaceDef, InterfaceMethod, Item,
-    ItemKind, LogicalAssignExpr, MethodCallExpr, Module, NewExpr, NullishCoalescingExpr,
-    OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation,
-    StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind,
-    TestBody, TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr,
-    UnaryOp, UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
+    FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt, ForInStmt,
+    ForInit, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, InlineRustBlock,
+    InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, MethodCallExpr, Module,
+    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
+    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
+    TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef,
+    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl, VarBinding, VarDecl,
+    Visibility, WhileStmt, WildcardReExportDecl,
 };
 
 /// Indentation unit: 2 spaces per level.
@@ -861,6 +862,7 @@ impl Printer {
             Stmt::TryCatch(t) => self.print_try_catch_stmt(t),
             Stmt::For(f) => self.print_for_of_stmt(f),
             Stmt::ForIn(f) => self.print_for_in_stmt(f),
+            Stmt::ForClassic(f) => self.print_for_classic_stmt(f),
             Stmt::ArrayDestructure(a) => self.print_array_destructure_stmt(a),
             Stmt::Break(brk) => {
                 if let Some(lbl) = &brk.label {
@@ -1123,6 +1125,44 @@ impl Printer {
         self.newline();
     }
 
+    /// Print a classic C-style for statement.
+    fn print_for_classic_stmt(&mut self, f: &ForClassicStmt) {
+        if let Some(lbl) = &f.label {
+            self.write(lbl);
+            self.write(": ");
+        }
+        self.write("for (");
+        if let Some(init) = &f.init {
+            match init {
+                ForInit::VarDecl(v) => {
+                    match v.binding {
+                        VarBinding::Const => self.write("const "),
+                        VarBinding::Let => self.write("let "),
+                    }
+                    self.write(&v.name.name);
+                    if let Some(ty) = &v.type_ann {
+                        self.write(": ");
+                        self.print_type_annotation(ty);
+                    }
+                    self.write(" = ");
+                    self.print_expr(&v.init);
+                }
+                ForInit::Expr(e) => self.print_expr(e),
+            }
+        }
+        self.write("; ");
+        if let Some(cond) = &f.condition {
+            self.print_expr(cond);
+        }
+        self.write("; ");
+        if let Some(update) = &f.update {
+            self.print_expr(update);
+        }
+        self.write(") ");
+        self.print_block(&f.body);
+        self.newline();
+    }
+
     /// Print an expression.
     #[allow(clippy::too_many_lines)]
     // Expression printing covers all ExprKind variants; splitting would fragment the match
@@ -1239,6 +1279,22 @@ impl Printer {
                 self.write("import(\"");
                 self.write(module);
                 self.write("\")");
+            }
+            ExprKind::PostfixIncrement(operand) => {
+                self.print_expr(operand);
+                self.write("++");
+            }
+            ExprKind::PostfixDecrement(operand) => {
+                self.print_expr(operand);
+                self.write("--");
+            }
+            ExprKind::PrefixIncrement(operand) => {
+                self.write("++");
+                self.print_expr(operand);
+            }
+            ExprKind::PrefixDecrement(operand) => {
+                self.write("--");
+                self.print_expr(operand);
             }
         }
     }

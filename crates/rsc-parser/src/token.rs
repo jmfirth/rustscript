@@ -208,6 +208,10 @@ pub(crate) enum TokenKind {
     Satisfies,
     /// `?` (question mark, used in optional parameters and ternary operator)
     Question,
+    /// `++` (increment operator)
+    PlusPlus,
+    /// `--` (decrement operator)
+    MinusMinus,
 
     // Delimiters
     /// `(`

@@ -1301,6 +1301,14 @@ pub enum RustExprKind {
     /// A block expression: `{ stmts; expr }`.
     /// Produced by lowering `void expr` and comma operator `(a, b, c)`.
     BlockExpr(RustBlock),
+    /// A range expression: `start..end`.
+    /// Produced by lowering simple classic for loops to Rust range for loops.
+    Range {
+        /// The start of the range.
+        start: Box<RustExpr>,
+        /// The exclusive end of the range.
+        end: Box<RustExpr>,
+    },
 }
 
 /// A single intermediate iterator operation in a chain.

@@ -797,6 +797,10 @@ pub enum Stmt {
     /// A `for (const/let key in obj) { ... }` loop.
     /// Lowers to Rust `for key in obj.keys() { ... }`.
     ForIn(ForInStmt),
+    /// A classic C-style for loop: `for (init; condition; update) { body }`.
+    /// Lowers to either `for i in START..END` (range optimization) or a
+    /// `let mut i = INIT; while CONDITION { BODY; UPDATE; }` pattern.
+    ForClassic(ForClassicStmt),
     /// An array destructuring declaration: `const [a, b] = expr;`.
     /// Lowers to Rust tuple destructuring: `let (a, b) = expr;`.
     ArrayDestructure(ArrayDestructureStmt),
@@ -1094,6 +1098,36 @@ pub struct ForInStmt {
     pub span: Span,
 }
 
+/// A classic C-style for loop: `for (init; condition; update) { body }`.
+///
+/// Corresponds to `for (let i = 0; i < n; i++) { body }` or variations.
+/// Simple patterns (`for (let i = START; i < END; i++)`) lower to `for i in START..END`.
+/// General patterns lower to `let mut i = INIT; while CONDITION { BODY; UPDATE; }`.
+#[derive(Debug, Clone)]
+pub struct ForClassicStmt {
+    /// The initializer: `let i = 0` or an expression statement, or empty.
+    pub init: Option<ForInit>,
+    /// The condition: `i < 10`, or empty (infinite loop).
+    pub condition: Option<Expr>,
+    /// The update expression: `i++`, `i += 1`, or empty.
+    pub update: Option<Expr>,
+    /// The loop body.
+    pub body: Block,
+    /// Optional label for labeled loops.
+    pub label: Option<String>,
+    /// The span covering the entire for-classic statement.
+    pub span: Span,
+}
+
+/// The initializer part of a classic for loop.
+#[derive(Debug, Clone)]
+pub enum ForInit {
+    /// A variable declaration: `let i = 0`.
+    VarDecl(VarDecl),
+    /// An expression: `i = 0`.
+    Expr(Expr),
+}
+
 /// A `break` statement, optionally with a label.
 ///
 /// `break;` terminates the innermost loop.
@@ -1274,6 +1308,18 @@ pub enum ExprKind {
     /// Not fully supported in compiled Rust — emits a diagnostic warning.
     /// The `String` is the module specifier.
     DynamicImport(String),
+    /// Postfix increment: `i++`.
+    /// In update position of a for loop, lowers to `i += 1`.
+    PostfixIncrement(Box<Expr>),
+    /// Postfix decrement: `i--`.
+    /// In update position of a for loop, lowers to `i -= 1`.
+    PostfixDecrement(Box<Expr>),
+    /// Prefix increment: `++i`.
+    /// Lowers to `i += 1`.
+    PrefixIncrement(Box<Expr>),
+    /// Prefix decrement: `--i`.
+    /// Lowers to `i -= 1`.
+    PrefixDecrement(Box<Expr>),
 }
 
 /// Logical assignment operators.

@@ -391,6 +391,9 @@ impl Transform {
                 ast::Stmt::ForIn(f) => {
                     self.scan_stmts_for_unions(&f.body.stmts, generic_names);
                 }
+                ast::Stmt::ForClassic(fc) => {
+                    self.scan_stmts_for_unions(&fc.body.stmts, generic_names);
+                }
                 _ => {}
             }
         }
@@ -2466,6 +2469,16 @@ fn collect_locals_from_stmts(
             }
             ast::Stmt::ForIn(for_in) => {
                 collect_locals_from_stmts(&for_in.body.stmts, param_names, params, locals);
+            }
+            ast::Stmt::ForClassic(fc) => {
+                // Register the loop variable as a local
+                if let Some(ast::ForInit::VarDecl(decl)) = &fc.init
+                    && !param_names.contains(decl.name.name.as_str())
+                    && !locals.iter().any(|(n, _)| n == &decl.name.name)
+                {
+                    locals.push((decl.name.name.clone(), RustType::Infer));
+                }
+                collect_locals_from_stmts(&fc.body.stmts, param_names, params, locals);
             }
             ast::Stmt::Using(decl) => {
                 if !param_names.contains(decl.name.name.as_str())

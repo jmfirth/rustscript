@@ -8,11 +8,11 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    IteratorTerminal, RustBlock, RustDestructureDefaultField, RustDestructureDefaultsStmt,
-    RustDestructureField, RustDestructureStmt, RustExpr, RustExprKind, RustForInStmt,
-    RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt, RustLoopStmt, RustMatchResultStmt,
-    RustReturnStmt, RustStmt, RustTryFinallyStmt, RustTupleDestructureStmt, RustType, RustUnaryOp,
-    RustWhileLetStmt, RustWhileStmt,
+    IteratorTerminal, RustBlock, RustCompoundAssignOp, RustDestructureDefaultField,
+    RustDestructureDefaultsStmt, RustDestructureField, RustDestructureStmt, RustExpr, RustExprKind,
+    RustForInStmt, RustIfLetStmt, RustIfStmt, RustLetElseStmt, RustLetStmt, RustLoopStmt,
+    RustMatchResultStmt, RustReturnStmt, RustStmt, RustTryFinallyStmt, RustTupleDestructureStmt,
+    RustType, RustUnaryOp, RustWhileLetStmt, RustWhileStmt,
 };
 
 use crate::context::LoweringContext;
@@ -66,12 +66,20 @@ impl Transform {
         current_base: usize,
         reassigned: &std::collections::HashSet<String>,
     ) -> RustBlock {
-        let stmts = block
-            .stmts
-            .iter()
-            .enumerate()
-            .map(|(i, stmt)| self.lower_stmt(stmt, ctx, use_map, current_base + i, reassigned))
-            .collect();
+        let mut stmts = Vec::new();
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            if let ast::Stmt::ForClassic(fc) = stmt {
+                stmts.extend(self.lower_for_classic(
+                    fc,
+                    ctx,
+                    use_map,
+                    current_base + i,
+                    reassigned,
+                ));
+            } else {
+                stmts.push(self.lower_stmt(stmt, ctx, use_map, current_base + i, reassigned));
+            }
+        }
 
         RustBlock { stmts, expr: None }
     }
@@ -158,6 +166,25 @@ impl Transform {
                     span: decl.span,
                 };
                 self.lower_var_decl(&equiv, ctx, use_map, stmt_index, reassigned)
+            }
+            // ForClassic is normally handled by lower_block expansion;
+            // if reached here, lower as general while pattern.
+            ast::Stmt::ForClassic(fc) => {
+                let stmts = self.lower_for_classic(fc, ctx, use_map, stmt_index, reassigned);
+                // Wrap in a while if there's only one, or take the last
+                // (This fallback shouldn't normally be reached)
+                if stmts.len() == 1 {
+                    stmts.into_iter().next().unwrap_or(RustStmt::Semi(RustExpr {
+                        kind: RustExprKind::Ident("()".to_string()),
+                        span: None,
+                    }))
+                } else {
+                    // Return the while/loop/for statement (last one)
+                    stmts.into_iter().last().unwrap_or(RustStmt::Semi(RustExpr {
+                        kind: RustExprKind::Ident("()".to_string()),
+                        span: None,
+                    }))
+                }
             }
         }
     }
@@ -646,6 +673,248 @@ impl Transform {
             label: dw.label.clone(),
             body,
             span: Some(dw.span),
+        }
+    }
+
+    /// Lower a classic C-style for loop.
+    ///
+    /// Returns a `Vec<RustStmt>` because the general case emits an init
+    /// statement followed by a while loop.
+    ///
+    /// **Range optimization:** `for (let i = START; i < END; i++)` →
+    ///   `for i in START..END { body }` (single `RustStmt::ForIn`).
+    ///
+    /// **General case:** `for (let i = INIT; COND; UPDATE) { body }` →
+    ///   `let mut i = INIT; while COND { body; UPDATE; }`.
+    ///
+    /// **Infinite loop:** `for (;;) { body }` → `loop { body }`.
+    fn lower_for_classic(
+        &self,
+        fc: &ast::ForClassicStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> Vec<RustStmt> {
+        // Check for infinite loop: `for (;;) { body }`
+        if fc.init.is_none() && fc.condition.is_none() && fc.update.is_none() {
+            let body = self.lower_block(&fc.body, ctx, use_map, stmt_index, reassigned);
+            return vec![RustStmt::Loop(RustLoopStmt {
+                label: fc.label.clone(),
+                body,
+                span: Some(fc.span),
+            })];
+        }
+
+        // Try range optimization: `for (let i = START; i < END; i++)` or `i++` or `++i`
+        if let Some(range_stmt) =
+            self.try_range_optimization(fc, ctx, use_map, stmt_index, reassigned)
+        {
+            return vec![range_stmt];
+        }
+
+        // General case: emit init + while loop
+        let mut result = Vec::new();
+
+        // Emit init statement
+        if let Some(init) = &fc.init {
+            match init {
+                ast::ForInit::VarDecl(decl) => {
+                    result.push(RustStmt::Let(RustLetStmt {
+                        mutable: true,
+                        name: decl.name.name.clone(),
+                        ty: None,
+                        init: self.lower_expr(&decl.init, ctx, use_map, stmt_index),
+                        span: Some(decl.span),
+                    }));
+                }
+                ast::ForInit::Expr(expr) => {
+                    let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                    result.push(RustStmt::Semi(lowered));
+                }
+            }
+        }
+
+        // Build while body: original body + update
+        let mut body = self.lower_block(&fc.body, ctx, use_map, stmt_index, reassigned);
+        if let Some(update) = &fc.update {
+            let update_stmt = self.lower_for_update(update, ctx, use_map, stmt_index);
+            body.stmts.push(update_stmt);
+        }
+
+        // Build while condition (or loop if no condition)
+        if let Some(condition) = &fc.condition {
+            let cond = self.lower_expr(condition, ctx, use_map, stmt_index);
+            result.push(RustStmt::While(RustWhileStmt {
+                label: fc.label.clone(),
+                condition: cond,
+                body,
+                span: Some(fc.span),
+            }));
+        } else {
+            result.push(RustStmt::Loop(RustLoopStmt {
+                label: fc.label.clone(),
+                body,
+                span: Some(fc.span),
+            }));
+        }
+
+        result
+    }
+
+    /// Try to optimize a classic for loop to a Rust `for i in START..END` range loop.
+    ///
+    /// Succeeds when the pattern is:
+    /// - Init: `let i = START`
+    /// - Condition: `i < END`
+    /// - Update: `i++` or `++i` or `i += 1`
+    fn try_range_optimization(
+        &self,
+        fc: &ast::ForClassicStmt,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> Option<RustStmt> {
+        // Must have init, condition, and update
+        let init = fc.init.as_ref()?;
+        let condition = fc.condition.as_ref()?;
+        let update = fc.update.as_ref()?;
+
+        // Init must be a var decl: `let i = START`
+        let decl = match init {
+            ast::ForInit::VarDecl(d) => d,
+            ast::ForInit::Expr(_) => return None,
+        };
+        let var_name = &decl.name.name;
+
+        // Condition must be `i < END`
+        let end_expr = match &condition.kind {
+            ast::ExprKind::Binary(bin) if bin.op == ast::BinaryOp::Lt => {
+                if let ast::ExprKind::Ident(ident) = &bin.left.kind {
+                    if ident.name == *var_name {
+                        Some(&bin.right)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Update must be `i++`, `++i`, or `i += 1`
+        let is_simple_increment = match &update.kind {
+            ast::ExprKind::PostfixIncrement(operand) | ast::ExprKind::PrefixIncrement(operand) => {
+                matches!(&operand.kind, ast::ExprKind::Ident(ident) if ident.name == *var_name)
+            }
+            ast::ExprKind::Assign(assign) => {
+                // Check for `i = i + 1` (which is what `i += 1` desugars to in the parser)
+                if assign.target.name != *var_name {
+                    return None;
+                }
+                if let ast::ExprKind::Binary(bin) = &assign.value.kind {
+                    if bin.op == ast::BinaryOp::Add {
+                        if let ast::ExprKind::Ident(left_ident) = &bin.left.kind {
+                            if left_ident.name == *var_name {
+                                matches!(&bin.right.kind, ast::ExprKind::IntLit(1))
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+
+        if !is_simple_increment {
+            return None;
+        }
+
+        // Emit `for i in START..END { body }`
+        let start = self.lower_expr(&decl.init, ctx, use_map, stmt_index);
+        let end = self.lower_expr(end_expr, ctx, use_map, stmt_index);
+
+        let range = RustExpr {
+            kind: RustExprKind::Range {
+                start: Box::new(start),
+                end: Box::new(end),
+            },
+            span: None,
+        };
+
+        let body = self.lower_block(&fc.body, ctx, use_map, stmt_index, reassigned);
+
+        Some(RustStmt::ForIn(RustForInStmt {
+            label: fc.label.clone(),
+            variable: var_name.clone(),
+            iterable: range,
+            body,
+            deref_pattern: false,
+            iterable_is_borrowed: true,
+            span: Some(fc.span),
+        }))
+    }
+
+    /// Lower a for-loop update expression to a `RustStmt`.
+    ///
+    /// Handles `i++`, `i--`, `++i`, `--i`, and general expressions.
+    fn lower_for_update(
+        &self,
+        update: &ast::Expr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+    ) -> RustStmt {
+        match &update.kind {
+            ast::ExprKind::PostfixIncrement(operand) | ast::ExprKind::PrefixIncrement(operand) => {
+                if let ast::ExprKind::Ident(ident) = &operand.kind {
+                    RustStmt::Semi(RustExpr {
+                        kind: RustExprKind::CompoundAssign {
+                            target: ident.name.clone(),
+                            op: RustCompoundAssignOp::AddAssign,
+                            value: Box::new(RustExpr {
+                                kind: RustExprKind::IntLit(1),
+                                span: None,
+                            }),
+                        },
+                        span: None,
+                    })
+                } else {
+                    let lowered = self.lower_expr(update, ctx, use_map, stmt_index);
+                    RustStmt::Semi(lowered)
+                }
+            }
+            ast::ExprKind::PostfixDecrement(operand) | ast::ExprKind::PrefixDecrement(operand) => {
+                if let ast::ExprKind::Ident(ident) = &operand.kind {
+                    RustStmt::Semi(RustExpr {
+                        kind: RustExprKind::CompoundAssign {
+                            target: ident.name.clone(),
+                            op: RustCompoundAssignOp::SubAssign,
+                            value: Box::new(RustExpr {
+                                kind: RustExprKind::IntLit(1),
+                                span: None,
+                            }),
+                        },
+                        span: None,
+                    })
+                } else {
+                    let lowered = self.lower_expr(update, ctx, use_map, stmt_index);
+                    RustStmt::Semi(lowered)
+                }
+            }
+            _ => {
+                let lowered = self.lower_expr(update, ctx, use_map, stmt_index);
+                RustStmt::Semi(lowered)
+            }
         }
     }
 

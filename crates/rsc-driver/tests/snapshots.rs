@@ -5139,3 +5139,133 @@ function main() {
         "non-declared function should still appear in output, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T152: Classic C-style for loops
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_classic_for_range_snapshot() {
+    // Simple `for (let i = 0; i < n; i++)` should optimize to `for i in 0..n`
+    let source = "\
+function main() {
+  for (let i = 0; i < 10; i++) {
+    console.log(i);
+  }
+}";
+
+    let expected = "\
+fn main() {
+    for i in 0..10 {
+        println!(\"{}\", i);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("classic_for_range", &actual, expected);
+}
+
+#[test]
+fn test_classic_for_general_snapshot() {
+    // Complex update (`i += 2`) should emit while loop
+    let source = "\
+function main() {
+  for (let i = 0; i < 20; i += 2) {
+    console.log(i);
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("let mut i"),
+        "general for loop should emit `let mut i`, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("while i < 20"),
+        "general for loop should emit `while i < 20`, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("i += 2"),
+        "general for loop should emit `i += 2`, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_classic_for_infinite_snapshot() {
+    // `for (;;)` should emit `loop {}`
+    let source = "\
+function main() {
+  for (;;) {
+    break;
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("loop {"),
+        "for (;;) should emit `loop {{`, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_classic_for_decrement_snapshot() {
+    // `i--` should work in update position
+    let source = "\
+function main() {
+  for (let i = 10; i > 0; i--) {
+    console.log(i);
+  }
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("let mut i"),
+        "decrement for loop should emit `let mut i`, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("i -= 1"),
+        "i-- should lower to `i -= 1`, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_classic_for_prefix_increment_range() {
+    // `++i` should also optimize to range for
+    let source = "\
+function main() {
+  for (let i = 0; i < 5; ++i) {
+    console.log(i);
+  }
+}";
+
+    let expected = "\
+fn main() {
+    for i in 0..5 {
+        println!(\"{}\", i);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("classic_for_prefix_range", &actual, expected);
+}
+
+// Compilation tests (require cargo, hence #[ignore])
+#[test]
+#[ignore]
+fn test_classic_for_loop_compiles() {
+    let source = "\
+function main() {
+  for (let i = 0; i < 10; i++) {
+    console.log(i);
+  }
+}";
+
+    let output = test_utils::compile_and_run(source);
+    // Should print numbers 0 through 9
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 10, "expected 10 lines of output");
+    assert_eq!(lines[0], "0");
+    assert_eq!(lines[9], "9");
+}

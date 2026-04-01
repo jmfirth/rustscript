@@ -936,6 +936,8 @@ impl<'a> Lexer<'a> {
             (b'?', b'.') => TokenKind::QuestionDot,
             (b'?', b'?') => TokenKind::QuestionQuestion,
             (b'=', b'>') => TokenKind::FatArrow,
+            (b'+', b'+') => TokenKind::PlusPlus,
+            (b'-', b'-') => TokenKind::MinusMinus,
             _ => return None,
         };
 

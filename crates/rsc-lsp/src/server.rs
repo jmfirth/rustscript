@@ -788,6 +788,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::TryCatch(t) => t.span,
         Stmt::For(f) => f.span,
         Stmt::ForIn(f) => f.span,
+        Stmt::ForClassic(f) => f.span,
         Stmt::ArrayDestructure(a) => a.span,
         Stmt::Break(b) => b.span,
         Stmt::Continue(c) => c.span,
