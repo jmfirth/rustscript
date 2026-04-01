@@ -891,6 +891,13 @@ impl<'src> Parser<'src> {
         // but failed to parse the type, propagate the error.
         // (Check handled inside the method via diagnostics.)
 
+        // Overload signature: `function name(params): Type;` — no body.
+        // TypeScript allows multiple overload signatures before the implementation.
+        // We silently skip overload signatures (they are for type-checking only).
+        if self.eat(&TokenKind::Semicolon) {
+            return None;
+        }
+
         // Body
         let body = self.parse_block()?;
 
@@ -1481,10 +1488,13 @@ impl<'src> Parser<'src> {
         while !self.check(&TokenKind::RBrace) && !self.at_end() {
             // Consume JSDoc tokens before each class member
             self.consume_jsdoc_tokens();
+            let before = self.pos;
             if let Some(member) = self.parse_class_member() {
                 members.push(member);
-            } else {
-                // Error recovery: skip to next semicolon or closing brace
+            } else if self.pos == before {
+                // Error recovery: only skip when no forward progress was made.
+                // Overload signatures (constructor or method) return None after
+                // consuming tokens, so we must not enter recovery in that case.
                 while !self.at_end()
                     && !self.check(&TokenKind::Semicolon)
                     && !self.check(&TokenKind::RBrace)
@@ -1716,6 +1726,13 @@ impl<'src> Parser<'src> {
             }));
         }
 
+        // Method overload signature: `name(params): Type;` — no body.
+        // TypeScript allows multiple overload signatures before the implementation.
+        // We silently skip overload signatures (they are for type-checking only).
+        if self.eat(&TokenKind::Semicolon) {
+            return None;
+        }
+
         let body = self.parse_block()?;
         let span = member_start.merge(body.span);
 
@@ -1738,6 +1755,7 @@ impl<'src> Parser<'src> {
     /// Parse a class constructor: `constructor([public|private] params) { body }`.
     ///
     /// Constructor parameters may have visibility modifiers to create parameter properties.
+    /// Constructor overload signatures (`constructor(params);`) are silently skipped.
     fn parse_class_constructor(&mut self, doc_comment: Option<String>) -> Option<ClassConstructor> {
         let ctor_token = self.advance(); // consume `constructor`
         let start = ctor_token.span;
@@ -1745,6 +1763,13 @@ impl<'src> Parser<'src> {
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_constructor_param_list();
         self.expect(&TokenKind::RParen)?;
+
+        // Constructor overload signature: `constructor(params);` — no body.
+        // TypeScript allows multiple overload signatures before the implementation.
+        // We silently skip overload signatures (they are for type-checking only).
+        if self.eat(&TokenKind::Semicolon) {
+            return None;
+        }
 
         let body = self.parse_block()?;
         let span = start.merge(body.span);
@@ -11238,5 +11263,175 @@ class Child extends Base {
             }
             other => panic!("expected TypeDef, got: {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Overload signatures
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_overload_signatures_skipped() {
+        // Overload signatures (no body, ending with `;`) should not produce AST nodes
+        let source = "\
+function greet(name: string): string;
+function greet(name: string, greeting: string): string;
+function greet(name: string, greeting?: string): string {
+  return (greeting || \"Hello\") + \" \" + name;
+}";
+        let module = parse_ok(source);
+        // Only the implementation (with body) should be in the AST
+        assert_eq!(
+            module.items.len(),
+            1,
+            "expected only the implementation function"
+        );
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "greet");
+        assert_eq!(f.params.len(), 2);
+        assert!(!f.body.stmts.is_empty());
+    }
+
+    #[test]
+    fn test_parser_overload_implementation_preserved() {
+        // The implementation function with a body should parse normally
+        let source = "\
+function add(a: number): number;
+function add(a: number, b: number): number;
+function add(a: number, b?: number): number {
+  return a + (b || 0);
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "add");
+        assert_eq!(f.params.len(), 2);
+    }
+
+    #[test]
+    fn test_parser_overload_no_return_type() {
+        // Overload signature without explicit return type
+        let source = "\
+function log(msg: string);
+function log(msg: string, level: string);
+function log(msg: string, level?: string) {
+  console.log(msg);
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "log");
+    }
+
+    #[test]
+    fn test_parser_overload_exported_function() {
+        // Exported overload signatures should also be skipped
+        let source = "\
+export function greet(name: string): string;
+export function greet(name: string, greeting: string): string;
+export function greet(name: string, greeting?: string): string {
+  return (greeting || \"Hello\") + \" \" + name;
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Function(f) => {
+                assert_eq!(f.name.name, "greet");
+                assert!(module.items[0].exported);
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_overload_in_class_methods() {
+        // Method overloads inside a class should be skipped
+        let source = "\
+class Greeter {
+  greet(name: string): string;
+  greet(name: string, greeting: string): string;
+  greet(name: string, greeting?: string): string {
+    return (greeting || \"Hello\") + \" \" + name;
+  }
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.name.name, "Greeter");
+                // Only the implementation method should be in the members
+                assert_eq!(
+                    cls.members.len(),
+                    1,
+                    "expected only the implementation method"
+                );
+                match &cls.members[0] {
+                    ClassMember::Method(m) => {
+                        assert_eq!(m.name.name, "greet");
+                        assert_eq!(m.params.len(), 2);
+                    }
+                    other => panic!("expected Method, got {other:?}"),
+                }
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_overload_constructor() {
+        // Constructor overloads inside a class should be skipped
+        let source = "\
+class Point {
+  x: number;
+  y: number;
+  constructor(x: number);
+  constructor(x: number, y: number);
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::Class(cls) => {
+                assert_eq!(cls.name.name, "Point");
+                // 2 fields + 1 constructor = 3 members (overloads skipped)
+                assert_eq!(cls.members.len(), 3, "expected 2 fields + 1 constructor");
+                match &cls.members[2] {
+                    ClassMember::Constructor(ctor) => {
+                        assert_eq!(ctor.params.len(), 2);
+                    }
+                    other => panic!("expected Constructor, got {other:?}"),
+                }
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parser_overload_single_no_overloads() {
+        // A regular function without overloads should still work
+        let source = "function hello(name: string): string { return \"Hi \" + name; }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "hello");
+    }
+
+    #[test]
+    fn test_parser_overload_async_function() {
+        // Async function overloads
+        let source = "\
+async function fetch(url: string): Promise<string>;
+async function fetch(url: string, options: object): Promise<string>;
+async function fetch(url: string, options?: object): Promise<string> {
+  return \"data\";
+}";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let f = first_fn(&module);
+        assert_eq!(f.name.name, "fetch");
+        assert!(f.is_async);
+        assert_eq!(f.params.len(), 2);
     }
 }
