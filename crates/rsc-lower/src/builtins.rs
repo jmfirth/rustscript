@@ -276,6 +276,16 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("Number", "isNaN", lower_number_is_nan, false);
     registry.register_method("Number", "isFinite", lower_number_is_finite, false);
     registry.register_method("Number", "isInteger", lower_number_is_integer, false);
+    registry.register_method(
+        "Number",
+        "isSafeInteger",
+        lower_number_is_safe_integer,
+        false,
+    );
+
+    // Global isNaN / isFinite (bare function calls without Number. prefix)
+    registry.register_function("isNaN", lower_number_is_nan);
+    registry.register_function("isFinite", lower_number_is_finite);
 
     // Phase 5: Object utilities
     registry.register_method("Object", "keys", lower_object_keys, false);
@@ -1915,6 +1925,60 @@ fn lower_number_is_integer(args: Vec<RustExpr>, span: Span) -> RustExpr {
     )
 }
 
+/// Lower `Number.isSafeInteger(x)` to `x.is_finite() && (x as i64 as f64) == x && x.abs() <= 9007199254740991.0_f64`.
+fn lower_number_is_safe_integer(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    use rsc_syntax::rust_ir::RustBinaryOp;
+
+    let arg = first_arg_or_zero(args);
+
+    // Part 1: x.is_finite()
+    let is_finite = RustExpr::synthetic(RustExprKind::MethodCall {
+        receiver: Box::new(arg.clone()),
+        method: "is_finite".into(),
+        type_args: vec![],
+        args: vec![],
+    });
+
+    // Part 2: (x as i64 as f64) == x
+    let int_cast = RustExpr::synthetic(RustExprKind::Cast(Box::new(arg.clone()), RustType::I64));
+    let float_cast = RustExpr::synthetic(RustExprKind::Cast(Box::new(int_cast), RustType::F64));
+    let is_integer = RustExpr::synthetic(RustExprKind::Binary {
+        op: RustBinaryOp::Eq,
+        left: Box::new(float_cast),
+        right: Box::new(arg.clone()),
+    });
+
+    // Part 3: x.abs() <= 9007199254740991.0_f64
+    let abs_call = RustExpr::synthetic(RustExprKind::MethodCall {
+        receiver: Box::new(arg),
+        method: "abs".into(),
+        type_args: vec![],
+        args: vec![],
+    });
+    let max_safe = RustExpr::synthetic(RustExprKind::FloatLit(9_007_199_254_740_991.0));
+    let in_range = RustExpr::synthetic(RustExprKind::Binary {
+        op: RustBinaryOp::Le,
+        left: Box::new(abs_call),
+        right: Box::new(max_safe),
+    });
+
+    // Combine: is_finite && is_integer && in_range
+    let left = RustExpr::synthetic(RustExprKind::Binary {
+        op: RustBinaryOp::And,
+        left: Box::new(is_finite),
+        right: Box::new(is_integer),
+    });
+
+    RustExpr::new(
+        RustExprKind::Binary {
+            op: RustBinaryOp::And,
+            left: Box::new(left),
+            right: Box::new(in_range),
+        },
+        span,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5: Object utility lowering functions
 // ---------------------------------------------------------------------------
@@ -2300,6 +2364,26 @@ pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option
     Some(RustExpr::synthetic(RustExprKind::Ident(
         rust_const.into(),
     )))
+}
+
+/// Check whether an expression uses `Number.MAX_SAFE_INTEGER` or
+/// `Number.MIN_SAFE_INTEGER` properties.
+///
+/// Called from the `FieldAccess` lowering in `expr_lower.rs` to intercept
+/// these constants before they are lowered as normal field access expressions.
+pub(crate) fn lower_number_constant(object_name: &str, field_name: &str) -> Option<RustExpr> {
+    if object_name != "Number" {
+        return None;
+    }
+    match field_name {
+        "MAX_SAFE_INTEGER" => Some(RustExpr::synthetic(RustExprKind::IntLit(
+            9_007_199_254_740_991,
+        ))),
+        "MIN_SAFE_INTEGER" => Some(RustExpr::synthetic(RustExprKind::IntLit(
+            -9_007_199_254_740_991,
+        ))),
+        _ => None,
+    }
 }
 
 /// Check whether the given object and method pair uses JSON methods
@@ -4957,6 +5041,39 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------
+    // Task 138: Global isNaN / isFinite + Number.isSafeInteger + constants
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_is_nan_global() {
+        // Global isNaN(x) reuses lower_number_is_nan, should produce x.is_nan()
+        let result = lower_number_is_nan(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "is_nan"),
+            other => panic!("expected MethodCall(is_nan), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_is_finite_global() {
+        // Global isFinite(x) reuses lower_number_is_finite, should produce x.is_finite()
+        let result = lower_number_is_finite(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "is_finite"),
+            other => panic!("expected MethodCall(is_finite), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_is_nan_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("isNaN").is_some(),
+            "isNaN should be registered as a builtin free function"
+        );
+    }
+
     #[test]
     fn test_lower_string_from_char_code_single_arg() {
         let result = lower_string_from_char_code(vec![int_arg(65)], span());
@@ -4985,6 +5102,28 @@ mod tests {
                 assert_eq!(type_args[0].to_string(), "String");
             }
             other => panic!("expected MethodCall(collect::<String>), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_is_finite_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("isFinite").is_some(),
+            "isFinite should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_is_safe_integer_produces_and_chain() {
+        let result = lower_number_is_safe_integer(vec![float_arg(5.0)], span());
+        // The top-level should be Binary(And) — the outer &&
+        match &result.kind {
+            RustExprKind::Binary {
+                op: RustBinaryOp::And,
+                ..
+            } => {} // correct
+            other => panic!("expected Binary(And), got {other:?}"),
         }
     }
 
@@ -5058,5 +5197,46 @@ mod tests {
             }
             other => panic!("expected MethodCall(unwrap_or_default), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_number_is_safe_integer_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_method("Number", "isSafeInteger").is_some(),
+            "Number.isSafeInteger should be registered"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_max_safe_integer() {
+        let result = lower_number_constant("Number", "MAX_SAFE_INTEGER");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(
+            &expr.kind,
+            RustExprKind::IntLit(9_007_199_254_740_991)
+        ));
+    }
+
+    #[test]
+    fn test_lower_number_constant_min_safe_integer() {
+        let result = lower_number_constant("Number", "MIN_SAFE_INTEGER");
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(
+            &expr.kind,
+            RustExprKind::IntLit(-9_007_199_254_740_991)
+        ));
+    }
+
+    #[test]
+    fn test_lower_number_constant_unknown_returns_none() {
+        assert!(lower_number_constant("Number", "EPSILON").is_none());
+    }
+
+    #[test]
+    fn test_lower_number_constant_non_number_returns_none() {
+        assert!(lower_number_constant("Math", "MAX_SAFE_INTEGER").is_none());
     }
 }

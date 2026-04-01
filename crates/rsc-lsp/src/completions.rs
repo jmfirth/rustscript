@@ -330,6 +330,24 @@ const NUMBER_MEMBERS: &[BuiltinMember] = &[
         doc: "Checks if the value is an integer.",
         kind: CompletionItemKind::METHOD,
     },
+    BuiltinMember {
+        label: "isSafeInteger",
+        detail: "(x: number): boolean",
+        doc: "Checks if the value is a safe integer.",
+        kind: CompletionItemKind::METHOD,
+    },
+    BuiltinMember {
+        label: "MAX_SAFE_INTEGER",
+        detail: ": number",
+        doc: "The maximum safe integer (2^53 - 1).",
+        kind: CompletionItemKind::CONSTANT,
+    },
+    BuiltinMember {
+        label: "MIN_SAFE_INTEGER",
+        detail: ": number",
+        doc: "The minimum safe integer (-(2^53 - 1)).",
+        kind: CompletionItemKind::CONSTANT,
+    },
 ];
 
 /// `Object` utility members.

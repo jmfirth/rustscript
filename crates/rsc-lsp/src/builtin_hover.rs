@@ -63,7 +63,7 @@ static BUILTIN_IDENTIFIERS: LazyLock<HashMap<&'static str, BuiltinHover>> = Lazy
     m.insert(
         "Number",
         BuiltinHover {
-            markdown: "```rustscript\nobject Number\n```\n\nNumeric parsing and classification.\n\n- `Number.parseInt(str)` --- `str.parse::<i64>().unwrap_or(0)`\n- `Number.parseFloat(str)` --- `str.parse::<f64>().unwrap_or(0.0)`\n- `Number.isNaN(x)` --- `x.is_nan()`\n- `Number.isFinite(x)` --- `x.is_finite()`\n- `Number.isInteger(x)` --- `(x as i64 as f64) == x`",
+            markdown: "```rustscript\nobject Number\n```\n\nNumeric parsing and classification.\n\n- `Number.parseInt(str)` --- `str.parse::<i64>().unwrap_or(0)`\n- `Number.parseFloat(str)` --- `str.parse::<f64>().unwrap_or(0.0)`\n- `Number.isNaN(x)` --- `x.is_nan()`\n- `Number.isFinite(x)` --- `x.is_finite()`\n- `Number.isInteger(x)` --- `(x as i64 as f64) == x`\n- `Number.isSafeInteger(x)` --- `x.is_finite() && (x as i64 as f64) == x && x.abs() <= 9007199254740991.0`\n- `Number.MAX_SAFE_INTEGER` --- `9007199254740991`\n- `Number.MIN_SAFE_INTEGER` --- `-9007199254740991`",
         },
     );
 
@@ -586,6 +586,12 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         "Number.isInteger",
         BuiltinHover {
             markdown: "```rustscript\nNumber.isInteger(x: number): boolean\n```\n\nChecks if the value is an integer.\n\n**Rust:** `(x as i64 as f64) == x`",
+        },
+    );
+    m.insert(
+        "Number.isSafeInteger",
+        BuiltinHover {
+            markdown: "```rustscript\nNumber.isSafeInteger(x: number): boolean\n```\n\nChecks if the value is a safe integer (within -(2^53-1) to 2^53-1).\n\n**Rust:** `x.is_finite() && (x as i64 as f64) == x && x.abs() <= 9007199254740991.0`",
         },
     );
 
