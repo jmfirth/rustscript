@@ -349,6 +349,55 @@ impl<'src> Parser<'src> {
     }
 
     // ---------------------------------------------------------------
+    // Unsupported syntax diagnostics
+    // ---------------------------------------------------------------
+
+    /// Recognize a `namespace` or `module Foo { ... }` declaration, emit a
+    /// diagnostic, and skip the body so parsing can continue.
+    ///
+    /// TypeScript's `namespace` keyword (and the legacy `module Foo {}` form)
+    /// is a pre-module-era feature. RustScript uses standard ES module
+    /// imports/exports instead, so we reject it with a helpful message.
+    fn parse_namespace_diagnostic(&mut self) -> Option<Item> {
+        let keyword_token = self.advance(); // consume `namespace` or `module`
+        let start = keyword_token.span;
+
+        // Consume the namespace name (identifier).
+        let _name = self.advance(); // consume the name
+
+        // Emit the diagnostic.
+        self.diagnostics.push(
+            Diagnostic::error(
+                "namespaces are not supported in RustScript; use module imports (`import`/`export`) instead",
+            )
+            .with_label(start, self.file_id, "unsupported syntax"),
+        );
+
+        // Skip the block body by counting brace depth.
+        if self.check(&TokenKind::LBrace) {
+            self.advance(); // consume `{`
+            let mut depth: u32 = 1;
+            while depth > 0 && !self.at_end() {
+                match self.peek() {
+                    TokenKind::LBrace => {
+                        depth += 1;
+                        self.advance();
+                    }
+                    TokenKind::RBrace => {
+                        depth -= 1;
+                        self.advance();
+                    }
+                    _ => {
+                        self.advance();
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    // ---------------------------------------------------------------
     // Top-level parsing
     // ---------------------------------------------------------------
 
@@ -559,6 +608,16 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Ident(name) if matches!(name.as_str(), "test" | "describe" | "it") => {
                 self.parse_test_block()
+            }
+            TokenKind::Ident(name)
+                if name == "namespace"
+                    || (name == "module"
+                        && self
+                            .tokens
+                            .get(self.pos + 1)
+                            .is_some_and(|t| matches!(t.kind, TokenKind::Ident(_)))) =>
+            {
+                self.parse_namespace_diagnostic()
             }
             _ => {
                 let current = self.current_token().clone();
@@ -830,6 +889,17 @@ impl<'src> Parser<'src> {
             TokenKind::Declare => {
                 // `export declare ...` — ambient declaration, skip entirely.
                 self.skip_declare_body();
+                None
+            }
+            TokenKind::Ident(name)
+                if name == "namespace"
+                    || (name == "module"
+                        && self
+                            .tokens
+                            .get(self.pos + 1)
+                            .is_some_and(|t| matches!(t.kind, TokenKind::Ident(_)))) =>
+            {
+                self.parse_namespace_diagnostic();
                 None
             }
             _ => {
@@ -11843,6 +11913,36 @@ async function fetch(url: string, options?: object): Promise<string> {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Namespace diagnostic tests (Task 151)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_namespace_emits_diagnostic() {
+        let (module, diagnostics) = parse_source("namespace Foo { }");
+        assert!(module.items.is_empty(), "namespace should not produce an item");
+        assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+        assert!(
+            diagnostics[0].message.contains("namespaces are not supported"),
+            "unexpected message: {}",
+            diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn test_parser_namespace_skips_body() {
+        let (module, diagnostics) = parse_source(
+            "namespace Foo { export function doStuff(): void {} }\nfunction main() {}",
+        );
+        // The namespace body should be skipped, and `main` parsed normally.
+        assert_eq!(module.items.len(), 1, "expected one item (main fn)");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "main"),
+            other => panic!("expected Function, got: {other:?}"),
+        }
+        assert_eq!(diagnostics.len(), 1, "expected one diagnostic for namespace");
+    }
+
     // declare class with nested braces is skipped correctly
     #[test]
     fn test_parser_declare_class_nested_braces() {
@@ -11863,5 +11963,60 @@ async function fetch(url: string, options?: object): Promise<string> {
             ItemKind::Function(f) => assert_eq!(f.name.name, "main"),
             other => panic!("expected Function, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_parser_namespace_does_not_break_other_code() {
+        let source = "\
+namespace Foo { const x: i32 = 1; }
+function add(a: i32, b: i32): i32 { return a + b; }
+namespace Bar { }
+function sub(a: i32, b: i32): i32 { return a - b; }";
+        let (module, diagnostics) = parse_source(source);
+        // Two functions should parse, two namespaces should produce diagnostics.
+        assert_eq!(module.items.len(), 2, "expected two function items");
+        assert_eq!(diagnostics.len(), 2, "expected two namespace diagnostics");
+        match &module.items[0].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "add"),
+            other => panic!("expected Function(add), got: {other:?}"),
+        }
+        match &module.items[1].kind {
+            ItemKind::Function(f) => assert_eq!(f.name.name, "sub"),
+            other => panic!("expected Function(sub), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_namespace_diagnostic_message() {
+        let (_, diagnostics) = parse_source("namespace MyLib { }");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "namespaces are not supported in RustScript; use module imports (`import`/`export`) instead"
+        );
+    }
+
+    #[test]
+    fn test_parser_module_keyword_as_namespace_emits_diagnostic() {
+        let (module, diagnostics) = parse_source("module Foo { }");
+        assert!(module.items.is_empty(), "module-as-namespace should not produce an item");
+        assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+        assert!(
+            diagnostics[0].message.contains("namespaces are not supported"),
+            "unexpected message: {}",
+            diagnostics[0].message
+        );
+    }
+
+    #[test]
+    fn test_parser_export_namespace_emits_diagnostic() {
+        let (module, diagnostics) = parse_source("export namespace Foo { }");
+        assert!(module.items.is_empty(), "export namespace should not produce an item");
+        assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+        assert!(
+            diagnostics[0].message.contains("namespaces are not supported"),
+            "unexpected message: {}",
+            diagnostics[0].message
+        );
     }
 }
