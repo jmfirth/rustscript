@@ -2518,10 +2518,10 @@ fn test_dynamic_import_emits_diagnostic() {
             .collect::<Vec<_>>()
     );
     assert!(
-        result.diagnostics.iter().any(|d| d
-            .message
-            .contains("dynamic import")
-            && d.message.contains("not supported")),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("dynamic import") && d.message.contains("not supported")),
         "expected diagnostic about dynamic import, got: {:?}",
         result
             .diagnostics

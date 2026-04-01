@@ -83,7 +83,10 @@ fn expr_needs_async_runtime(expr: &ast::Expr) -> bool {
             if let ast::ExprKind::MethodCall(mc) = &inner.kind
                 && let ast::ExprKind::Ident(obj) = &mc.object.kind
                 && obj.name == "Promise"
-                && matches!(mc.method.name.as_str(), "all" | "race" | "any")
+                && matches!(
+                    mc.method.name.as_str(),
+                    "all" | "allSettled" | "race" | "any"
+                )
             {
                 return true;
             }

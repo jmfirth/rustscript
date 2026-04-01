@@ -1608,6 +1608,26 @@ impl Emitter {
                 }
                 self.write("]).await.expect(\"all promises rejected\").0");
             }
+            RustExprKind::TokioJoinSettled(exprs) => {
+                self.write("tokio::join!(");
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.emit_expr(expr);
+                }
+                self.write(")");
+            }
+            RustExprKind::PromiseResolve(value) => {
+                self.write("async { ");
+                self.emit_expr(value);
+                self.write(" }");
+            }
+            RustExprKind::PromiseReject(msg) => {
+                self.write("async { panic!(\"rejected: {}\", ");
+                self.emit_expr(msg);
+                self.write(") }");
+            }
             RustExprKind::IteratorChain {
                 source,
                 ops,
@@ -5745,6 +5765,59 @@ fn main() {
         assert!(
             output.contains(".await.expect(\"all promises rejected\").0"),
             "expected .await.expect(...).0, got: {output}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 135: Promise utility methods — emitter tests
+    // ---------------------------------------------------------------
+
+    // Test: Emitter — PromiseResolve
+    #[test]
+    fn test_emit_promise_resolve() {
+        let resolve_expr = syn(RustExprKind::PromiseResolve(Box::new(syn(
+            RustExprKind::IntLit(42),
+        ))));
+        let file = simple_fn("test", vec![RustStmt::Semi(resolve_expr)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("async { 42 }"),
+            "expected 'async {{ 42 }}', got: {output}"
+        );
+    }
+
+    // Test: Emitter — PromiseReject
+    #[test]
+    fn test_emit_promise_reject() {
+        let reject_expr = syn(RustExprKind::PromiseReject(Box::new(syn(
+            RustExprKind::StringLit("oops".into()),
+        ))));
+        let file = simple_fn("test", vec![RustStmt::Semi(reject_expr)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("async { panic!(\"rejected: {}\", \"oops\") }"),
+            "expected async panic, got: {output}"
+        );
+    }
+
+    // Test: Emitter — TokioJoinSettled
+    #[test]
+    fn test_emit_tokio_join_settled() {
+        let join_expr = syn(RustExprKind::TokioJoinSettled(vec![
+            syn(RustExprKind::Call {
+                func: "get_a".into(),
+                args: vec![],
+            }),
+            syn(RustExprKind::Call {
+                func: "get_b".into(),
+                args: vec![],
+            }),
+        ]));
+        let file = simple_fn("test", vec![RustStmt::Semi(join_expr)], None);
+        let output = emit_source(&file);
+        assert!(
+            output.contains("tokio::join!(get_a(), get_b())"),
+            "expected tokio::join! for allSettled, got: {output}"
         );
     }
 }

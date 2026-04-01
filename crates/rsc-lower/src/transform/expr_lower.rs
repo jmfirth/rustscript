@@ -200,7 +200,15 @@ impl Transform {
                 tag,
                 quasis,
                 expressions,
-            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
+            } => self.lower_tagged_template(
+                tag,
+                quasis,
+                expressions,
+                expr.span,
+                ctx,
+                use_map,
+                stmt_index,
+            ),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -339,63 +347,110 @@ impl Transform {
                 self.lower_closure(closure, expr.span, ctx, use_map, stmt_index)
             }
             ast::ExprKind::Await(inner) => {
-                // Check for `await Promise.XXX([...])` patterns.
+                // Check for `await Promise.XXX(...)` patterns.
                 if let ast::ExprKind::MethodCall(mc) = &inner.kind
                     && let ast::ExprKind::Ident(obj) = &mc.object.kind
                     && obj.name == "Promise"
                     && mc.args.len() == 1
-                    && let ast::ExprKind::ArrayLit(elements) = &mc.args[0].kind
                 {
-                    let lowered_elements: Vec<RustExpr> = elements
-                        .iter()
-                        .filter_map(|e| match e {
-                            ast::ArrayElement::Expr(e) => {
-                                Some(self.lower_expr(e, ctx, use_map, stmt_index))
-                            }
-                            ast::ArrayElement::Spread(_) => None,
-                        })
-                        .collect();
+                    // Handle array-argument patterns: all, allSettled, race, any
+                    if let ast::ExprKind::ArrayLit(elements) = &mc.args[0].kind {
+                        let lowered_elements: Vec<RustExpr> = elements
+                            .iter()
+                            .filter_map(|e| match e {
+                                ast::ArrayElement::Expr(e) => {
+                                    Some(self.lower_expr(e, ctx, use_map, stmt_index))
+                                }
+                                ast::ArrayElement::Spread(_) => None,
+                            })
+                            .collect();
 
+                        match mc.method.name.as_str() {
+                            // `await Promise.all([...])` → `tokio::join!(...)`
+                            "all" => {
+                                // tokio::join! takes futures directly — the `?` must
+                                // happen *after* the join, not inside it. Strip any
+                                // QuestionMark wrappers that lower_expr added for
+                                // throwing calls and record which positions need
+                                // unwrapping.
+                                let mut throwing_elements = vec![false; lowered_elements.len()];
+                                let stripped: Vec<RustExpr> = lowered_elements
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, e)| {
+                                        if let RustExprKind::QuestionMark(inner) = e.kind {
+                                            throwing_elements[i] = true;
+                                            *inner
+                                        } else {
+                                            e
+                                        }
+                                    })
+                                    .collect();
+                                return RustExpr::new(
+                                    RustExprKind::TokioJoin {
+                                        elements: stripped,
+                                        throwing_elements,
+                                    },
+                                    expr.span,
+                                );
+                            }
+                            // `await Promise.allSettled([...])` → `tokio::join!(...)`
+                            // Like `all` but always strips `?` and never unwraps —
+                            // each result is kept as-is (Ok or Err).
+                            "allSettled" => {
+                                let stripped: Vec<RustExpr> = lowered_elements
+                                    .into_iter()
+                                    .map(|e| {
+                                        if let RustExprKind::QuestionMark(inner) = e.kind {
+                                            *inner
+                                        } else {
+                                            e
+                                        }
+                                    })
+                                    .collect();
+                                return RustExpr::new(
+                                    RustExprKind::TokioJoinSettled(stripped),
+                                    expr.span,
+                                );
+                            }
+                            // `await Promise.race([...])` → `tokio::select! { ... }`
+                            "race" => {
+                                return RustExpr::new(
+                                    RustExprKind::TokioSelect(lowered_elements),
+                                    expr.span,
+                                );
+                            }
+                            // `await Promise.any([...])` → `futures::future::select_ok(...)`
+                            "any" => {
+                                return RustExpr::new(
+                                    RustExprKind::FuturesSelectOk(lowered_elements),
+                                    expr.span,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Handle single-argument patterns: resolve, reject
                     match mc.method.name.as_str() {
-                        // `await Promise.all([...])` → `tokio::join!(...)`
-                        "all" => {
-                            // tokio::join! takes futures directly — the `?` must
-                            // happen *after* the join, not inside it. Strip any
-                            // QuestionMark wrappers that lower_expr added for
-                            // throwing calls and record which positions need
-                            // unwrapping.
-                            let mut throwing_elements = vec![false; lowered_elements.len()];
-                            let stripped: Vec<RustExpr> = lowered_elements
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, e)| {
-                                    if let RustExprKind::QuestionMark(inner) = e.kind {
-                                        throwing_elements[i] = true;
-                                        *inner
-                                    } else {
-                                        e
-                                    }
-                                })
-                                .collect();
+                        // `await Promise.resolve(x)` → just `x`
+                        "resolve" => {
+                            return self.lower_expr(&mc.args[0], ctx, use_map, stmt_index);
+                        }
+                        // `await Promise.reject(msg)` → `panic!("rejected: {}", msg)`
+                        "reject" => {
+                            let lowered_arg =
+                                self.lower_expr(&mc.args[0], ctx, use_map, stmt_index);
                             return RustExpr::new(
-                                RustExprKind::TokioJoin {
-                                    elements: stripped,
-                                    throwing_elements,
+                                RustExprKind::Macro {
+                                    name: "panic".to_owned(),
+                                    args: vec![
+                                        RustExpr::synthetic(RustExprKind::StringLit(
+                                            "rejected: {}".to_owned(),
+                                        )),
+                                        lowered_arg,
+                                    ],
                                 },
-                                expr.span,
-                            );
-                        }
-                        // `await Promise.race([...])` → `tokio::select! { ... }`
-                        "race" => {
-                            return RustExpr::new(
-                                RustExprKind::TokioSelect(lowered_elements),
-                                expr.span,
-                            );
-                        }
-                        // `await Promise.any([...])` → `futures::future::select_ok(...)`
-                        "any" => {
-                            return RustExpr::new(
-                                RustExprKind::FuturesSelectOk(lowered_elements),
                                 expr.span,
                             );
                         }
@@ -682,9 +737,9 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::Macro {
                         name: "panic".to_owned(),
-                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
-                            format!("dynamic import not supported: {module}"),
-                        ))],
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(format!(
+                            "dynamic import not supported: {module}"
+                        )))],
                     },
                     expr.span,
                 )

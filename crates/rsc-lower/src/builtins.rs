@@ -281,6 +281,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
     registry.register_method("JSON", "parse", lower_json_parse, false);
+
+    // Promise utility methods (bare, non-awaited usage)
+    registry.register_method("Promise", "resolve", lower_promise_resolve, false);
+    registry.register_method("Promise", "reject", lower_promise_reject, false);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -2798,6 +2802,35 @@ fn merge_reduce_into_chain(
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------
+// Promise utility methods
+// ---------------------------------------------------------------
+
+/// Lower `Promise.resolve(value)` to `async { value }`.
+///
+/// When used without `await`, creates an immediately-resolved future.
+/// The `await` handler in `expr_lower.rs` optimizes `await Promise.resolve(x)` to just `x`.
+fn lower_promise_resolve(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let value = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("()".into())));
+    RustExpr::new(RustExprKind::PromiseResolve(Box::new(value)), span)
+}
+
+/// Lower `Promise.reject(msg)` to `async { panic!("rejected: {}", msg) }`.
+///
+/// When used without `await`, creates an immediately-rejected future.
+/// The `await` handler in `expr_lower.rs` optimizes `await Promise.reject(msg)`
+/// to `panic!("rejected: {}", msg)`.
+fn lower_promise_reject(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let msg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("rejected".into())));
+    RustExpr::new(RustExprKind::PromiseReject(Box::new(msg)), span)
 }
 
 #[cfg(test)]

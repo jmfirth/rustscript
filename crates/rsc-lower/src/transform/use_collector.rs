@@ -678,6 +678,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
         | RustExprKind::Err(inner)
         | RustExprKind::Await(inner)
         | RustExprKind::ArcMutexNew(inner)
+        | RustExprKind::PromiseResolve(inner)
+        | RustExprKind::PromiseReject(inner)
         | RustExprKind::Cast(inner, _) => {
             scan_expr_for_collections(inner, needs_hashmap, needs_hashset);
         }
@@ -730,7 +732,9 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                 scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             }
         }
-        RustExprKind::TokioSelect(exprs) | RustExprKind::FuturesSelectOk(exprs) => {
+        RustExprKind::TokioSelect(exprs)
+        | RustExprKind::FuturesSelectOk(exprs)
+        | RustExprKind::TokioJoinSettled(exprs) => {
             for expr in exprs {
                 scan_expr_for_collections(expr, needs_hashmap, needs_hashset);
             }

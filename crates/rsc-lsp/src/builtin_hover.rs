@@ -643,6 +643,24 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         },
     );
     m.insert(
+        "Promise.resolve",
+        BuiltinHover {
+            markdown: "```rustscript\nPromise.resolve(value: T): Promise<T>\n```\n\nCreates an immediately-resolved promise.\n\n**Rust:** `async { value }`",
+        },
+    );
+    m.insert(
+        "Promise.reject",
+        BuiltinHover {
+            markdown: "```rustscript\nPromise.reject(reason: string): Promise<never>\n```\n\nCreates an immediately-rejected promise.\n\n**Rust:** `async { panic!(\"rejected: {}\", reason) }`",
+        },
+    );
+    m.insert(
+        "Promise.allSettled",
+        BuiltinHover {
+            markdown: "```rustscript\nPromise.allSettled(promises: Array<Promise<T>>): Promise<Array<Result<T>>>\n```\n\nWaits for all promises to settle (resolve or reject), returning results for each.\n\n**Rust:** `tokio::join!(...)` (results kept as-is, no unwrapping)",
+        },
+    );
+    m.insert(
         "spawn",
         BuiltinHover {
             markdown: "```rustscript\nspawn(fn: () => void): void\n```\n\nSpawns a concurrent task.\n\n**Rust:** `tokio::spawn(async { ... })`",
@@ -1094,6 +1112,40 @@ mod tests {
         assert!(
             text.contains("stream.next().await"),
             "should mention stream.next().await: {text}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 135: Promise utility methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_hover_promise_resolve() {
+        let hover = lookup_method("Promise", "resolve");
+        assert!(hover.is_some(), "Promise.resolve should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("async { value }"),
+            "should mention async {{ value }}: {text}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_hover_promise_reject() {
+        let hover = lookup_method("Promise", "reject");
+        assert!(hover.is_some(), "Promise.reject should have hover info");
+        let text = hover.unwrap();
+        assert!(text.contains("panic!"), "should mention panic!: {text}");
+    }
+
+    #[test]
+    fn test_builtin_hover_promise_all_settled() {
+        let hover = lookup_method("Promise", "allSettled");
+        assert!(hover.is_some(), "Promise.allSettled should have hover info");
+        let text = hover.unwrap();
+        assert!(
+            text.contains("tokio::join!"),
+            "should mention tokio::join!: {text}"
         );
     }
 

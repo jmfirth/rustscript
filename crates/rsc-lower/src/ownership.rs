@@ -493,9 +493,7 @@ impl UseMap {
                 }
             }
             ast::ExprKind::TaggedTemplate {
-                tag,
-                expressions,
-                ..
+                tag, expressions, ..
             } => {
                 Self::collect_expr_uses(
                     tag,
@@ -1326,9 +1324,7 @@ fn collect_param_usage_expr(
             }
         }
         ast::ExprKind::TaggedTemplate {
-            tag,
-            expressions,
-            ..
+            tag, expressions, ..
         } => {
             // Tagged template: tag function + interpolated expressions are reads
             collect_param_usage_expr(tag, param_set, is_ref_call, result);
@@ -1498,9 +1494,7 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
             }
         }
         ast::ExprKind::TaggedTemplate {
-            tag,
-            expressions,
-            ..
+            tag, expressions, ..
         } => {
             collect_idents_in_expr(tag, names);
             for e in expressions {
