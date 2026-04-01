@@ -4883,3 +4883,86 @@ function main() {
         "for-in should use .keys(), got:\n{actual_in}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 138: Global isNaN / isFinite + Number.isSafeInteger + constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_nan_snapshot() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(isNaN(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".is_nan()"),
+        "expected .is_nan() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_is_finite_snapshot() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(isFinite(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".is_finite()"),
+        "expected .is_finite() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_is_safe_integer() {
+    let source = "\
+function main() {
+  const x: f64 = 42.0;
+  console.log(Number.isSafeInteger(x));
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".is_finite()"),
+        "expected .is_finite() in isSafeInteger output:\n{actual}"
+    );
+    assert!(
+        actual.contains(".abs()"),
+        "expected .abs() in isSafeInteger output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_max_safe_integer() {
+    let source = "\
+function main() {
+  const x: i64 = Number.MAX_SAFE_INTEGER;
+  console.log(x);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("9007199254740991"),
+        "expected 9007199254740991 in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_min_safe_integer() {
+    let source = "\
+function main() {
+  const x: i64 = Number.MIN_SAFE_INTEGER;
+  console.log(x);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("-9007199254740991"),
+        "expected -9007199254740991 in output:\n{actual}"
+    );
+}

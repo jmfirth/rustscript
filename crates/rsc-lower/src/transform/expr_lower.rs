@@ -156,11 +156,18 @@ impl Transform {
                 }
 
                 // Math.PI / Math.E → std::f64::consts::PI / E
-                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
-                    && let Some(constant_expr) =
+                // Number.MAX_SAFE_INTEGER / Number.MIN_SAFE_INTEGER → integer literals
+                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind {
+                    if let Some(constant_expr) =
                         crate::builtins::lower_math_constant(&obj_ident.name, field_name)
-                {
-                    return constant_expr;
+                    {
+                        return constant_expr;
+                    }
+                    if let Some(constant_expr) =
+                        crate::builtins::lower_number_constant(&obj_ident.name, field_name)
+                    {
+                        return constant_expr;
+                    }
                 }
 
                 // `.length` / `.size` on strings/arrays/maps/sets → `.len() as i64`
@@ -200,7 +207,15 @@ impl Transform {
                 tag,
                 quasis,
                 expressions,
-            } => self.lower_tagged_template(tag, quasis, expressions, expr.span, ctx, use_map, stmt_index),
+            } => self.lower_tagged_template(
+                tag,
+                quasis,
+                expressions,
+                expr.span,
+                ctx,
+                use_map,
+                stmt_index,
+            ),
             ast::ExprKind::ArrayLit(elements) => {
                 self.lower_array_lit(elements, expr.span, ctx, use_map, stmt_index)
             }
@@ -682,9 +697,9 @@ impl Transform {
                 RustExpr::new(
                     RustExprKind::Macro {
                         name: "panic".to_owned(),
-                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(
-                            format!("dynamic import not supported: {module}"),
-                        ))],
+                        args: vec![RustExpr::synthetic(RustExprKind::StringLit(format!(
+                            "dynamic import not supported: {module}"
+                        )))],
                     },
                     expr.span,
                 )
