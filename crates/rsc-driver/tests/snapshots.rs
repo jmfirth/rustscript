@@ -5330,3 +5330,53 @@ function main() {
         "expected Regex::new(\"(?ims)test\").unwrap(), got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 162: String .match() and .search() snapshot tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_string_match_snapshot() {
+    let source = "\
+function main() {
+  const re = /\\d+/;
+  const s = \"abc 123 def 456\";
+  const matches = s.match(re);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("find_iter"),
+        "expected find_iter in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("as_str"),
+        "expected as_str in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("collect"),
+        "expected collect in output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_string_search_snapshot() {
+    let source = "\
+function main() {
+  const re = /\\d+/;
+  const s = \"abc 123 def\";
+  const idx = s.search(re);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".find("),
+        "expected .find( in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("start()"),
+        "expected start() in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("unwrap_or"),
+        "expected unwrap_or in output, got:\n{actual}"
+    );
+}

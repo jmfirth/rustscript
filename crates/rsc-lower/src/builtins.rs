@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use rsc_syntax::rust_ir::{
     IteratorOp, IteratorTerminal, RustBlock, RustClosureBody, RustClosureParam, RustExpr,
-    RustExprKind, RustLetStmt, RustLoopStmt, RustStmt, RustType,
+    RustExprKind, RustLetStmt, RustLoopStmt, RustStmt, RustType, RustUnaryOp,
 };
 
 #[cfg(test)]
@@ -268,6 +268,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_string_method("trimStart", lower_trim_start);
     registry.register_string_method("trimEnd", lower_trim_end);
     registry.register_string_method("replaceAll", lower_replace_all);
+
+    // String methods that take a regex argument
+    registry.register_string_method("match", lower_string_match);
+    registry.register_string_method("search", lower_string_search);
 
     // Phase 2: collection methods (array iterator chains)
     registry.register_collection_method("map", lower_array_map);
@@ -1373,6 +1377,153 @@ fn lower_trim_end(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustE
 /// Lower `.replaceAll(from, to)` to `.replace(from, to)` — Rust's replace already replaces all.
 fn lower_replace_all(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     lower_replace(receiver, args, span)
+}
+
+// ---------------------------------------------------------------------------
+// String methods taking a regex argument
+// ---------------------------------------------------------------------------
+
+/// Lower `str.match(regex)` to `regex.find_iter(&str).map(|m| m.as_str().to_string()).collect::<Vec<String>>()`.
+///
+/// `String.prototype.match()` returns an array of all matches. The Rust `regex`
+/// crate equivalent chains `find_iter` → `map` → `collect`. The receiver (the
+/// string) becomes the argument, and the first argument (the regex) becomes the
+/// method receiver.
+fn lower_string_match(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let regex_arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("regex".into())));
+
+    // Step 1: regex.find_iter(&str)
+    let borrow_receiver = RustExpr::synthetic(RustExprKind::Borrow(Box::new(receiver)));
+    let find_iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(regex_arg),
+            method: "find_iter".into(),
+            type_args: vec![],
+            args: vec![borrow_receiver],
+        },
+        span,
+    );
+
+    // Step 2: .map(|m| m.as_str().to_string())
+    let closure_param = RustClosureParam {
+        name: "m".into(),
+        ty: None,
+    };
+    let as_str_call = RustExpr::synthetic(RustExprKind::MethodCall {
+        receiver: Box::new(RustExpr::synthetic(RustExprKind::Ident("m".into()))),
+        method: "as_str".into(),
+        type_args: vec![],
+        args: vec![],
+    });
+    let to_string_call = RustExpr::synthetic(RustExprKind::MethodCall {
+        receiver: Box::new(as_str_call),
+        method: "to_string".into(),
+        type_args: vec![],
+        args: vec![],
+    });
+    let map_closure = RustExpr::synthetic(RustExprKind::Closure {
+        is_async: false,
+        is_move: false,
+        params: vec![closure_param],
+        return_type: None,
+        body: RustClosureBody::Expr(Box::new(to_string_call)),
+    });
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(find_iter_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![map_closure],
+        },
+        span,
+    );
+
+    // Step 3: .collect::<Vec<String>>()
+    let vec_string_type = RustType::Generic(
+        Box::new(RustType::Named("Vec".into())),
+        vec![RustType::String],
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "collect".into(),
+            type_args: vec![vec_string_type],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `str.search(regex)` to `regex.find(&str).map(|m| m.start() as i64).unwrap_or(-1)`.
+///
+/// `String.prototype.search()` returns the index of the first match, or -1 if
+/// not found. The Rust `regex` crate equivalent chains `find` → `map` →
+/// `unwrap_or`. The receiver (the string) becomes the argument, and the first
+/// argument (the regex) becomes the method receiver.
+fn lower_string_search(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let regex_arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("regex".into())));
+
+    // Step 1: regex.find(&str)
+    let borrow_receiver = RustExpr::synthetic(RustExprKind::Borrow(Box::new(receiver)));
+    let find_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(regex_arg),
+            method: "find".into(),
+            type_args: vec![],
+            args: vec![borrow_receiver],
+        },
+        span,
+    );
+
+    // Step 2: .map(|m| m.start() as i64)
+    let closure_param = RustClosureParam {
+        name: "m".into(),
+        ty: None,
+    };
+    let start_call = RustExpr::synthetic(RustExprKind::MethodCall {
+        receiver: Box::new(RustExpr::synthetic(RustExprKind::Ident("m".into()))),
+        method: "start".into(),
+        type_args: vec![],
+        args: vec![],
+    });
+    let cast_expr = RustExpr::synthetic(RustExprKind::Cast(Box::new(start_call), RustType::I64));
+    let map_closure = RustExpr::synthetic(RustExprKind::Closure {
+        is_async: false,
+        is_move: false,
+        params: vec![closure_param],
+        return_type: None,
+        body: RustClosureBody::Expr(Box::new(cast_expr)),
+    });
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(find_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![map_closure],
+        },
+        span,
+    );
+
+    // Step 3: .unwrap_or(-1)
+    let neg_one = RustExpr::synthetic(RustExprKind::Unary {
+        op: RustUnaryOp::Neg,
+        operand: Box::new(RustExpr::synthetic(RustExprKind::IntLit(1))),
+    });
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "unwrap_or".into(),
+            type_args: vec![],
+            args: vec![neg_one],
+        },
+        span,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -4698,6 +4849,9 @@ mod tests {
             "trimStart",
             "trimEnd",
             "replaceAll",
+            // Regex-argument string methods
+            "match",
+            "search",
             // Array mutating methods (registered as string methods)
             "push",
             "pop",
@@ -5563,6 +5717,134 @@ mod tests {
             }
             other => panic!("expected MethodCall(replace), got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 162: String .match() and .search() tests
+    // ---------------------------------------------------------------
+
+    fn regex_arg() -> RustExpr {
+        RustExpr::new(RustExprKind::Ident("re".to_owned()), span())
+    }
+
+    #[test]
+    fn test_lower_string_match_produces_find_iter_map_collect() {
+        let result = lower_string_match(string_receiver(), vec![regex_arg()], span());
+        // Outermost: .collect::<Vec<String>>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver: collect_recv,
+                method,
+                type_args,
+                ..
+            } => {
+                assert_eq!(method, "collect");
+                assert_eq!(type_args.len(), 1);
+                // Inner: .map(|m| m.as_str().to_string())
+                match &collect_recv.kind {
+                    RustExprKind::MethodCall {
+                        receiver: map_recv,
+                        method: map_method,
+                        args: map_args,
+                        ..
+                    } => {
+                        assert_eq!(map_method, "map");
+                        assert_eq!(map_args.len(), 1);
+                        // Innermost: regex.find_iter(&str)
+                        match &map_recv.kind {
+                            RustExprKind::MethodCall {
+                                receiver: find_recv,
+                                method: find_method,
+                                args: find_args,
+                                ..
+                            } => {
+                                assert_eq!(find_method, "find_iter");
+                                // Receiver is the regex
+                                assert!(
+                                    matches!(&find_recv.kind, RustExprKind::Ident(name) if name == "re")
+                                );
+                                // Arg is &str (borrowed string)
+                                assert_eq!(find_args.len(), 1);
+                                assert!(matches!(&find_args[0].kind, RustExprKind::Borrow(_)));
+                            }
+                            other => panic!("expected MethodCall(find_iter), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected MethodCall(map), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_string_search_produces_find_map_unwrap_or() {
+        let result = lower_string_search(string_receiver(), vec![regex_arg()], span());
+        // Outermost: .unwrap_or(-1)
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver: unwrap_recv,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "unwrap_or");
+                assert_eq!(args.len(), 1);
+                // The -1 arg
+                assert!(matches!(
+                    &args[0].kind,
+                    RustExprKind::Unary {
+                        op: RustUnaryOp::Neg,
+                        ..
+                    }
+                ));
+                // Inner: .map(|m| m.start() as i64)
+                match &unwrap_recv.kind {
+                    RustExprKind::MethodCall {
+                        receiver: map_recv,
+                        method: map_method,
+                        args: map_args,
+                        ..
+                    } => {
+                        assert_eq!(map_method, "map");
+                        assert_eq!(map_args.len(), 1);
+                        // Innermost: regex.find(&str)
+                        match &map_recv.kind {
+                            RustExprKind::MethodCall {
+                                receiver: find_recv,
+                                method: find_method,
+                                args: find_args,
+                                ..
+                            } => {
+                                assert_eq!(find_method, "find");
+                                // Receiver is the regex
+                                assert!(
+                                    matches!(&find_recv.kind, RustExprKind::Ident(name) if name == "re")
+                                );
+                                // Arg is &str (borrowed string)
+                                assert_eq!(find_args.len(), 1);
+                                assert!(matches!(&find_args[0].kind, RustExprKind::Borrow(_)));
+                            }
+                            other => panic!("expected MethodCall(find), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected MethodCall(map), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(unwrap_or), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_string_match_registry_lookup() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_string_method("match").is_some());
+    }
+
+    #[test]
+    fn test_lower_string_search_registry_lookup() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_string_method("search").is_some());
     }
 
     // ---------------------------------------------------------------
