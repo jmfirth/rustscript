@@ -794,6 +794,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::Continue(c) => c.span,
         Stmt::RustBlock(rb) => rb.span,
         Stmt::Using(u) => u.span,
+        Stmt::Debugger(span) => *span,
     }
 }
 

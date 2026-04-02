@@ -9725,4 +9725,84 @@ function main() {}"#;
             other => panic!("expected MethodCall(unwrap), got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------
+    // Task 159: debugger statement produces no meaningful output
+    // ---------------------------------------------------------------
+
+    /// Parse and lower, allowing diagnostics (warnings).
+    fn lower_source_with_warnings(source: &str) -> (RustFile, Vec<rsc_syntax::diagnostic::Diagnostic>) {
+        let file_id = rsc_syntax::source::FileId(0);
+        let (module, parse_diags) = rsc_parser::parse(source, file_id);
+        assert!(
+            parse_diags.is_empty(),
+            "unexpected parse diagnostics: {parse_diags:?}"
+        );
+        let lower_result = crate::lower(&module);
+        (lower_result.ir, lower_result.diagnostics)
+    }
+
+    #[test]
+    fn test_debugger_produces_comment() {
+        let ir = lower_source("function main() { debugger; }");
+        let func = &ir.items[0];
+        if let RustItem::Function(f) = func {
+            assert!(
+                f.body.stmts.iter().any(|s| matches!(s, RustStmt::RawRust(code) if code == "// debugger")),
+                "expected `// debugger` comment in output, got {:?}",
+                f.body.stmts
+            );
+        } else {
+            panic!("expected Function, got {func:?}");
+        }
+    }
+
+    #[test]
+    fn test_new_target_lowers_to_empty_string() {
+        let (ir, diags) = lower_source_with_warnings("function main() { const x = new.target; }");
+        // Should emit a warning about new.target
+        assert!(
+            diags.iter().any(|d| d.message.contains("new.target")),
+            "expected new.target warning, got: {diags:?}"
+        );
+        let func = &ir.items[0];
+        if let RustItem::Function(f) = func {
+            // Should lower to a string literal
+            if let RustStmt::Let(let_stmt) = &f.body.stmts[0] {
+                assert!(
+                    matches!(&let_stmt.init.kind, RustExprKind::StringLit(s) if s.is_empty()),
+                    "expected empty string literal, got {:?}",
+                    let_stmt.init.kind
+                );
+            } else {
+                panic!("expected Let statement, got {:?}", f.body.stmts[0]);
+            }
+        } else {
+            panic!("expected Function, got {func:?}");
+        }
+    }
+
+    #[test]
+    fn test_import_meta_lowers_to_module_path() {
+        let (ir, diags) = lower_source_with_warnings("function main() { const x = import.meta; }");
+        // Should emit a warning about import.meta
+        assert!(
+            diags.iter().any(|d| d.message.contains("import.meta")),
+            "expected import.meta warning, got: {diags:?}"
+        );
+        let func = &ir.items[0];
+        if let RustItem::Function(f) = func {
+            if let RustStmt::Let(let_stmt) = &f.body.stmts[0] {
+                assert!(
+                    matches!(&let_stmt.init.kind, RustExprKind::Macro { name, .. } if name == "module_path"),
+                    "expected module_path!() macro, got {:?}",
+                    let_stmt.init.kind
+                );
+            } else {
+                panic!("expected Let statement, got {:?}", f.body.stmts[0]);
+            }
+        } else {
+            panic!("expected Function, got {func:?}");
+        }
+    }
 }

@@ -844,6 +844,9 @@ pub enum Stmt {
     /// A `using` or `await using` declaration for explicit resource management.
     /// Lowers to a normal `let` binding — Rust's RAII handles disposal via `Drop`.
     Using(UsingDecl),
+    /// A `debugger;` statement — breakpoint hint for JavaScript debuggers.
+    /// No Rust equivalent; lowers to a no-op (skipped in output).
+    Debugger(Span),
 }
 
 /// A `using` or `await using` declaration for explicit resource management.
@@ -1340,6 +1343,12 @@ pub enum ExprKind {
     /// Not fully supported in compiled Rust — emits a diagnostic warning.
     /// The `String` is the module specifier.
     DynamicImport(String),
+    /// `new.target` meta-property.
+    /// Not meaningful in Rust — lowers to an empty string literal with a diagnostic.
+    NewTarget,
+    /// `import.meta` meta-property.
+    /// Lowers to `module_path!()` for `import.meta.url`, or a diagnostic for other uses.
+    ImportMeta,
     /// Postfix increment: `i++`.
     /// In update position of a for loop, lowers to `i += 1`.
     PostfixIncrement(Box<Expr>),

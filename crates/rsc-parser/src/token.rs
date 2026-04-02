@@ -128,6 +128,8 @@ pub(crate) enum TokenKind {
     Var,
     /// `enum` (TS-style enum keyword, used in `const enum` declarations)
     Enum,
+    /// `debugger` (breakpoint hint — no-op in compiled Rust)
+    Debugger,
 
     // Operators
     /// `+`

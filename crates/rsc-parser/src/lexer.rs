@@ -856,6 +856,7 @@ impl<'a> Lexer<'a> {
             "in" => TokenKind::In,
             "declare" => TokenKind::Declare,
             "enum" => TokenKind::Enum,
+            "debugger" => TokenKind::Debugger,
             _ => TokenKind::Ident(text.to_owned()),
         };
 
