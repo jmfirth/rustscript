@@ -10018,4 +10018,49 @@ function main() {}"#;
         );
         assert!(output.contains(".len()"), "expected .len(), got:\n{output}");
     }
+
+    /// Struct literal type is inferred from function parameter type.
+    #[test]
+    fn test_struct_literal_inferred_from_param() {
+        let output = compile_and_emit(
+            "type User = { name: string, age: i32 }\n\
+             function greet(user: User): string { return user.name; }\n\
+             function main() { greet({ name: \"Alice\", age: 30 }); }",
+        );
+        assert!(
+            output.contains("User {"),
+            "expected struct literal to use inferred type 'User', got:\n{output}"
+        );
+    }
+
+    /// Nested struct literal inference: outer inferred from param, inner from field type.
+    #[test]
+    fn test_struct_literal_inferred_nested() {
+        let output = compile_and_emit(
+            "type Address = { city: string }\n\
+             type Person = { name: string, addr: Address }\n\
+             function process(p: Person): string { return p.name; }\n\
+             function main() {\n\
+               const a: Address = { city: \"NYC\" };\n\
+               process({ name: \"Bob\", addr: a });\n\
+             }",
+        );
+        assert!(
+            output.contains("Person {"),
+            "expected struct literal to use inferred type 'Person', got:\n{output}"
+        );
+    }
+
+    /// Explicit type annotation on struct literal still works (regression check).
+    #[test]
+    fn test_struct_literal_explicit_still_works() {
+        let output = compile_and_emit(
+            "type User = { name: string, age: i32 }\n\
+             function main() { const u: User = { name: \"Alice\", age: 30 }; }",
+        );
+        assert!(
+            output.contains("User {"),
+            "expected explicit struct literal to use 'User', got:\n{output}"
+        );
+    }
 }

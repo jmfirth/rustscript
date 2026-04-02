@@ -1127,6 +1127,22 @@ impl Transform {
             return lowered;
         }
 
+        // Infer struct type for object literals from the parameter type.
+        // When the argument is an untyped struct literal and the parameter type
+        // is a named struct, propagate the type name so `lower_struct_lit` can
+        // resolve the struct type instead of emitting "cannot infer struct type".
+        if matches!(&a.kind, ast::ExprKind::StructLit(slit) if slit.type_name.is_none()) {
+            if let Some(param_ty) = sig.and_then(|s| s.param_types.get(i)) {
+                if let Some(type_name) = extract_named_type(param_ty) {
+                    let prev = ctx.current_struct_type_name().map(String::from);
+                    ctx.set_struct_type_name(Some(type_name));
+                    let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+                    ctx.set_struct_type_name(prev);
+                    return lowered;
+                }
+            }
+        }
+
         let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
 
         // Tier 2: apply callsite borrow transform
