@@ -126,6 +126,8 @@ pub(crate) enum TokenKind {
     Declare,
     /// `var` (function-scoped variable declaration, treated as `let mut`)
     Var,
+    /// `debugger` (breakpoint hint — no-op in compiled Rust)
+    Debugger,
 
     // Operators
     /// `+`

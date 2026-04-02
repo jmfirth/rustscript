@@ -335,8 +335,11 @@ impl UseMap {
                     uses,
                 );
             }
-            ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {
-                // No variable uses in break/continue/inline rust
+            ast::Stmt::Break(_)
+            | ast::Stmt::Continue(_)
+            | ast::Stmt::RustBlock(_)
+            | ast::Stmt::Debugger(_) => {
+                // No variable uses in break/continue/inline rust/debugger
             }
         }
     }
@@ -634,11 +637,11 @@ impl UseMap {
             | ast::ExprKind::Super
             | ast::ExprKind::Closure(_)
             | ast::ExprKind::DynamicImport(_)
-            | ast::ExprKind::RegexLit { .. } => {
-                // Closure bodies, `this`, and `super` are opaque for ownership
-                // analysis — variables captured by a closure are not tracked in
-                // the outer function's use map. This is the conservative Phase 1
-                // approach per the task spec.
+            | ast::ExprKind::RegexLit { .. }
+            | ast::ExprKind::NewTarget
+            | ast::ExprKind::ImportMeta => {
+                // Closure bodies, `this`, `super`, and meta-properties are opaque
+                // for ownership analysis — no variable uses to track.
             }
             ast::ExprKind::FieldAssign(fa) => {
                 Self::collect_expr_uses(
@@ -937,7 +940,8 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
         | ast::Stmt::ArrayDestructure(_)
         | ast::Stmt::Break(_)
         | ast::Stmt::Continue(_)
-        | ast::Stmt::RustBlock(_) => {}
+        | ast::Stmt::RustBlock(_)
+        | ast::Stmt::Debugger(_) => {}
         ast::Stmt::For(for_of) => {
             for inner in &for_of.body.stmts {
                 collect_assignments(inner, reassigned);
@@ -1327,7 +1331,7 @@ fn collect_param_usage_stmt(
         ast::Stmt::Using(decl) => {
             collect_param_usage_expr(&decl.init, param_set, is_ref_call, result);
         }
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {}
+        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) | ast::Stmt::Debugger(_) => {}
     }
 }
 
@@ -1564,7 +1568,9 @@ fn collect_param_usage_expr(
         | ast::ExprKind::This
         | ast::ExprKind::Super
         | ast::ExprKind::DynamicImport(_)
-        | ast::ExprKind::RegexLit { .. } => {}
+        | ast::ExprKind::RegexLit { .. }
+        | ast::ExprKind::NewTarget
+        | ast::ExprKind::ImportMeta => {}
     }
 }
 
@@ -1731,7 +1737,9 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::This
         | ast::ExprKind::Super
         | ast::ExprKind::DynamicImport(_)
-        | ast::ExprKind::RegexLit { .. } => {}
+        | ast::ExprKind::RegexLit { .. }
+        | ast::ExprKind::NewTarget
+        | ast::ExprKind::ImportMeta => {}
     }
 }
 
@@ -1839,7 +1847,7 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
         ast::Stmt::Destructure(d) => collect_idents_in_expr(&d.init, names),
         ast::Stmt::ArrayDestructure(ad) => collect_idents_in_expr(&ad.init, names),
         ast::Stmt::Using(decl) => collect_idents_in_expr(&decl.init, names),
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) => {}
+        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) | ast::Stmt::Debugger(_) => {}
     }
 }
 

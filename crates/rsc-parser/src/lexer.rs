@@ -855,6 +855,7 @@ impl<'a> Lexer<'a> {
             "void" => TokenKind::Void,
             "in" => TokenKind::In,
             "declare" => TokenKind::Declare,
+            "debugger" => TokenKind::Debugger,
             _ => TokenKind::Ident(text.to_owned()),
         };
 

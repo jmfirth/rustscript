@@ -916,6 +916,7 @@ impl Printer {
             }
             Stmt::RustBlock(rb) => self.print_rust_block(rb),
             Stmt::Using(u) => self.print_using_decl(u),
+            Stmt::Debugger(_) => self.writeln("debugger;"),
         }
     }
 
@@ -1339,6 +1340,12 @@ impl Printer {
                 self.write(pattern);
                 self.write("/");
                 self.write(flags);
+            }
+            ExprKind::NewTarget => {
+                self.write("new.target");
+            }
+            ExprKind::ImportMeta => {
+                self.write("import.meta");
             }
         }
     }

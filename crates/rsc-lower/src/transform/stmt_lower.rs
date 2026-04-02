@@ -156,6 +156,8 @@ impl Transform {
                 span: Some(cont.span),
             },
             ast::Stmt::RustBlock(rb) => RustStmt::RawRust(rb.code.clone()),
+            // `debugger;` → no-op (comment in output)
+            ast::Stmt::Debugger(_) => RustStmt::RawRust("// debugger".to_owned()),
             // `using`/`await using` → normal `let` binding (Rust RAII handles Drop)
             ast::Stmt::Using(decl) => {
                 let equiv = ast::VarDecl {

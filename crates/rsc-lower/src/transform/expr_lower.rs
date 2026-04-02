@@ -770,6 +770,27 @@ impl Transform {
                     expr.span,
                 )
             }
+            ast::ExprKind::NewTarget => {
+                // `new.target` is not meaningful in Rust — constructors are just functions.
+                // Emit a warning and lower to an empty string literal.
+                ctx.emit_diagnostic(Diagnostic::warning(
+                    "new.target is not supported in RustScript; there is no equivalent in Rust",
+                ));
+                RustExpr::new(RustExprKind::StringLit(String::new()), expr.span)
+            }
+            ast::ExprKind::ImportMeta => {
+                // `import.meta` → `module_path!()` as a reasonable approximation.
+                ctx.emit_diagnostic(Diagnostic::warning(
+                    "import.meta is partially supported; lowering to module_path!()",
+                ));
+                RustExpr::new(
+                    RustExprKind::Macro {
+                        name: "module_path".to_owned(),
+                        args: vec![],
+                    },
+                    expr.span,
+                )
+            }
             // Increment/decrement: lower to compound assignment
             ast::ExprKind::PostfixIncrement(operand) | ast::ExprKind::PrefixIncrement(operand) => {
                 if let ast::ExprKind::Ident(ident) = &operand.kind {

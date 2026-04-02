@@ -318,6 +318,7 @@ impl<'src> Parser<'src> {
             TokenKind::Void => "`void`",
             TokenKind::In => "`in`",
             TokenKind::Declare => "`declare`",
+            TokenKind::Debugger => "`debugger`",
             TokenKind::PlusPlus => "`++`",
             TokenKind::MinusMinus => "`--`",
             TokenKind::Var => "`var`",
@@ -3011,6 +3012,12 @@ impl<'src> Parser<'src> {
             TokenKind::Break => Some(Stmt::Break(self.parse_break_stmt())),
             TokenKind::Continue => Some(Stmt::Continue(self.parse_continue_stmt())),
             TokenKind::Rust => self.parse_rust_block_stmt(),
+            TokenKind::Debugger => {
+                let token = self.advance(); // consume `debugger`
+                let span = token.span;
+                self.eat(&TokenKind::Semicolon); // optional semicolon
+                Some(Stmt::Debugger(span))
+            }
             _ => self.parse_expr_stmt(),
         }
     }
@@ -5222,6 +5229,23 @@ impl<'src> Parser<'src> {
                 })
             }
             TokenKind::Import => {
+                // `import.meta` meta-property
+                if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Dot) {
+                    if let Some(next) = self.tokens.get(self.pos + 2) {
+                        if let TokenKind::Ident(name) = &next.kind {
+                            if name == "meta" {
+                                let start = self.advance(); // consume `import`
+                                self.advance(); // consume `.`
+                                let meta_token = self.advance(); // consume `meta`
+                                let span = start.span.merge(meta_token.span);
+                                return Some(Expr {
+                                    kind: ExprKind::ImportMeta,
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                }
                 // Dynamic import expression: `import("module")`
                 if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::LParen) {
                     let start = self.advance(); // consume `import`
@@ -5469,6 +5493,23 @@ impl<'src> Parser<'src> {
     fn parse_new_expr(&mut self) -> Option<Expr> {
         let new_token = self.advance(); // consume `new`
         let start = new_token.span;
+
+        // `new.target` meta-property
+        if self.check(&TokenKind::Dot) {
+            if let Some(next) = self.tokens.get(self.pos + 1) {
+                if let TokenKind::Ident(name) = &next.kind {
+                    if name == "target" {
+                        self.advance(); // consume `.`
+                        let target_token = self.advance(); // consume `target`
+                        let span = start.merge(target_token.span);
+                        return Some(Expr {
+                            kind: ExprKind::NewTarget,
+                            span,
+                        });
+                    }
+                }
+            }
+        }
 
         let type_name = self.parse_ident()?;
 
@@ -12993,5 +13034,106 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
             "expected MappedType param type, got {:?}",
             param_type.kind
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Task 159: new.target, import.meta, debugger
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parser_new_target() {
+        let module = parse_ok("function main() { const x = new.target; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(decl.init.kind, ExprKind::NewTarget),
+                "expected NewTarget, got {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_import_meta() {
+        let module = parse_ok("function main() { const x = import.meta; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            assert!(
+                matches!(decl.init.kind, ExprKind::ImportMeta),
+                "expected ImportMeta, got {:?}",
+                decl.init.kind
+            );
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_import_meta_url() {
+        // `import.meta.url` should parse as a field access on ImportMeta
+        let module = parse_ok("function main() { const x = import.meta.url; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::FieldAccess(fa) => {
+                    assert!(
+                        matches!(fa.object.kind, ExprKind::ImportMeta),
+                        "expected ImportMeta as object, got {:?}",
+                        fa.object.kind
+                    );
+                    assert_eq!(fa.field.name, "url");
+                }
+                other => panic!("expected FieldAccess on ImportMeta, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_parser_debugger_statement() {
+        let module = parse_ok("function main() { debugger; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        assert!(
+            matches!(stmt, Stmt::Debugger(_)),
+            "expected Debugger, got {stmt:?}"
+        );
+    }
+
+    #[test]
+    fn test_parser_debugger_no_semicolon() {
+        // debugger without semicolon should also work
+        let module = parse_ok("function main() { debugger }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        assert!(
+            matches!(stmt, Stmt::Debugger(_)),
+            "expected Debugger, got {stmt:?}"
+        );
+    }
+
+    #[test]
+    fn test_new_still_works() {
+        // Regression: ensure `new Foo()` still parses correctly
+        let module = parse_ok("function main() { const x = new Map<string, i32>(); }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            match &decl.init.kind {
+                ExprKind::New(new_expr) => {
+                    assert_eq!(new_expr.type_name.name, "Map");
+                    assert_eq!(new_expr.type_args.len(), 2);
+                }
+                other => panic!("expected New, got {other:?}"),
+            }
+        } else {
+            panic!("expected VarDecl, got {stmt:?}");
+        }
     }
 }
