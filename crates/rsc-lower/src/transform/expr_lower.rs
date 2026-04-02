@@ -829,6 +829,12 @@ impl Transform {
                 // For non-array (objects, literals): strip the `as const`, lower inner
                 self.lower_expr(inner, ctx, use_map, stmt_index)
             }
+            ast::ExprKind::ClassExpr(class_def) => {
+                // Class expressions in arbitrary expression positions produce
+                // the class name as an identifier. The class itself is hoisted
+                // during top-level const lowering.
+                RustExpr::new(RustExprKind::Ident(class_def.name.name.clone()), expr.span)
+            }
             ast::ExprKind::RegexLit { pattern, flags } => {
                 // `/pattern/flags` → `Regex::new("(?flags)pattern").unwrap()`
                 // Same lowering as `new RegExp("pattern", "flags")`.

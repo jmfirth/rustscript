@@ -1334,6 +1334,36 @@ impl Printer {
                 self.write("--");
                 self.print_expr(operand);
             }
+            ExprKind::ClassExpr(class_def) => {
+                self.write("class ");
+                if class_def.name.name != "__AnonymousClass" {
+                    self.write(&class_def.name.name);
+                    self.write(" ");
+                }
+                self.print_optional_type_params(class_def.type_params.as_ref());
+                if let Some(base) = &class_def.extends {
+                    self.write("extends ");
+                    self.write(&base.name);
+                    self.write(" ");
+                }
+                self.writeln("{");
+                self.indent();
+                for (i, member) in class_def.members.iter().enumerate() {
+                    if i > 0 {
+                        self.blank_line();
+                    }
+                    match member {
+                        ClassMember::Field(f) => self.print_class_field(f),
+                        ClassMember::Constructor(c) => self.print_class_constructor(c),
+                        ClassMember::Method(m) => self.print_class_method(m),
+                        ClassMember::Getter(g) => self.print_class_getter(g),
+                        ClassMember::Setter(s) => self.print_class_setter(s),
+                        ClassMember::StaticBlock(block) => self.print_static_block(block),
+                    }
+                }
+                self.dedent();
+                self.write("}");
+            }
             ExprKind::RegexLit { pattern, flags } => {
                 self.write("/");
                 self.write(pattern);

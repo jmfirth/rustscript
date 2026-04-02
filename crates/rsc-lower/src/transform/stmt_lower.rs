@@ -1130,7 +1130,10 @@ impl Transform {
                         local_name,
                         access_expr,
                         default_value,
-                        mutable: matches!(destr.binding, ast::VarBinding::Let | ast::VarBinding::Var),
+                        mutable: matches!(
+                            destr.binding,
+                            ast::VarBinding::Let | ast::VarBinding::Var
+                        ),
                     }
                 })
                 .collect();

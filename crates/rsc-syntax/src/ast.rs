@@ -1357,6 +1357,11 @@ pub enum ExprKind {
         /// The flags after the closing delimiter (e.g., `gi`).
         flags: String,
     },
+    /// A class expression: `class { ... }` or `class Name { ... }`.
+    /// Anonymous classes get their name from the binding they're assigned to.
+    /// Lowers by hoisting the class definition and replacing the expression
+    /// with the class name as an identifier.
+    ClassExpr(ClassDef),
 }
 
 /// Logical assignment operators.

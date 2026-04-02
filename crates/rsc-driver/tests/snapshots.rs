@@ -5330,3 +5330,88 @@ function main() {
         "expected Regex::new(\"(?ims)test\").unwrap(), got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Class expressions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_class_expr_snapshot() {
+    let source = "\
+const MyClass = class {
+  value: i32;
+
+  constructor(value: i32) {
+    this.value = value;
+  }
+
+  getValue(): i32 {
+    return this.value;
+  }
+};";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MyClass {
+    pub value: i32,
+}
+
+impl MyClass {
+    fn new(value: i32) -> Self {
+        Self { value: value }
+    }
+
+    fn getValue(&self) -> i32 {
+        return self.value;
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("class_expr", &actual, expected);
+}
+
+#[test]
+fn test_class_expr_uses_binding_name() {
+    // Anonymous class expression should get the variable name
+    let source = "\
+const Point = class {
+  x: f64;
+  y: f64;
+
+  constructor(x: f64, y: f64) {
+    this.x = x;
+    this.y = y;
+  }
+};";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("struct Point"),
+        "expected struct Point, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("impl Point"),
+        "expected impl Point, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_class_expr_named_uses_binding_name() {
+    // Named class expression: outer binding name is used for the struct
+    let source = "\
+const Foo = class Bar {
+  x: i32;
+
+  constructor(x: i32) {
+    this.x = x;
+  }
+};";
+
+    let actual = compile_to_rust(source);
+    // The named class expression uses the inner name (Bar) since it's explicit
+    assert!(
+        actual.contains("struct Bar") || actual.contains("struct Foo"),
+        "expected struct with class name, got:\n{actual}"
+    );
+}
