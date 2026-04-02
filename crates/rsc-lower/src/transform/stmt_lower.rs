@@ -238,6 +238,17 @@ impl Transform {
         let struct_type_name = extract_named_type(&ty);
         ctx.set_struct_type_name(struct_type_name);
 
+        // When the declared type is Vec<Tuple<...>> (e.g., `Array<[string, i32]>`),
+        // propagate the expected element type so inner array literals are lowered as tuples.
+        if let RustType::Generic(ref base, ref args) = ty {
+            if matches!(base.as_ref(), RustType::Named(n) if n == "Vec")
+                && args.len() == 1
+                && matches!(&args[0], RustType::Tuple(_))
+            {
+                ctx.set_expected_element_type(Some(args[0].clone()));
+            }
+        }
+
         // Check for HashMap initialization: `const config: { [key: string]: string } = {}`
         // When the type is a HashMap and the init is an empty struct literal, emit `HashMap::new()`.
         let init = if is_hashmap_type(&ty)
@@ -297,6 +308,7 @@ impl Transform {
         };
 
         ctx.set_struct_type_name(None);
+        ctx.set_expected_element_type(None);
 
         // If the init expression is an iterator .find() chain, the result type is
         // Option<T>. Override the variable's type so that returning this variable
