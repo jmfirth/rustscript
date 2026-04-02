@@ -347,6 +347,30 @@ static BUILTIN_METHODS: LazyLock<HashMap<&'static str, BuiltinHover>> = LazyLock
         },
     );
     m.insert(
+        "array.reduceRight",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.reduceRight(fn: (acc: U, item: T) => U, initial: U): U\n```\n\nReduces the array from right to left.\n\n**Rust:** `.iter().rev().fold(initial, fn)`",
+        },
+    );
+    m.insert(
+        "array.keys",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.keys(): Array<number>\n```\n\nReturns an array of the indices.\n\n**Rust:** `(0..arr.len()).map(|i| i as i64).collect()`",
+        },
+    );
+    m.insert(
+        "array.values",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.values(): Array<T>\n```\n\nReturns an array of the values (a clone of the array).\n\n**Rust:** `.clone()`",
+        },
+    );
+    m.insert(
+        "array.entries",
+        BuiltinHover {
+            markdown: "```rustscript\nArray<T>.entries(): Array<[number, T]>\n```\n\nReturns an array of [index, value] pairs.\n\n**Rust:** `.iter().cloned().enumerate().map(|(i, v)| (i as i64, v)).collect()`",
+        },
+    );
+    m.insert(
         "array.flat",
         BuiltinHover {
             markdown: "```rustscript\nArray<Array<T>>.flat(): Array<T>\n```\n\nFlattens one level of nesting.\n\n**Rust:** `.into_iter().flatten().collect()`",

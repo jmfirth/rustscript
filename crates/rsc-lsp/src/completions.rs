@@ -651,6 +651,30 @@ const ARRAY_MEMBERS: &[BuiltinMember] = &[
         kind: CompletionItemKind::METHOD,
     },
     BuiltinMember {
+        label: "reduceRight",
+        detail: "(fn: (acc: U, item: T) => U, initial: U): U",
+        doc: "Reduces the array from right to left.",
+        kind: CompletionItemKind::METHOD,
+    },
+    BuiltinMember {
+        label: "keys",
+        detail: "(): Array<number>",
+        doc: "Returns an array of the indices.",
+        kind: CompletionItemKind::METHOD,
+    },
+    BuiltinMember {
+        label: "values",
+        detail: "(): Array<T>",
+        doc: "Returns an array of the values.",
+        kind: CompletionItemKind::METHOD,
+    },
+    BuiltinMember {
+        label: "entries",
+        detail: "(): Array<[number, T]>",
+        doc: "Returns an array of [index, value] pairs.",
+        kind: CompletionItemKind::METHOD,
+    },
+    BuiltinMember {
         label: "length",
         detail: "number",
         doc: "The number of elements in the array.",

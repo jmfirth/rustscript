@@ -792,7 +792,8 @@ fn scan_expr_for_collections(expr: &RustExpr, needs_hashmap: &mut bool, needs_ha
                     | rsc_syntax::rust_ir::IteratorOp::FilterFnRef(fn_expr) => {
                         scan_expr_for_collections(fn_expr, needs_hashmap, needs_hashset);
                     }
-                    rsc_syntax::rust_ir::IteratorOp::Cloned => {}
+                    rsc_syntax::rust_ir::IteratorOp::Cloned
+                    | rsc_syntax::rust_ir::IteratorOp::Rev => {}
                 }
             }
             match terminal {

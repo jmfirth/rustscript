@@ -307,6 +307,7 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_collection_method("findIndex", lower_array_find_index);
     registry.register_collection_method("findLast", lower_array_find_last);
     registry.register_collection_method("findLastIndex", lower_array_find_last_index);
+    registry.register_collection_method("reduceRight", lower_array_reduce_right);
 
     // Phase 5: Array non-iterator methods (registered as string methods for dispatch)
     registry.register_string_method("push", lower_array_push);
@@ -329,6 +330,9 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_array_method("at", lower_array_at);
     registry.register_array_method("concat", lower_array_concat);
     registry.register_array_method("slice", lower_array_slice);
+    registry.register_array_method("keys", lower_array_keys);
+    registry.register_array_method("values", lower_array_values);
+    registry.register_array_method("entries", lower_array_entries);
 
     // Phase 5: Map/Set methods — registered in map_set_methods for type-aware dispatch.
     // These method names (get, set, has, delete, clear, keys, values, entries, add)
@@ -2120,6 +2124,151 @@ fn lower_array_slice(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> Rus
             receiver: Box::new(index_expr),
             method: "to_vec".into(),
             type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Array iterator methods: keys, values, entries
+// ---------------------------------------------------------------------------
+
+/// Lower `.keys()` to `(0..arr.len()).collect::<Vec<_>>()`.
+///
+/// Returns an array of indices: `[0, 1, 2, ...]`.
+fn lower_array_keys(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let len_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "len".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let range = RustExpr::new(
+        RustExprKind::Range {
+            start: Box::new(RustExpr::synthetic(RustExprKind::IntLit(0))),
+            end: Box::new(len_call),
+        },
+        span,
+    );
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(range),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "i".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Cast(
+                    Box::new(RustExpr::synthetic(RustExprKind::Ident("i".into()))),
+                    RustType::Named("i64".into()),
+                )))),
+            })],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.values()` to `arr.clone()`.
+///
+/// The values of an array are just its elements, so cloning the array suffices.
+fn lower_array_values(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `.entries()` to `arr.iter().cloned().enumerate().map(|(i, v)| (i as i64, v)).collect::<Vec<_>>()`.
+///
+/// Returns an array of `(index, value)` tuples.
+fn lower_array_entries(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let cloned_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "cloned".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let enumerate_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(cloned_call),
+            method: "enumerate".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let map_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(enumerate_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "(i, v)".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Tuple(
+                    vec![
+                        RustExpr::synthetic(RustExprKind::Cast(
+                            Box::new(RustExpr::synthetic(RustExprKind::Ident("i".into()))),
+                            RustType::Named("i64".into()),
+                        )),
+                        RustExpr::synthetic(RustExprKind::Ident("v".into())),
+                    ],
+                )))),
+            })],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(map_call),
+            method: "collect".into(),
+            type_args: vec![RustType::Generic(
+                Box::new(RustType::Named("Vec".into())),
+                vec![RustType::Infer],
+            )],
             args: vec![],
         },
         span,
@@ -4011,6 +4160,52 @@ fn lower_array_reduce(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> Ru
     )
 }
 
+/// Lower `.reduceRight(fn, init)` to an `IteratorChain` with `Rev` op and `Fold` terminal.
+///
+/// `arr.reduceRight((acc, x) => acc + x, 0)` → `arr.iter().rev().fold(0, |acc, x| acc + x)`
+/// Note: argument order is swapped — JS `reduceRight(fn, init)` → Rust `fold(init, fn)`.
+fn lower_array_reduce_right(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let closure_arg = iter.next();
+    let init_arg = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+
+    let (acc_param, item_param, body) = if let Some(closure) = closure_arg
+        && let RustExprKind::Closure { params, body, .. } = closure.kind
+    {
+        let acc = params
+            .first()
+            .map_or_else(|| "acc".into(), |p| p.name.clone());
+        let item = params
+            .get(1)
+            .map_or_else(|| "item".into(), |p| p.name.clone());
+        (acc, item, body)
+    } else {
+        (
+            "acc".into(),
+            "item".into(),
+            RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                "_".into(),
+            )))),
+        )
+    };
+
+    RustExpr::new(
+        RustExprKind::IteratorChain {
+            source: Box::new(receiver),
+            ops: vec![IteratorOp::Rev],
+            terminal: IteratorTerminal::Fold {
+                init: Box::new(init_arg),
+                acc_param,
+                item_param,
+                body,
+            },
+        },
+        span,
+    )
+}
+
 /// Lower `.find(fn)` to an `IteratorChain` with `Find` terminal.
 ///
 /// `arr.find(x => x > 3)` → `arr.iter().find(|x| *x > 3).cloned()`
@@ -4485,6 +4680,7 @@ pub(crate) fn merge_into_chain(
                 ))
             }
             "reduce" => merge_reduce_into_chain(source, ops, outer_args, span),
+            "reduceRight" => merge_reduce_right_into_chain(source, ops, outer_args, span),
             "find" => {
                 let (param, body) = outer_args.first().and_then(extract_closure_ref)?;
                 Some(RustExpr::new(
@@ -4557,6 +4753,48 @@ fn merge_reduce_into_chain(
         let item = params
             .get(1)
             .map_or_else(|| "item".into(), |p| p.name.clone());
+        Some(RustExpr::new(
+            RustExprKind::IteratorChain {
+                source,
+                ops,
+                terminal: IteratorTerminal::Fold {
+                    init: Box::new(init_arg),
+                    acc_param: acc,
+                    item_param: item,
+                    body: body.clone(),
+                },
+            },
+            span,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Helper for merging a `reduceRight` call into an existing iterator chain.
+///
+/// Like `merge_reduce_into_chain` but inserts a `Rev` op before the fold.
+fn merge_reduce_right_into_chain(
+    source: Box<RustExpr>,
+    mut ops: Vec<IteratorOp>,
+    outer_args: &[RustExpr],
+    span: Span,
+) -> Option<RustExpr> {
+    let closure_arg = outer_args.first();
+    let init_arg = outer_args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    if let Some(closure) = closure_arg
+        && let RustExprKind::Closure { params, body, .. } = &closure.kind
+    {
+        let acc = params
+            .first()
+            .map_or_else(|| "acc".into(), |p| p.name.clone());
+        let item = params
+            .get(1)
+            .map_or_else(|| "item".into(), |p| p.name.clone());
+        ops.push(IteratorOp::Rev);
         Some(RustExpr::new(
             RustExprKind::IteratorChain {
                 source,
@@ -5247,6 +5485,7 @@ mod tests {
             "findIndex",
             "findLast",
             "findLastIndex",
+            "reduceRight",
         ];
         for method in methods {
             assert!(
@@ -7807,6 +8046,9 @@ mod tests {
             "at",
             "concat",
             "slice",
+            "keys",
+            "values",
+            "entries",
         ];
         for method in methods {
             assert!(
@@ -8133,6 +8375,46 @@ mod tests {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Task 163: reduceRight, keys, values, entries
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_array_reduce_right_produces_rev_fold() {
+        let receiver = ident_expr("arr");
+        let closure = make_two_param_closure(
+            "acc",
+            "x",
+            RustExpr::synthetic(RustExprKind::Binary {
+                op: RustBinaryOp::Add,
+                left: Box::new(RustExpr::synthetic(RustExprKind::Ident("acc".into()))),
+                right: Box::new(RustExpr::synthetic(RustExprKind::Ident("x".into()))),
+            }),
+        );
+        let init = RustExpr::synthetic(RustExprKind::IntLit(0));
+        let result = lower_array_reduce_right(receiver, vec![closure, init], span());
+        match &result.kind {
+            RustExprKind::IteratorChain { ops, terminal, .. } => {
+                assert_eq!(ops.len(), 1);
+                assert!(matches!(&ops[0], IteratorOp::Rev));
+                match terminal {
+                    IteratorTerminal::Fold {
+                        init,
+                        acc_param,
+                        item_param,
+                        ..
+                    } => {
+                        assert_eq!(acc_param, "acc");
+                        assert_eq!(item_param, "x");
+                        assert!(matches!(init.kind, RustExprKind::IntLit(0)));
+                    }
+                    other => panic!("expected Fold terminal, got {other:?}"),
+                }
+            }
+            other => panic!("expected IteratorChain, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_lower_number_to_fixed_default_zero() {
         let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
@@ -8281,5 +8563,79 @@ mod tests {
     #[test]
     fn test_is_number_type_named_is_not() {
         assert!(!is_number_type(&RustType::Named("Foo".to_owned())));
+    }
+
+    #[test]
+    fn test_lower_array_keys_produces_range_collect() {
+        let result = lower_array_keys(array_receiver(), vec![], span());
+        // Outermost: .collect::<Vec<_>>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "collect");
+                // Inner: .map(|i| i as i64)
+                match &receiver.kind {
+                    RustExprKind::MethodCall {
+                        receiver: inner,
+                        method,
+                        ..
+                    } => {
+                        assert_eq!(method, "map");
+                        // Inner: Range 0..arr.len()
+                        match &inner.kind {
+                            RustExprKind::Range { .. } => {}
+                            other => panic!("expected Range, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected MethodCall(map), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_values_produces_clone() {
+        let result = lower_array_values(array_receiver(), vec![], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "clone");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected MethodCall(clone), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_array_entries_produces_enumerate_collect() {
+        let result = lower_array_entries(array_receiver(), vec![], span());
+        // Outermost: .collect::<Vec<_>>()
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                assert_eq!(method, "collect");
+                // Inner: .map(|(i, v)| (i as i64, v))
+                match &receiver.kind {
+                    RustExprKind::MethodCall {
+                        receiver: inner,
+                        method,
+                        ..
+                    } => {
+                        assert_eq!(method, "map");
+                        // Inner: .enumerate()
+                        match &inner.kind {
+                            RustExprKind::MethodCall { method, .. } => {
+                                assert_eq!(method, "enumerate");
+                            }
+                            other => panic!("expected MethodCall(enumerate), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected MethodCall(map), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
     }
 }
