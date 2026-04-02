@@ -2155,7 +2155,7 @@ function main() {
 fn test_stress_e2e_data_pipeline() {
     let source = r#"function main() {
   const nums: Array<i32> = [1, 2, 3, 4, 5];
-  let total: i64 = 0;
+  let total: i32 = 0;
   for (const n of nums) {
     total = total + n;
   }
