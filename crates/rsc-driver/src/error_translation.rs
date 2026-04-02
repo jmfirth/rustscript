@@ -7,7 +7,148 @@
 use regex::Regex;
 use rsc_syntax::diagnostic::ColorMode;
 use rsc_syntax::span::Span;
+use serde::Deserialize;
 use std::sync::LazyLock;
+
+/// A diagnostic emitted by `rustc` in JSON format.
+///
+/// Represents a single compiler diagnostic (error, warning, note, or help)
+/// as structured data parsed from `rustc --message-format=json` output.
+#[derive(Debug, Deserialize)]
+pub struct RustcDiagnostic {
+    /// The main diagnostic message text.
+    pub message: String,
+    /// The error code (e.g., `E0382`, `E0308`), if any.
+    pub code: Option<RustcErrorCode>,
+    /// Severity level: `"error"`, `"warning"`, `"note"`, or `"help"`.
+    pub level: String,
+    /// Source code spans associated with this diagnostic.
+    pub spans: Vec<RustcSpan>,
+    /// Nested sub-diagnostics (help messages, notes, suggestions).
+    pub children: Vec<RustcDiagnostic>,
+    /// The human-readable rendering of this diagnostic, as `rustc` would print it.
+    pub rendered: Option<String>,
+}
+
+/// An error code attached to a `rustc` diagnostic.
+#[derive(Debug, Deserialize)]
+pub struct RustcErrorCode {
+    /// The error code string (e.g., `"E0382"`).
+    pub code: String,
+    /// An optional longer explanation of this error code.
+    pub explanation: Option<String>,
+}
+
+/// A source span within a `rustc` diagnostic.
+///
+/// Identifies the exact location in a source file that a diagnostic refers to,
+/// including byte offsets, line/column positions, and optional labels or suggestions.
+#[derive(Debug, Deserialize)]
+pub struct RustcSpan {
+    /// The file path this span refers to.
+    pub file_name: String,
+    /// Byte offset of the start of this span.
+    pub byte_start: usize,
+    /// Byte offset of the end of this span.
+    pub byte_end: usize,
+    /// 1-based starting line number.
+    pub line_start: usize,
+    /// 1-based ending line number.
+    pub line_end: usize,
+    /// 1-based starting column number.
+    pub column_start: usize,
+    /// 1-based ending column number.
+    pub column_end: usize,
+    /// Whether this is the primary span of the diagnostic.
+    pub is_primary: bool,
+    /// An optional label displayed with this span.
+    pub label: Option<String>,
+    /// A suggested replacement for the code at this span.
+    pub suggested_replacement: Option<String>,
+}
+
+/// Parse `cargo` JSON output into structured `rustc` diagnostics.
+///
+/// Each line of `cargo --message-format=json` output is a JSON object. Lines with
+/// `"reason": "compiler-message"` contain a `"message"` field that holds a
+/// [`RustcDiagnostic`]. Non-diagnostic lines (e.g., build progress) are silently
+/// skipped.
+#[must_use]
+pub fn parse_rustc_json_diagnostics(json_output: &str) -> Vec<RustcDiagnostic> {
+    json_output
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if v.get("reason")?.as_str()? == "compiler-message" {
+                serde_json::from_value(v["message"].clone()).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Render structured `rustc` diagnostics into translated `RustScript`-friendly output.
+///
+/// Uses the `rendered` field of each diagnostic as the base text, then applies
+/// type-name translation and source-map remapping. This is more reliable than
+/// regex-parsing raw stderr because the diagnostics arrive as structured data
+/// with exact spans and error codes.
+///
+/// Falls back gracefully: if a diagnostic has no `rendered` field, its `message`
+/// is used directly.
+#[must_use]
+pub fn render_rustc_json_diagnostics(
+    diagnostics: &[RustcDiagnostic],
+    source_map: Option<&[Option<Span>]>,
+    rts_source: Option<&str>,
+    rts_filename: Option<&str>,
+    color: ColorMode,
+) -> String {
+    if diagnostics.is_empty() {
+        return String::new();
+    }
+
+    // Collect rendered text from all diagnostics
+    let mut rendered_parts: Vec<String> = Vec::new();
+    for diag in diagnostics {
+        if let Some(ref rendered) = diag.rendered {
+            rendered_parts.push(rendered.clone());
+        } else if !diag.message.is_empty() {
+            rendered_parts.push(diag.message.clone());
+        }
+    }
+
+    if rendered_parts.is_empty() {
+        return String::new();
+    }
+
+    let combined = rendered_parts.join("");
+
+    // Apply the same translation pipeline as the stderr path
+    let mut translated = translate_type_names(&combined);
+    let mut did_translate = translated != combined;
+
+    if let Some(map) = source_map {
+        let remapped = remap_file_references(&translated, map, rts_source, rts_filename);
+        if remapped != translated {
+            did_translate = true;
+            translated = remapped;
+        }
+    }
+
+    let header = if did_translate {
+        color_header(TRANSLATED_HEADER, color)
+    } else {
+        color_header(RAW_HEADER, color)
+    };
+    let body = if did_translate {
+        &translated
+    } else {
+        &combined
+    };
+    format!("{header}\n{body}")
+}
 
 /// Header prepended to translated rustc error output.
 const TRANSLATED_HEADER: &str = "RustScript compilation error (from rustc):";
@@ -1391,5 +1532,137 @@ mod tests {
             "colored output should contain ANSI codes"
         );
         assert!(colored.contains("string"), "should still translate types");
+    }
+
+    // --- JSON diagnostic parsing tests ---
+
+    #[test]
+    fn test_parse_rustc_json_single_error() {
+        let json = r#"{"reason":"compiler-message","message":{"message":"mismatched types","code":{"code":"E0308","explanation":null},"level":"error","spans":[{"file_name":"src/main.rs","byte_start":100,"byte_end":110,"line_start":5,"line_end":5,"column_start":10,"column_end":20,"is_primary":true,"label":"expected i32, found String","suggested_replacement":null}],"children":[],"rendered":"error[E0308]: mismatched types\n"}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "mismatched types");
+        assert_eq!(diagnostics[0].level, "error");
+        assert_eq!(diagnostics[0].spans.len(), 1);
+        assert!(diagnostics[0].spans[0].is_primary);
+    }
+
+    #[test]
+    fn test_parse_rustc_json_multiple_errors() {
+        let json = concat!(
+            r#"{"reason":"compiler-message","message":{"message":"error one","code":null,"level":"error","spans":[],"children":[],"rendered":"error: error one\n"}}"#,
+            "\n",
+            r#"{"reason":"compiler-message","message":{"message":"error two","code":null,"level":"error","spans":[],"children":[],"rendered":"error: error two\n"}}"#,
+        );
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].message, "error one");
+        assert_eq!(diagnostics[1].message, "error two");
+    }
+
+    #[test]
+    fn test_parse_rustc_json_with_children() {
+        let json = r#"{"reason":"compiler-message","message":{"message":"borrow of moved value","code":{"code":"E0382","explanation":null},"level":"error","spans":[],"children":[{"message":"value moved here","code":null,"level":"note","spans":[],"children":[],"rendered":null},{"message":"consider cloning","code":null,"level":"help","spans":[],"children":[],"rendered":null}],"rendered":"error[E0382]: borrow of moved value\n"}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].children.len(), 2);
+        assert_eq!(diagnostics[0].children[0].level, "note");
+        assert_eq!(diagnostics[0].children[1].level, "help");
+    }
+
+    #[test]
+    fn test_parse_rustc_json_ignores_non_diagnostic() {
+        let json = concat!(
+            r#"{"reason":"build-script-executed","linked_libs":[]}"#,
+            "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"foo"}}"#,
+            "\n",
+            r#"{"reason":"compiler-message","message":{"message":"unused variable","code":null,"level":"warning","spans":[],"children":[],"rendered":"warning: unused variable\n"}}"#,
+            "\n",
+            "not json at all",
+        );
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "unused variable");
+    }
+
+    #[test]
+    fn test_json_diagnostic_preserves_error_code() {
+        let json = r#"{"reason":"compiler-message","message":{"message":"borrow of moved value: `x`","code":{"code":"E0382","explanation":"Some explanation"},"level":"error","spans":[],"children":[],"rendered":"error[E0382]: borrow of moved value\n"}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        assert_eq!(diagnostics.len(), 1);
+        let code = diagnostics[0].code.as_ref().expect("should have code");
+        assert_eq!(code.code, "E0382");
+        assert_eq!(code.explanation.as_deref(), Some("Some explanation"),);
+    }
+
+    #[test]
+    fn test_json_rendering_applies_type_translation() {
+        let json = r#"{"reason":"compiler-message","message":{"message":"mismatched types","code":{"code":"E0308","explanation":null},"level":"error","spans":[],"children":[],"rendered":"error[E0308]: expected Vec<String>, found Option<i32>\n"}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        let rendered =
+            render_rustc_json_diagnostics(&diagnostics, None, None, None, ColorMode::Never);
+        assert!(
+            rendered.contains("Array<string>"),
+            "Vec<String> should become Array<string>, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("i32 | null"),
+            "Option<i32> should become i32 | null, got: {rendered}"
+        );
+        assert!(
+            rendered.starts_with(TRANSLATED_HEADER),
+            "should use translated header"
+        );
+    }
+
+    #[test]
+    fn test_json_rendering_applies_source_map() {
+        use rsc_syntax::span::{BytePos, Span};
+
+        // Source map: .rs line 5 (index 4) maps to rts span at byte 40
+        let mut source_map: Vec<Option<Span>> = vec![None; 10];
+        source_map[4] = Some(Span {
+            start: BytePos(40),
+            end: BytePos(50),
+        });
+
+        // RTS source: 3 lines of 15 chars each (including newlines) = byte 40 is line 4
+        let rts_source = "let x = 1;\nlet y = 2;\nlet z = 3;\nlet w = x + y;\nlet v = 0;\n";
+
+        let json = r#"{"reason":"compiler-message","message":{"message":"mismatched types","code":null,"level":"error","spans":[{"file_name":"src/main.rs","byte_start":100,"byte_end":110,"line_start":5,"line_end":5,"column_start":10,"column_end":20,"is_primary":true,"label":null,"suggested_replacement":null}],"children":[],"rendered":"error: mismatched types\n --> src/main.rs:5:10\n"}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        let rendered = render_rustc_json_diagnostics(
+            &diagnostics,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+            ColorMode::Never,
+        );
+        assert!(
+            rendered.contains("src/index.rts:4:10"),
+            "should remap to rts file and line, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_json_rendering_empty_diagnostics() {
+        let rendered = render_rustc_json_diagnostics(&[], None, None, None, ColorMode::Never);
+        assert!(
+            rendered.is_empty(),
+            "empty diagnostics should produce empty output"
+        );
+    }
+
+    #[test]
+    fn test_json_rendering_falls_back_to_message_when_no_rendered() {
+        let json = r#"{"reason":"compiler-message","message":{"message":"some error","code":null,"level":"error","spans":[],"children":[],"rendered":null}}"#;
+        let diagnostics = parse_rustc_json_diagnostics(json);
+        let rendered =
+            render_rustc_json_diagnostics(&diagnostics, None, None, None, ColorMode::Never);
+        assert!(
+            rendered.contains("some error"),
+            "should use message field as fallback, got: {rendered}"
+        );
     }
 }

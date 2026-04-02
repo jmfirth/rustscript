@@ -14,7 +14,9 @@ use rsc_syntax::diagnostic::{ColorMode, Severity, render_diagnostics_colored};
 use rsc_syntax::rust_ir::RustModDecl;
 
 use crate::error::{DriverError, Result};
-use crate::error_translation::translate_rustc_errors_colored;
+use crate::error_translation::{
+    parse_rustc_json_diagnostics, render_rustc_json_diagnostics, translate_rustc_errors_colored,
+};
 use crate::pipeline::CompileResult;
 use crate::rustdoc_cache;
 use crate::rustdoc_convert;
@@ -729,7 +731,9 @@ impl Project {
         );
 
         let mut cmd = Command::new("cargo");
-        cmd.arg("build").current_dir(&build_dir);
+        cmd.arg("build")
+            .arg("--message-format=json")
+            .current_dir(&build_dir);
         if release {
             cmd.arg("--release");
         }
@@ -747,12 +751,6 @@ impl Project {
                 &rts_filename,
             );
             return Err(DriverError::CargoBuildFailed);
-        }
-
-        // On success, forward any stdout (e.g. "Compiling ..." messages).
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() {
-            print!("{stdout}");
         }
 
         let profile_label = if release {
@@ -787,6 +785,10 @@ impl Project {
     }
 
     /// Handle a failed `cargo build` by translating and printing error messages.
+    ///
+    /// Attempts structured JSON parsing from stdout first (when `--message-format=json`
+    /// is used), then falls back to regex-based stderr translation if no JSON
+    /// diagnostics are found.
     fn handle_build_failure(
         &self,
         output: &std::process::Output,
@@ -821,14 +823,31 @@ impl Project {
         } else {
             Some(result.source_map_lines.as_slice())
         };
-        let translated = translate_rustc_errors_colored(
-            &stderr,
-            source_map,
-            Some(rts_source),
-            Some(rts_filename),
-            self.color_mode,
-        );
-        eprint!("{translated}");
+
+        // Try structured JSON parsing from stdout first
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let diagnostics = parse_rustc_json_diagnostics(&stdout);
+
+        if diagnostics.is_empty() {
+            // Fall back to regex-based stderr translation
+            let translated = translate_rustc_errors_colored(
+                &stderr,
+                source_map,
+                Some(rts_source),
+                Some(rts_filename),
+                self.color_mode,
+            );
+            eprint!("{translated}");
+        } else {
+            let translated = render_rustc_json_diagnostics(
+                &diagnostics,
+                source_map,
+                Some(rts_source),
+                Some(rts_filename),
+                self.color_mode,
+            );
+            eprint!("{translated}");
+        }
     }
 
     /// Run the project: compile, then invoke `cargo run` on the output.
@@ -862,7 +881,9 @@ impl Project {
         }
 
         let mut cmd = Command::new("cargo");
-        cmd.arg("run").current_dir(&build_dir);
+        cmd.arg("run")
+            .arg("--message-format=json")
+            .current_dir(&build_dir);
 
         if !args.is_empty() {
             cmd.arg("--");
@@ -871,22 +892,33 @@ impl Project {
 
         let output = cmd.output()?;
 
-        // Forward stdout (program output + cargo messages).
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() {
-            print!("{stdout}");
-        }
-
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.is_empty() {
-                let source_map = if result.source_map_lines.is_empty() {
-                    None
-                } else {
-                    Some(result.source_map_lines.as_slice())
-                };
-                let translated = translate_rustc_errors_colored(
-                    &stderr,
+            let source_map = if result.source_map_lines.is_empty() {
+                None
+            } else {
+                Some(result.source_map_lines.as_slice())
+            };
+
+            // Try structured JSON parsing from stdout first
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let diagnostics = parse_rustc_json_diagnostics(&stdout);
+
+            if diagnostics.is_empty() {
+                // Fall back to regex-based stderr translation
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    let translated = translate_rustc_errors_colored(
+                        &stderr,
+                        source_map,
+                        Some(&rts_source),
+                        Some(&rts_filename),
+                        self.color_mode,
+                    );
+                    eprint!("{translated}");
+                }
+            } else {
+                let translated = render_rustc_json_diagnostics(
+                    &diagnostics,
                     source_map,
                     Some(&rts_source),
                     Some(&rts_filename),
@@ -922,7 +954,9 @@ impl Project {
         }
 
         let mut cmd = Command::new("cargo");
-        cmd.arg("test").current_dir(&build_dir);
+        cmd.arg("test")
+            .arg("--message-format=json")
+            .current_dir(&build_dir);
 
         if release {
             cmd.arg("--release");
@@ -935,12 +969,6 @@ impl Project {
 
         let output = cmd.output()?;
 
-        // Forward stdout (test output).
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() {
-            print!("{stdout}");
-        }
-
         // Forward stderr: translate on failure, pass through on success.
         if output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -949,15 +977,32 @@ impl Project {
                 eprint!("{stderr}");
             }
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.is_empty() {
-                let source_map = if result.source_map_lines.is_empty() {
-                    None
-                } else {
-                    Some(result.source_map_lines.as_slice())
-                };
-                let translated = translate_rustc_errors_colored(
-                    &stderr,
+            let source_map = if result.source_map_lines.is_empty() {
+                None
+            } else {
+                Some(result.source_map_lines.as_slice())
+            };
+
+            // Try structured JSON parsing from stdout first
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let diagnostics = parse_rustc_json_diagnostics(&stdout);
+
+            if diagnostics.is_empty() {
+                // Fall back to regex-based stderr translation
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    let translated = translate_rustc_errors_colored(
+                        &stderr,
+                        source_map,
+                        Some(&rts_source),
+                        Some(&rts_filename),
+                        self.color_mode,
+                    );
+                    eprint!("{translated}");
+                }
+            } else {
+                let translated = render_rustc_json_diagnostics(
+                    &diagnostics,
                     source_map,
                     Some(&rts_source),
                     Some(&rts_filename),

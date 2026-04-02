@@ -1334,7 +1334,10 @@ fn collect_param_usage_stmt(
         ast::Stmt::Using(decl) => {
             collect_param_usage_expr(&decl.init, param_set, is_ref_call, result);
         }
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) | ast::Stmt::Debugger(_) => {}
+        ast::Stmt::Break(_)
+        | ast::Stmt::Continue(_)
+        | ast::Stmt::RustBlock(_)
+        | ast::Stmt::Debugger(_) => {}
     }
 }
 
@@ -1852,7 +1855,10 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
         ast::Stmt::Destructure(d) => collect_idents_in_expr(&d.init, names),
         ast::Stmt::ArrayDestructure(ad) => collect_idents_in_expr(&ad.init, names),
         ast::Stmt::Using(decl) => collect_idents_in_expr(&decl.init, names),
-        ast::Stmt::Break(_) | ast::Stmt::Continue(_) | ast::Stmt::RustBlock(_) | ast::Stmt::Debugger(_) => {}
+        ast::Stmt::Break(_)
+        | ast::Stmt::Continue(_)
+        | ast::Stmt::RustBlock(_)
+        | ast::Stmt::Debugger(_) => {}
     }
 }
 

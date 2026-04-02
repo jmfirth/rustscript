@@ -15,7 +15,10 @@ pub mod rustdoc_convert;
 pub mod rustdoc_parser;
 mod templates;
 
-pub use error_translation::{translate_rustc_errors, translate_rustc_errors_colored};
+pub use error_translation::{
+    RustcDiagnostic, RustcErrorCode, RustcSpan, parse_rustc_json_diagnostics,
+    render_rustc_json_diagnostics, translate_rustc_errors, translate_rustc_errors_colored,
+};
 pub use pipeline::{
     CompileOptions, CompileResult, compile_source, compile_source_with_mods,
     compile_source_with_mods_and_options, compile_source_with_options,

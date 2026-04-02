@@ -9731,7 +9731,9 @@ function main() {}"#;
     // ---------------------------------------------------------------
 
     /// Parse and lower, allowing diagnostics (warnings).
-    fn lower_source_with_warnings(source: &str) -> (RustFile, Vec<rsc_syntax::diagnostic::Diagnostic>) {
+    fn lower_source_with_warnings(
+        source: &str,
+    ) -> (RustFile, Vec<rsc_syntax::diagnostic::Diagnostic>) {
         let file_id = rsc_syntax::source::FileId(0);
         let (module, parse_diags) = rsc_parser::parse(source, file_id);
         assert!(
@@ -9748,7 +9750,10 @@ function main() {}"#;
         let func = &ir.items[0];
         if let RustItem::Function(f) = func {
             assert!(
-                f.body.stmts.iter().any(|s| matches!(s, RustStmt::RawRust(code) if code == "// debugger")),
+                f.body
+                    .stmts
+                    .iter()
+                    .any(|s| matches!(s, RustStmt::RawRust(code) if code == "// debugger")),
                 "expected `// debugger` comment in output, got {:?}",
                 f.body.stmts
             );
