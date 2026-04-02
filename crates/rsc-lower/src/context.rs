@@ -35,6 +35,10 @@ pub(crate) struct LoweringContext {
     /// Variables that are catch bindings (e.g., `catch (e) { ... }`).
     /// Used to handle `.message` and `.name` property access on error strings.
     catch_variables: HashSet<String>,
+    /// The expected element type for the current array literal being lowered.
+    /// When lowering `Array<[T, U]>` (Vec of tuples), this is set to `Tuple([T, U])`
+    /// so that inner array literals are lowered as tuple constructors instead of vec literals.
+    expected_element_type: Option<RustType>,
 }
 
 /// A single scope level containing variable declarations.
@@ -62,6 +66,7 @@ impl LoweringContext {
             reference_variables: HashSet::new(),
             current_base_class: None,
             catch_variables: HashSet::new(),
+            expected_element_type: None,
         }
     }
 
@@ -168,6 +173,19 @@ impl LoweringContext {
     /// Check whether a variable is a catch binding.
     pub fn is_catch_variable(&self, name: &str) -> bool {
         self.catch_variables.contains(name)
+    }
+
+    /// Set the expected element type for array literal lowering.
+    ///
+    /// When lowering `Array<[T, U]>` (Vec of tuples), set this to `Tuple([T, U])`
+    /// so inner array literals are lowered as tuple constructors.
+    pub fn set_expected_element_type(&mut self, ty: Option<RustType>) {
+        self.expected_element_type = ty;
+    }
+
+    /// Take the expected element type, resetting it to `None`.
+    pub fn take_expected_element_type(&mut self) -> Option<RustType> {
+        self.expected_element_type.take()
     }
 
     /// Add a diagnostic to the accumulated list.

@@ -10063,4 +10063,69 @@ function main() {}"#;
             "expected explicit struct literal to use 'User', got:\n{output}"
         );
     }
+
+    // Array<[T, U]> with inline tuple literals should produce Vec<(T, U)> with tuple constructors
+    #[test]
+    fn test_array_of_tuples_literal() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                const pairs: Array<[string, i32]> = [["hello", 1], ["world", 2]];
+            }
+            "#,
+        );
+        // Should produce tuple constructors, not nested vec! calls
+        assert!(
+            output.contains("(\"hello\".to_string(), 1)"),
+            "expected tuple constructor for first element, got:\n{output}"
+        );
+        assert!(
+            output.contains("(\"world\".to_string(), 2)"),
+            "expected tuple constructor for second element, got:\n{output}"
+        );
+        // Should use vec! macro at the outer level
+        assert!(
+            output.contains("vec!["),
+            "expected vec! at outer level, got:\n{output}"
+        );
+    }
+
+    // Accessing tuple elements from array of tuples should work with .0, .1
+    #[test]
+    fn test_array_of_tuples_access() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                const pairs: Array<[string, i32]> = [["hello", 1]];
+                const first: [string, i32] = pairs[0];
+            }
+            "#,
+        );
+        // Should produce Vec<(String, i32)> with tuple constructor
+        assert!(
+            output.contains("(\"hello\".to_string(), 1)"),
+            "expected tuple constructor, got:\n{output}"
+        );
+    }
+
+    // Plain Array<i32> should still produce Vec<i32> (regression check)
+    #[test]
+    fn test_plain_array_not_affected() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                const nums: Array<i32> = [1, 2, 3];
+            }
+            "#,
+        );
+        assert!(
+            output.contains("vec![1, 2, 3]"),
+            "expected plain vec literal, got:\n{output}"
+        );
+        // Should NOT contain tuple syntax
+        assert!(
+            !output.contains("(1, 2, 3)"),
+            "should not produce tuple for plain array, got:\n{output}"
+        );
+    }
 }

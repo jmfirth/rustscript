@@ -1909,11 +1909,34 @@ impl Transform {
             .any(|e| matches!(e, ast::ArrayElement::Spread(_)));
 
         if !has_spread {
-            // No spread — plain vec literal
+            // Check if the expected element type is a tuple — if so, inner array
+            // literals should be lowered as tuple constructors, not vec literals.
+            // This handles `Array<[T, U]>` where `["hello", 1]` → `("hello".to_string(), 1)`.
+            let expected_elem = ctx.take_expected_element_type();
+            let is_tuple_element = matches!(&expected_elem, Some(RustType::Tuple(_)));
+
             let lowered: Vec<RustExpr> = elements
                 .iter()
                 .map(|e| match e {
                     ast::ArrayElement::Expr(expr) => {
+                        if is_tuple_element {
+                            if let ast::ExprKind::ArrayLit(inner_elements) = &expr.kind {
+                                // Lower inner array literal as a tuple constructor
+                                let tuple_parts: Vec<RustExpr> = inner_elements
+                                    .iter()
+                                    .map(|ie| match ie {
+                                        ast::ArrayElement::Expr(inner_expr)
+                                        | ast::ArrayElement::Spread(inner_expr) => {
+                                            self.lower_expr(inner_expr, ctx, use_map, stmt_index)
+                                        }
+                                    })
+                                    .collect();
+                                return RustExpr::new(
+                                    RustExprKind::Tuple(tuple_parts),
+                                    expr.span,
+                                );
+                            }
+                        }
                         self.lower_expr(expr, ctx, use_map, stmt_index)
                     }
                     ast::ArrayElement::Spread(_) => unreachable!(),
