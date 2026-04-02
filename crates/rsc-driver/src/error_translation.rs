@@ -55,6 +55,31 @@ struct TranslationPatterns {
     union_enum_name: Regex,
 }
 
+/// Compiled regex patterns for error message enrichment.
+///
+/// Each pattern matches a common `rustc` error category and maps to a
+/// `RustScript`-specific hint that helps TypeScript developers understand the issue.
+struct EnrichmentPatterns {
+    /// Matches "use of moved value" or "value used here after move".
+    moved_value: Regex,
+    /// Matches "cannot move out of" or "borrow of moved value".
+    cannot_move_out: Regex,
+    /// Matches "cannot borrow .* as mutable" or "cannot borrow .* mutably".
+    cannot_borrow_mut: Regex,
+    /// Matches immutable/mutable borrow conflict errors.
+    borrow_conflict: Regex,
+    /// Matches type mismatch errors.
+    type_mismatch: Regex,
+    /// Matches trait-not-implemented errors.
+    trait_not_impl: Regex,
+    /// Matches lifetime errors.
+    lifetime_error: Regex,
+    /// Matches "cannot find value" / "not found in this scope".
+    value_not_found: Regex,
+    /// Matches "cannot find type" errors.
+    type_not_found: Regex,
+}
+
 // SAFETY: All regex literals below are compile-time constants; these never fail.
 static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPatterns {
     vec_type: Regex::new(r"\bVec<").expect("valid regex"),
@@ -75,6 +100,26 @@ static PATTERNS: LazyLock<TranslationPatterns> = LazyLock::new(|| TranslationPat
     // Matches generated union enum names: two or more PascalCase type names joined by "Or".
     // Examples: I32OrString, BoolOrI32OrString, F64OrString
     union_enum_name: Regex::new(r"\b([A-Z]\w*(?:Or[A-Z]\w*)+)\b").expect("valid regex"),
+});
+
+// SAFETY: All regex literals below are compile-time constants; these never fail.
+static ENRICHMENT_PATTERNS: LazyLock<EnrichmentPatterns> = LazyLock::new(|| EnrichmentPatterns {
+    moved_value: Regex::new(r"(?i)use of moved value|value used here after move")
+        .expect("valid regex"),
+    cannot_move_out: Regex::new(r"(?i)cannot move out of|borrow of moved value")
+        .expect("valid regex"),
+    cannot_borrow_mut: Regex::new(r"(?i)cannot borrow .* as mutable|cannot borrow .* mutably")
+        .expect("valid regex"),
+    borrow_conflict: Regex::new(
+        r"(?i)cannot borrow .* as immutable because it is also borrowed as mutable",
+    )
+    .expect("valid regex"),
+    type_mismatch: Regex::new(r"(?i)mismatched types|expected .*, found .*").expect("valid regex"),
+    trait_not_impl: Regex::new(r"(?i)the trait .* is not implemented").expect("valid regex"),
+    lifetime_error: Regex::new(r"(?i)lifetime|does not live long enough").expect("valid regex"),
+    value_not_found: Regex::new(r"(?i)cannot find value|not found in this scope")
+        .expect("valid regex"),
+    type_not_found: Regex::new(r"(?i)cannot find type").expect("valid regex"),
 });
 
 /// Translate `rustc` error output into `RustScript`-friendly terms.
@@ -132,6 +177,13 @@ pub fn translate_rustc_errors_colored(
         }
     }
 
+    // Enrich with RustScript-specific hints and synthesized code annotations
+    let enriched = enrich_translated_output(&translated, source_map, rts_source);
+    if enriched != translated {
+        did_translate = true;
+        translated = enriched;
+    }
+
     // If we actually changed something, use the translated header.
     // If nothing changed, use the raw header as fallback.
     let header = if did_translate {
@@ -149,6 +201,72 @@ fn color_header(header: &str, color: ColorMode) -> String {
         ColorMode::Always => format!("\x1b[1;31m{header}\x1b[0m"),
         ColorMode::Never => header.to_owned(),
     }
+}
+
+/// Process the translated output to append enrichment hints and synthesized code annotations.
+///
+/// Scans each line of the translated `rustc` output for:
+/// 1. Error messages that match known patterns → appends a "hint:" annotation.
+/// 2. File references pointing to unmapped `.rs` lines → prepends a synthesized
+///    code context annotation.
+fn enrich_translated_output(
+    input: &str,
+    source_map: Option<&[Option<Span>]>,
+    rts_source: Option<&str>,
+) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut hint_appended = false;
+
+    for line in input.lines() {
+        result.push_str(line);
+        result.push('\n');
+
+        // Check for synthesized code annotation on file reference lines
+        // that still point to .rs files (unmapped lines)
+        if let Some(map) = source_map
+            && let Some(rs_line) = extract_rs_line_from_reference(line)
+            && let Some(annotation) = synthesized_code_annotation(map, rs_line, rts_source)
+        {
+            result.push_str("  |\n");
+            result.push_str("  = note: ");
+            result.push_str(&annotation);
+            result.push('\n');
+            hint_appended = true;
+        }
+
+        // Check for error message enrichment
+        if let Some(hint) = enrich_error_message(line) {
+            result.push_str("  |\n");
+            result.push_str("  hint: ");
+            result.push_str(&hint);
+            result.push('\n');
+            hint_appended = true;
+        }
+    }
+
+    // Remove trailing newline to match input if it didn't end with one
+    if !input.ends_with('\n') && result.ends_with('\n') && !hint_appended {
+        result.pop();
+    }
+
+    result
+}
+
+/// Extract the `.rs` line number from a file reference line like ` --> src/main.rs:5:10`.
+///
+/// Returns `Some(line)` if the line references a `.rs` file, or `None` otherwise.
+fn extract_rs_line_from_reference(line: &str) -> Option<usize> {
+    let pattern = &PATTERNS.file_reference;
+    let caps = pattern.captures(line)?;
+    let filename = &caps[1];
+    // Only annotate lines still pointing at .rs files (not already remapped to .rts)
+    let has_rs_ext = std::path::Path::new(filename)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+    if !has_rs_ext && !line.contains(".rs:") {
+        return None;
+    }
+    caps[2].parse::<usize>().ok()
 }
 
 /// Convert a byte offset in source text to a 1-based line number.
@@ -201,6 +319,157 @@ fn remap_file_references(
             }
         })
         .into_owned()
+}
+
+/// Examine a `rustc` error message and return a `RustScript`-specific hint annotation.
+///
+/// Returns `Some(hint)` if the message matches a known error pattern, or `None`
+/// if no enrichment applies. The hint is intended to be appended as an indented
+/// "hint:" block after the original error output.
+///
+/// Patterns are checked in specificity order — more specific patterns (e.g. borrow
+/// conflict) are tested before broader ones (e.g. generic type mismatch).
+#[must_use]
+fn enrich_error_message(message: &str) -> Option<String> {
+    let p = &*ENRICHMENT_PATTERNS;
+
+    // Ownership — moved value
+    if p.moved_value.is_match(message) {
+        return Some(
+            "In RustScript, passing a value to a function moves it by default. \
+             To use it again, either clone it before passing (e.g., `myVar.clone()`) \
+             or restructure your code to avoid reusing the value."
+                .to_owned(),
+        );
+    }
+
+    // Ownership — cannot move out / borrow of moved
+    if p.cannot_move_out.is_match(message) {
+        return Some(
+            "A value was moved (transferred ownership) and then accessed. \
+             Consider cloning the value before the move, or restructuring to \
+             avoid the double use."
+                .to_owned(),
+        );
+    }
+
+    // Borrow conflict (immutable while mutable) — check before generic mutable borrow
+    if p.borrow_conflict.is_match(message) {
+        return Some(
+            "You have a mutable reference and an immutable reference to the same \
+             value at the same time. Rust requires exclusive access for mutation. \
+             Restructure so the mutable use completes before the immutable read."
+                .to_owned(),
+        );
+    }
+
+    // Cannot borrow as mutable
+    if p.cannot_borrow_mut.is_match(message) {
+        return Some(
+            "You're trying to modify a value while it's being read elsewhere. \
+             Finish reading before modifying, or use a separate variable."
+                .to_owned(),
+        );
+    }
+
+    // Trait not implemented — check before type mismatch (more specific)
+    if p.trait_not_impl.is_match(message) {
+        return Some(
+            "This type doesn't support the required operation. If this is a custom \
+             type, you may need to add a `derives` clause (e.g., `derives Clone, Debug`)."
+                .to_owned(),
+        );
+    }
+
+    // Lifetime errors
+    if p.lifetime_error.is_match(message) {
+        return Some(
+            "A value is being used after its scope has ended. This often happens \
+             when returning a reference to a local variable. Try returning an owned \
+             value instead."
+                .to_owned(),
+        );
+    }
+
+    // Value not found
+    if p.value_not_found.is_match(message) {
+        return Some(
+            "This name isn't defined in the current scope. Check for typos, or \
+             make sure the import is correct."
+                .to_owned(),
+        );
+    }
+
+    // Type not found
+    if p.type_not_found.is_match(message) {
+        return Some(
+            "This type isn't defined. Check the type name for typos or add the \
+             appropriate import."
+                .to_owned(),
+        );
+    }
+
+    // Type mismatch (broad — checked last among type-related patterns)
+    if p.type_mismatch.is_match(message) {
+        return Some(
+            "Type mismatch — check that your function's return type matches what \
+             you're returning, or that the argument types match the function signature."
+                .to_owned(),
+        );
+    }
+
+    None
+}
+
+/// Produce a context annotation for errors on compiler-synthesized (unmapped) lines.
+///
+/// When a `rustc` error points at a generated `.rs` line that has no corresponding
+/// `.rts` source (i.e. `None` in the source map), this function walks backward
+/// through the source map to find the nearest mapped `.rts` line and returns a
+/// message like "This error is in code generated by the `RustScript` compiler near
+/// line N of your .rts file."
+///
+/// Returns `None` if the `rs_line` *does* have a mapping (no annotation needed),
+/// or if no nearby mapped line can be found.
+#[must_use]
+fn synthesized_code_annotation(
+    source_map: &[Option<Span>],
+    rs_line: usize,
+    rts_source: Option<&str>,
+) -> Option<String> {
+    let map_index = rs_line.saturating_sub(1);
+
+    // If this line *has* a mapping, no annotation is needed.
+    if let Some(Some(_)) = source_map.get(map_index) {
+        return None;
+    }
+
+    // Walk backward to find the nearest non-null entry.
+    let nearest = (0..map_index).rev().find_map(|i| {
+        source_map
+            .get(i)
+            .and_then(|entry| entry.as_ref())
+            .map(|span| (i, span))
+    });
+
+    if let Some((_idx, span)) = nearest {
+        if let Some(source) = rts_source {
+            let nearest_line = byte_offset_to_line(source, span.start.0);
+            Some(format!(
+                "This error is in code generated by the RustScript compiler \
+                 near line {nearest_line} of your .rts file."
+            ))
+        } else {
+            Some(
+                "This error is in code generated by the RustScript compiler.".to_owned(),
+            )
+        }
+    } else {
+        // No mapped lines found at all — generic message
+        Some(
+            "This error is in code generated by the RustScript compiler.".to_owned(),
+        )
+    }
 }
 
 /// Apply all type name translations to the given text.
@@ -1391,5 +1660,283 @@ mod tests {
             "colored output should contain ANSI codes"
         );
         assert!(colored.contains("string"), "should still translate types");
+    }
+
+    // =========================================================================
+    // Task 164b: Error enrichment annotations
+    // =========================================================================
+
+    #[test]
+    fn test_enrich_moved_value() {
+        let msg = "error[E0382]: use of moved value: `x`";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match moved value pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("moves it by default"),
+            "hint should explain move semantics: {hint}"
+        );
+        assert!(
+            hint.contains("clone"),
+            "hint should suggest clone: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_moved_value_variant() {
+        let msg = "value used here after move";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match 'value used here after move'");
+    }
+
+    #[test]
+    fn test_enrich_cannot_move_out() {
+        let msg = "cannot move out of `self.field`";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match cannot-move-out pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("cloning"),
+            "hint should suggest cloning: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_borrow_of_moved() {
+        let msg = "borrow of moved value: `x`";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match borrow-of-moved pattern");
+    }
+
+    #[test]
+    fn test_enrich_borrow_conflict() {
+        let msg = "cannot borrow `x` as immutable because it is also borrowed as mutable";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match borrow conflict pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("exclusive access"),
+            "hint should explain exclusive access: {hint}"
+        );
+        assert!(
+            hint.contains("Restructure"),
+            "hint should suggest restructuring: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_cannot_borrow_mutable() {
+        let msg = "cannot borrow `data` as mutable";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match cannot-borrow-mutable pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("modify"),
+            "hint should mention modifying: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_type_mismatch() {
+        let msg = "error[E0308]: mismatched types";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match type mismatch pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("return type"),
+            "hint should mention return type: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_expected_found() {
+        let msg = "expected `i32`, found `String`";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match expected/found pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("Type mismatch"),
+            "hint should say type mismatch: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_trait_not_implemented() {
+        let msg = "the trait `Clone` is not implemented for `MyStruct`";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match trait-not-implemented pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("derives"),
+            "hint should suggest derives: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_lifetime() {
+        let msg = "error: `x` does not live long enough";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match lifetime pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("scope"),
+            "hint should mention scope: {hint}"
+        );
+        assert!(
+            hint.contains("owned value"),
+            "hint should suggest owned value: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_lifetime_keyword() {
+        let msg = "lifetime mismatch in function signature";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match 'lifetime' keyword");
+    }
+
+    #[test]
+    fn test_enrich_not_found() {
+        let msg = "error[E0425]: cannot find value `foo` in this scope";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match not-found pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("typos"),
+            "hint should mention typos: {hint}"
+        );
+        assert!(
+            hint.contains("import"),
+            "hint should mention imports: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_not_found_in_scope() {
+        let msg = "`bar` not found in this scope";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match 'not found in this scope'");
+    }
+
+    #[test]
+    fn test_enrich_type_not_found() {
+        let msg = "error[E0412]: cannot find type `Foo` in this scope";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_some(), "should match cannot-find-type pattern");
+        let hint = hint.unwrap();
+        assert!(
+            hint.contains("type name"),
+            "hint should mention type name: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_enrich_no_match_returns_none() {
+        let msg = "Compiling myproject v0.1.0";
+        let hint = enrich_error_message(msg);
+        assert!(hint.is_none(), "non-error message should return None");
+
+        let msg2 = "warning: unused variable: `x`";
+        let hint2 = enrich_error_message(msg2);
+        assert!(hint2.is_none(), "warning should return None");
+    }
+
+    #[test]
+    fn test_synthesized_code_nearest_span() {
+        use rsc_syntax::span::Span;
+        // Source map: [Some(0..5), Some(6..11), None, None, None]
+        // Error on rs line 4 (index 3 = None) → walks back to index 1 → byte 6 → line 2
+        let source_map: Vec<Option<Span>> = vec![
+            Some(Span::new(0, 5)),
+            Some(Span::new(6, 11)),
+            None,
+            None,
+            None,
+        ];
+        let rts_source = "line1\nline2\nline3\n";
+        let annotation = synthesized_code_annotation(&source_map, 4, Some(rts_source));
+        assert!(
+            annotation.is_some(),
+            "should produce annotation for unmapped line"
+        );
+        let annotation = annotation.unwrap();
+        assert!(
+            annotation.contains("near line 2"),
+            "should reference nearest .rts line 2: {annotation}"
+        );
+        assert!(
+            annotation.contains("generated by the RustScript compiler"),
+            "should mention generated code: {annotation}"
+        );
+    }
+
+    #[test]
+    fn test_synthesized_code_all_null() {
+        let source_map: Vec<Option<Span>> = vec![None, None, None];
+        let annotation = synthesized_code_annotation(&source_map, 2, Some("a\nb\n"));
+        assert!(
+            annotation.is_some(),
+            "should produce annotation even with all-null map"
+        );
+        let annotation = annotation.unwrap();
+        assert!(
+            annotation.contains("generated by the RustScript compiler"),
+            "should produce generic message: {annotation}"
+        );
+        // Should NOT contain "near line" since no mapped line was found
+        assert!(
+            !annotation.contains("near line"),
+            "should not reference a line when all null: {annotation}"
+        );
+    }
+
+    #[test]
+    fn test_synthesized_code_mapped_line_returns_none() {
+        use rsc_syntax::span::Span;
+        let source_map: Vec<Option<Span>> = vec![Some(Span::new(0, 5)), Some(Span::new(6, 11))];
+        let annotation = synthesized_code_annotation(&source_map, 1, Some("line1\nline2\n"));
+        assert!(
+            annotation.is_none(),
+            "mapped line should not produce annotation"
+        );
+    }
+
+    #[test]
+    fn test_enrichment_wired_into_output() {
+        // Full pipeline: an error with "use of moved value" should get a hint in the output
+        let stderr = "error[E0382]: use of moved value: `x`\n --> src/main.rs:5:10\n";
+        let result = translate_rustc_errors(stderr, None, None, None);
+        assert!(
+            result.contains("hint:"),
+            "output should contain hint annotation: {result}"
+        );
+        assert!(
+            result.contains("moves it by default"),
+            "output should contain the enrichment text: {result}"
+        );
+    }
+
+    #[test]
+    fn test_enrichment_synthesized_annotation_in_output() {
+        use rsc_syntax::span::Span;
+        // Source map where line 3 is unmapped, line 1 is mapped
+        let source_map: Vec<Option<Span>> = vec![
+            Some(Span::new(0, 5)),
+            None,
+            None,
+        ];
+        let rts_source = "line1\nline2\nline3\n";
+        // Error pointing at .rs line 3 (unmapped)
+        let stderr = "error: something bad\n --> src/main.rs:3:5\n";
+        let result = translate_rustc_errors(
+            stderr,
+            Some(&source_map),
+            Some(rts_source),
+            Some("src/index.rts"),
+        );
+        assert!(
+            result.contains("generated by the RustScript compiler"),
+            "output should contain synthesized annotation: {result}"
+        );
     }
 }
