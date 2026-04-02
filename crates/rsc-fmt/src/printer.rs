@@ -566,6 +566,12 @@ impl Printer {
 
     /// Print an enum definition.
     fn print_enum_def(&mut self, e: &EnumDef) {
+        if e.is_const {
+            // TS-style const enum: `const enum Name { Variant, ... }`
+            self.print_ts_enum_def(e, true);
+            return;
+        }
+
         self.write("type ");
         self.write(&e.name.name);
         self.write(" =");
@@ -624,6 +630,31 @@ impl Printer {
             self.print_derives_clause(&e.derives);
             self.writeln(";");
         }
+    }
+
+    /// Print a TS-style enum definition: `[const] enum Name { Variant, ... }`.
+    fn print_ts_enum_def(&mut self, e: &EnumDef, is_const: bool) {
+        if is_const {
+            self.write("const ");
+        }
+        self.write("enum ");
+        self.write(&e.name.name);
+        self.writeln(" {");
+        self.indent();
+        for (i, variant) in e.variants.iter().enumerate() {
+            if let EnumVariant::Simple(ident, _) = variant {
+                self.write(&ident.name);
+                if i + 1 < e.variants.len() {
+                    self.writeln(",");
+                } else {
+                    self.newline();
+                }
+            }
+        }
+        self.dedent();
+        self.write("}");
+        self.print_derives_clause(&e.derives);
+        self.newline();
     }
 
     /// Print an interface definition.

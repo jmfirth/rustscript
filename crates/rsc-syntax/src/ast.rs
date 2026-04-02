@@ -325,6 +325,10 @@ pub struct EnumDef {
     pub derives: Vec<Ident>,
     /// `JSDoc` comment attached to this enum definition, if any.
     pub doc_comment: Option<String>,
+    /// Whether this was declared as `const enum` (a TypeScript optimization hint).
+    /// Preserved for potential future inlining optimizations, but currently
+    /// lowered identically to a regular enum.
+    pub is_const: bool,
     /// The span covering the entire enum definition.
     pub span: Span,
 }

@@ -321,6 +321,7 @@ impl<'src> Parser<'src> {
             TokenKind::PlusPlus => "`++`",
             TokenKind::MinusMinus => "`--`",
             TokenKind::Var => "`var`",
+            TokenKind::Enum => "`enum`",
             TokenKind::JsDoc(_) => "JSDoc comment",
             TokenKind::Eof => "end of file",
         }
@@ -351,6 +352,7 @@ impl<'src> Parser<'src> {
                 | TokenKind::Class
                 | TokenKind::Abstract
                 | TokenKind::Declare
+                | TokenKind::Enum
                 | TokenKind::At => return,
                 TokenKind::Semicolon => {
                     self.advance();
@@ -615,6 +617,15 @@ impl<'src> Parser<'src> {
             TokenKind::Import => self.parse_import_decl(),
             TokenKind::Export => self.parse_export_decl(),
             TokenKind::Rust => self.parse_rust_block_item(),
+            TokenKind::Const
+                if self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| t.kind == TokenKind::Enum) =>
+            {
+                self.parse_const_enum_def()
+            }
+            TokenKind::Enum => self.parse_ts_enum_def(false),
             TokenKind::Const | TokenKind::Let | TokenKind::Var => self.parse_top_level_const(),
             TokenKind::Declare => {
                 // Ambient declaration — skip entirely (produces no AST node).
@@ -894,6 +905,23 @@ impl<'src> Parser<'src> {
                     decorators: vec![],
                     span,
                 })
+            }
+            TokenKind::Const
+                if self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| t.kind == TokenKind::Enum) =>
+            {
+                let mut item = self.parse_const_enum_def()?;
+                item.exported = true;
+                item.span = start.merge(item.span);
+                Some(item)
+            }
+            TokenKind::Enum => {
+                let mut item = self.parse_ts_enum_def(false)?;
+                item.exported = true;
+                item.span = start.merge(item.span);
+                Some(item)
             }
             TokenKind::Const | TokenKind::Let | TokenKind::Var => {
                 let mut item = self.parse_top_level_const()?;
@@ -1370,6 +1398,7 @@ impl<'src> Parser<'src> {
             variants,
             derives: Vec::new(),
             doc_comment: None,
+            is_const: false,
             span,
         })
     }
@@ -1450,6 +1479,77 @@ impl<'src> Parser<'src> {
             variants,
             derives: Vec::new(),
             doc_comment: None,
+            is_const: false,
+            span,
+        })
+    }
+
+    /// Parse a `const enum Name { Variant, ... }` declaration.
+    ///
+    /// Consumes `const` and `enum`, then delegates to [`parse_ts_enum_def`]
+    /// with `is_const = true`.
+    fn parse_const_enum_def(&mut self) -> Option<Item> {
+        self.advance(); // consume `const`
+        self.parse_ts_enum_def(true)
+    }
+
+    /// Parse a TypeScript-style `enum Name { Variant, Variant = value, ... }` declaration.
+    ///
+    /// Produces an `ItemKind::EnumDef` with `Simple` variants. Each variant is an
+    /// identifier (optionally with `= <integer>` value, which is currently ignored).
+    /// When `is_const` is true, the `EnumDef.is_const` flag is set.
+    fn parse_ts_enum_def(&mut self, is_const: bool) -> Option<Item> {
+        let doc_comment = self.take_pending_doc();
+        let start = self.advance().span; // consume `enum`
+
+        let name = self.parse_ident()?;
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut variants = Vec::new();
+
+        while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            let variant_name = self.parse_ident()?;
+            let variant_span = variant_name.span;
+
+            // Optional initializer: `= <expr>` — we parse and discard the value
+            if self.eat(&TokenKind::Eq) {
+                // Consume the initializer expression (supports negative numbers too)
+                if self.check(&TokenKind::Minus) {
+                    self.advance(); // consume `-`
+                }
+                if self.check(&TokenKind::Eof) {
+                    break;
+                }
+                self.advance(); // consume the value
+            }
+
+            variants.push(EnumVariant::Simple(variant_name, variant_span));
+
+            // Allow trailing comma
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect(&TokenKind::RBrace)?;
+
+        let derives = self.parse_derives_clause();
+        let span = start.merge(self.previous_span());
+
+        let enum_def = EnumDef {
+            name,
+            variants,
+            derives,
+            doc_comment,
+            is_const,
+            span,
+        };
+
+        Some(Item {
+            kind: ItemKind::EnumDef(enum_def),
+            exported: false,
+            decorators: vec![],
             span,
         })
     }
@@ -3000,6 +3100,28 @@ impl<'src> Parser<'src> {
         }
 
         match self.peek() {
+            TokenKind::Const
+                if self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| t.kind == TokenKind::Enum) =>
+            {
+                // `const enum` at statement level — parse as an item wrapped in a statement.
+                // This mirrors top-level parsing: const enum lowers like a regular enum.
+                // We can't represent an enum as a statement directly, so we emit a diagnostic.
+                let current = self.current_token().clone();
+                self.diagnostics.push(
+                    Diagnostic::error("`const enum` must appear at the top level").with_label(
+                        current.span,
+                        self.file_id,
+                        "not allowed here",
+                    ),
+                );
+                self.advance(); // consume `const`
+                self.advance(); // consume `enum`
+                self.synchronize();
+                None
+            }
             TokenKind::Const | TokenKind::Let | TokenKind::Var => self.parse_var_decl(),
             TokenKind::If => self.parse_if_stmt().map(Stmt::If),
             TokenKind::While => self.parse_while_stmt(None).map(Stmt::While),
@@ -3278,7 +3400,10 @@ impl<'src> Parser<'src> {
 
         // Check for binding keyword (const/let/var) — could be for-of/for-in or classic
         let binding_token = self.current_token().clone();
-        let has_binding = matches!(&binding_token.kind, TokenKind::Const | TokenKind::Let | TokenKind::Var);
+        let has_binding = matches!(
+            &binding_token.kind,
+            TokenKind::Const | TokenKind::Let | TokenKind::Var
+        );
 
         if has_binding {
             let binding = match &binding_token.kind {
@@ -12993,5 +13118,129 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
             "expected MappedType param type, got {:?}",
             param_type.kind
         );
+    }
+
+    // ---- Task 156: const enum tests ----
+
+    /// T156-1: `const enum Dir { Up, Down }` parses with is_const true
+    #[test]
+    fn test_parser_const_enum() {
+        let source = "const enum Dir { Up, Down }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef, got {:?}", module.items[0].kind);
+        };
+        assert!(ed.is_const, "expected is_const to be true");
+        assert_eq!(ed.name.name, "Dir");
+        assert_eq!(ed.variants.len(), 2);
+        match &ed.variants[0] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "Up"),
+            other => panic!("expected Simple variant, got {other:?}"),
+        }
+        match &ed.variants[1] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "Down"),
+            other => panic!("expected Simple variant, got {other:?}"),
+        }
+    }
+
+    /// T156-2: `const x = 1` still works (not confused with const enum)
+    #[test]
+    fn test_parser_const_enum_not_confused_with_const_var() {
+        let source = "const x: i32 = 1;";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        assert!(
+            matches!(&module.items[0].kind, ItemKind::Const(_)),
+            "expected Const item, got {:?}",
+            module.items[0].kind
+        );
+    }
+
+    /// T156-3: bare `enum` (non-const) also parses
+    #[test]
+    fn test_parser_bare_enum() {
+        let source = "enum Color { Red, Green, Blue }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert!(!ed.is_const, "expected is_const to be false");
+        assert_eq!(ed.name.name, "Color");
+        assert_eq!(ed.variants.len(), 3);
+    }
+
+    /// T156-4: const enum with explicit values
+    #[test]
+    fn test_parser_const_enum_with_values() {
+        let source = "const enum Priority { Low = 1, High = 2 }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert!(ed.is_const);
+        assert_eq!(ed.name.name, "Priority");
+        assert_eq!(ed.variants.len(), 2);
+        match &ed.variants[0] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "Low"),
+            other => panic!("expected Simple variant, got {other:?}"),
+        }
+        match &ed.variants[1] {
+            EnumVariant::Simple(ident, _) => assert_eq!(ident.name, "High"),
+            other => panic!("expected Simple variant, got {other:?}"),
+        }
+    }
+
+    /// T156-5: export const enum
+    #[test]
+    fn test_parser_export_const_enum() {
+        let source = "export const enum Status { Active, Inactive }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        assert!(module.items[0].exported);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert!(ed.is_const);
+        assert_eq!(ed.name.name, "Status");
+        assert_eq!(ed.variants.len(), 2);
+    }
+
+    /// T156-6: export bare enum
+    #[test]
+    fn test_parser_export_bare_enum() {
+        let source = "export enum Fruit { Apple, Banana }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        assert!(module.items[0].exported);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert!(!ed.is_const);
+        assert_eq!(ed.name.name, "Fruit");
+    }
+
+    /// T156-7: trailing comma in enum
+    #[test]
+    fn test_parser_const_enum_trailing_comma() {
+        let source = "const enum Dir { Up, Down, }";
+        let module = parse_ok(source);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert_eq!(ed.variants.len(), 2);
+    }
+
+    /// T156-8: regular `type` enum is_const is false
+    #[test]
+    fn test_parser_type_enum_is_not_const() {
+        let source = r#"type Dir = "up" | "down";"#;
+        let module = parse_ok(source);
+        let ItemKind::EnumDef(ed) = &module.items[0].kind else {
+            panic!("expected EnumDef");
+        };
+        assert!(!ed.is_const);
     }
 }

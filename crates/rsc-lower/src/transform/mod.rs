@@ -5238,6 +5238,7 @@ mod tests {
                     ],
                     derives: vec![],
                     doc_comment: None,
+                    is_const: false,
                     span: span(0, 50),
                 }),
                 exported: false,
@@ -5269,6 +5270,7 @@ mod tests {
             items: vec![Item {
                 kind: ItemKind::EnumDef(EnumDef {
                     name: ident("Shape", 0, 5),
+                    is_const: false,
                     variants: vec![
                         EnumVariant::Data {
                             discriminant_value: "circle".to_owned(),

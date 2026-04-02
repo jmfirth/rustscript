@@ -5330,3 +5330,91 @@ function main() {
         "expected Regex::new(\"(?ims)test\").unwrap(), got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 156: const enum
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_const_enum_definition() {
+    let source = "const enum Direction { Up, Down, Left, Right }";
+
+    let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Direction::Up => write!(f, \"Up\"),
+            Direction::Down => write!(f, \"Down\"),
+            Direction::Left => write!(f, \"Left\"),
+            Direction::Right => write!(f, \"Right\"),
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("const_enum_definition", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_const_enum_with_values() {
+    // Explicit values are parsed but ignored in lowering — same output as above
+    let source = "const enum Priority { Low = 0, Medium = 1, High = 2 }";
+
+    let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Priority {
+    Low,
+    Medium,
+    High,
+}
+
+impl std::fmt::Display for Priority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Priority::Low => write!(f, \"Low\"),
+            Priority::Medium => write!(f, \"Medium\"),
+            Priority::High => write!(f, \"High\"),
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("const_enum_with_values", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_bare_enum_definition() {
+    let source = "enum Color { Red, Green, Blue }";
+
+    let expected = "\
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+impl std::fmt::Display for Color {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Color::Red => write!(f, \"Red\"),
+            Color::Green => write!(f, \"Green\"),
+            Color::Blue => write!(f, \"Blue\"),
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("bare_enum_definition", &actual, expected);
+}

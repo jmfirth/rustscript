@@ -1113,7 +1113,25 @@ fn format_enum_hover(ed: &rsc_syntax::ast::EnumDef) -> String {
         })
         .collect();
     if variants.is_empty() {
-        format!("enum {}", ed.name.name)
+        if ed.is_const {
+            format!("const enum {}", ed.name.name)
+        } else {
+            format!("enum {}", ed.name.name)
+        }
+    } else if ed.is_const {
+        let variant_names: Vec<String> = ed
+            .variants
+            .iter()
+            .map(|v| match v {
+                EnumVariant::Simple(ident, _) => ident.name.clone(),
+                EnumVariant::Data { name, .. } => name.name.clone(),
+            })
+            .collect();
+        format!(
+            "const enum {} {{ {} }}",
+            ed.name.name,
+            variant_names.join(", ")
+        )
     } else {
         format!("type {} = {}", ed.name.name, variants.join(" | "))
     }

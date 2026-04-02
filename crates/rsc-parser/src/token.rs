@@ -126,6 +126,8 @@ pub(crate) enum TokenKind {
     Declare,
     /// `var` (function-scoped variable declaration, treated as `let mut`)
     Var,
+    /// `enum` (TS-style enum keyword, used in `const enum` declarations)
+    Enum,
 
     // Operators
     /// `+`
