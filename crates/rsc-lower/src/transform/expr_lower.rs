@@ -1431,6 +1431,10 @@ impl Transform {
             if is_set && mc.method.name == "has" {
                 return crate::builtins::lower_set_has(receiver, lowered_args, span);
             }
+            // HashSet.forEach() uses single-param callback, not Map's (value, key) swap
+            if is_set && mc.method.name == "forEach" {
+                return crate::builtins::lower_set_for_each(receiver, lowered_args, span);
+            }
             return lowering_fn(receiver, lowered_args, span);
         }
 
