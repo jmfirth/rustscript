@@ -1924,6 +1924,111 @@ impl<'src> Parser<'src> {
         })
     }
 
+    /// Parse a class expression: `class { ... }` or `class Name { ... }`.
+    ///
+    /// Similar to [`Self::parse_class_def`] but the name is optional. When the
+    /// class is anonymous, a placeholder name `__AnonymousClass` is used; the
+    /// lowering pass replaces it with the binding variable name.
+    fn parse_class_expr(&mut self) -> Option<Expr> {
+        let class_token = self.advance(); // consume `class`
+        let start = class_token.span;
+
+        // Name is optional for class expressions
+        let name = if matches!(self.peek(), TokenKind::Ident(_)) && !self.check(&TokenKind::Extends)
+        {
+            self.parse_ident()?
+        } else {
+            Ident {
+                name: "__AnonymousClass".to_owned(),
+                span: start,
+            }
+        };
+
+        // Optional generic type parameters
+        let type_params = if self.check(&TokenKind::Lt) {
+            Some(self.parse_type_params()?)
+        } else {
+            None
+        };
+
+        // Optional extends clause
+        let extends = if self.check(&TokenKind::Extends) {
+            self.advance(); // consume `extends`
+            Some(self.parse_ident()?)
+        } else {
+            None
+        };
+
+        // Optional implements clause
+        let mut implements = Vec::new();
+        let mut derives = Vec::new();
+        if self.check(&TokenKind::Implements) {
+            self.advance(); // consume `implements`
+            loop {
+                if self.check(&TokenKind::Derives) {
+                    break;
+                }
+                let iface = self.parse_ident()?;
+                implements.push(iface);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        // Optional derives clause
+        if self.check(&TokenKind::Derives) {
+            self.advance(); // consume `derives`
+            loop {
+                let derive_name = self.parse_ident()?;
+                derives.push(derive_name);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                if self.check(&TokenKind::LBrace) {
+                    break;
+                }
+            }
+        }
+
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut members = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            self.consume_jsdoc_tokens();
+            let before = self.pos;
+            if let Some(member) = self.parse_class_member() {
+                members.push(member);
+            } else if self.pos == before {
+                while !self.at_end()
+                    && !self.check(&TokenKind::Semicolon)
+                    && !self.check(&TokenKind::RBrace)
+                {
+                    self.advance();
+                }
+                self.eat(&TokenKind::Semicolon);
+            }
+        }
+
+        let close = self.expect(&TokenKind::RBrace)?;
+        let span = start.merge(close.span);
+
+        Some(Expr {
+            kind: ExprKind::ClassExpr(ClassDef {
+                is_abstract: false,
+                name,
+                type_params,
+                extends,
+                implements,
+                derives,
+                members,
+                doc_comment: None,
+                span,
+            }),
+            span,
+        })
+    }
+
     /// Check whether the current token is an identifier matching the given name.
     ///
     /// Used for contextual keywords (`get`, `set`, `static`, `readonly`) that are
@@ -5389,6 +5494,7 @@ impl<'src> Parser<'src> {
                     None
                 }
             }
+            TokenKind::Class => self.parse_class_expr(),
             TokenKind::Slash => self.parse_regex_literal(),
             TokenKind::New => self.parse_new_expr(),
             TokenKind::TemplateNoSub(_) => Some(self.parse_template_no_sub()),
@@ -13242,5 +13348,86 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
             panic!("expected EnumDef");
         };
         assert!(!ed.is_const);
+    }
+
+    // ---------------------------------------------------------------
+    // Class expressions
+    // ---------------------------------------------------------------
+    #[test]
+    fn test_parser_class_expression_anonymous() {
+        let source = r#"
+            const MyClass = class {
+                value: i32;
+                getValue(): i32 {
+                    return this.value;
+                }
+            };
+        "#;
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::Const(decl) = &module.items[0].kind else {
+            panic!("expected Const item");
+        };
+        assert_eq!(decl.name.name, "MyClass");
+        let ExprKind::ClassExpr(cls) = &decl.init.kind else {
+            panic!("expected ClassExpr, got {:?}", decl.init.kind);
+        };
+        // Anonymous class gets a placeholder name
+        assert_eq!(cls.name.name, "__AnonymousClass");
+        assert_eq!(cls.members.len(), 2);
+        assert!(matches!(cls.members[0], ClassMember::Field(_)));
+        assert!(matches!(cls.members[1], ClassMember::Method(_)));
+    }
+
+    #[test]
+    fn test_parser_class_expression_named() {
+        let source = r#"
+            const Foo = class Bar {
+                x: i32;
+            };
+        "#;
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        let ItemKind::Const(decl) = &module.items[0].kind else {
+            panic!("expected Const item");
+        };
+        assert_eq!(decl.name.name, "Foo");
+        let ExprKind::ClassExpr(cls) = &decl.init.kind else {
+            panic!("expected ClassExpr, got {:?}", decl.init.kind);
+        };
+        // Named class expression uses the inner name
+        assert_eq!(cls.name.name, "Bar");
+        assert_eq!(cls.members.len(), 1);
+    }
+
+    #[test]
+    fn test_parser_class_expression_with_extends() {
+        let source = r#"
+            const Sub = class extends Base {
+                extra: string;
+            };
+        "#;
+        let module = parse_ok(source);
+        let ItemKind::Const(decl) = &module.items[0].kind else {
+            panic!("expected Const item");
+        };
+        let ExprKind::ClassExpr(cls) = &decl.init.kind else {
+            panic!("expected ClassExpr");
+        };
+        assert_eq!(cls.name.name, "__AnonymousClass");
+        assert_eq!(cls.extends.as_ref().map(|e| e.name.as_str()), Some("Base"));
+    }
+
+    #[test]
+    fn test_parser_class_expression_empty() {
+        let source = "const Empty = class {};";
+        let module = parse_ok(source);
+        let ItemKind::Const(decl) = &module.items[0].kind else {
+            panic!("expected Const item");
+        };
+        let ExprKind::ClassExpr(cls) = &decl.init.kind else {
+            panic!("expected ClassExpr");
+        };
+        assert!(cls.members.is_empty());
     }
 }

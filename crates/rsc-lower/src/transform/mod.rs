@@ -436,6 +436,13 @@ impl Transform {
             {
                 self.extended_classes.insert(base.name.clone());
             }
+            // Also check class expressions inside const bindings
+            if let ast::ItemKind::Const(decl) = &item.kind
+                && let ast::ExprKind::ClassExpr(cls) = &decl.init.kind
+                && let Some(ref base) = cls.extends
+            {
+                self.extended_classes.insert(base.name.clone());
+            }
         }
 
         // Pre-pass: register all type definitions so they can be resolved
@@ -453,12 +460,21 @@ impl Transform {
                         self.register_class_def(cls, &mut ctx);
                     }
                 }
+                ast::ItemKind::Const(decl) => {
+                    // Register class expressions inside const bindings
+                    if let ast::ExprKind::ClassExpr(class_def) = &decl.init.kind {
+                        let mut cls = class_def.clone();
+                        if cls.name.name == "__AnonymousClass" {
+                            cls.name = decl.name.clone();
+                        }
+                        self.register_class_def(&cls, &mut ctx);
+                    }
+                }
                 ast::ItemKind::Function(_)
                 | ast::ItemKind::Import(_)
                 | ast::ItemKind::ReExport(_)
                 | ast::ItemKind::WildcardReExport(_)
                 | ast::ItemKind::RustBlock(_)
-                | ast::ItemKind::Const(_)
                 | ast::ItemKind::TestBlock(_) => {}
             }
         }
@@ -653,8 +669,20 @@ impl Transform {
                     items.push(RustItem::RawRust(rb.code.clone()));
                 }
                 ast::ItemKind::Const(decl) => {
-                    let lowered = self.lower_top_level_const(decl, exported, &mut ctx);
-                    items.push(lowered);
+                    // If the initializer is a class expression, hoist it as a
+                    // class definition using the variable name as the class name.
+                    if let ast::ExprKind::ClassExpr(class_def) = &decl.init.kind {
+                        let mut cls = class_def.clone();
+                        // Anonymous class expressions get the binding variable name
+                        if cls.name.name == "__AnonymousClass" {
+                            cls.name = decl.name.clone();
+                        }
+                        let lowered = self.lower_class_def(&cls, exported, &mut ctx);
+                        items.extend(lowered);
+                    } else {
+                        let lowered = self.lower_top_level_const(decl, exported, &mut ctx);
+                        items.push(lowered);
+                    }
                 }
                 // Test blocks are handled separately by collect_test_module
                 ast::ItemKind::TestBlock(_) => {}
