@@ -79,6 +79,11 @@ pub(crate) struct BuiltinRegistry {
     /// Regex-specific methods that require type-aware dispatch.
     /// These are only consulted when the receiver is known to be a `Regex`.
     regex_methods: HashMap<String, StringMethodLowering>,
+    /// Number-specific instance methods that require type-aware dispatch.
+    /// These are only consulted when the receiver is known to be a numeric type
+    /// (i32, i64, f64, etc.). Methods like `toFixed`, `toPrecision`, `toString`
+    /// would conflict with user-defined methods if registered as string methods.
+    number_methods: HashMap<String, StringMethodLowering>,
     /// Builtin free functions (e.g., `spawn`).
     functions: HashMap<String, BuiltinLowering>,
 }
@@ -94,6 +99,7 @@ impl BuiltinRegistry {
             array_methods: HashMap::new(),
             date_methods: HashMap::new(),
             regex_methods: HashMap::new(),
+            number_methods: HashMap::new(),
             functions: HashMap::new(),
         };
         register_defaults(&mut registry);
@@ -190,6 +196,19 @@ impl BuiltinRegistry {
     /// Only consulted when the receiver is known to be a `Regex`.
     pub fn lookup_regex_method(&self, method: &str) -> Option<&StringMethodLowering> {
         self.regex_methods.get(method)
+    }
+
+    /// Register a Number-specific instance method that requires type-aware dispatch.
+    fn register_number_method(&mut self, name: &str, lowering: StringMethodLowering) {
+        self.number_methods.insert(name.to_owned(), lowering);
+    }
+
+    /// Look up a Number instance method by name.
+    ///
+    /// Returns the lowering function if the method is a known Number instance method.
+    /// Only consulted when the receiver is known to be a numeric type (i32, i64, f64, etc.).
+    pub fn lookup_number_method(&self, method: &str) -> Option<&StringMethodLowering> {
+        self.number_methods.get(method)
     }
 
     /// Register a builtin free function.
@@ -415,6 +434,13 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // with user-defined class methods if registered as string methods.
     registry.register_regex_method("test", lower_regexp_test);
     registry.register_regex_method("exec", lower_regexp_exec);
+
+    // Task 160: Number instance methods — registered in number_methods for
+    // type-aware dispatch. Method names like `toString` would conflict with
+    // other types if registered as string methods.
+    registry.register_number_method("toFixed", lower_number_to_fixed);
+    registry.register_number_method("toPrecision", lower_number_to_precision);
+    registry.register_number_method("toString", lower_number_to_string);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -4416,6 +4442,139 @@ fn emit_receiver(expr: &RustExpr) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Task 160: Number instance method lowering functions
+// ---------------------------------------------------------------------------
+
+/// Check whether a type represents a numeric value.
+///
+/// Used for type-aware dispatch of Number instance methods like `.toFixed()`.
+pub(crate) fn is_number_type(ty: &RustType) -> bool {
+    matches!(
+        ty,
+        RustType::I8
+            | RustType::I16
+            | RustType::I32
+            | RustType::I64
+            | RustType::U8
+            | RustType::U16
+            | RustType::U32
+            | RustType::U64
+            | RustType::F32
+            | RustType::F64
+    )
+}
+
+/// Lower `.toFixed(digits)` on a number to `format!("{:.prec$}", num, prec = digits as usize)`.
+///
+/// Emits: `format!("{:.prec$}", receiver, prec = digits as usize)`
+/// If no argument is provided, defaults to 0 decimal places.
+fn lower_number_to_fixed(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let digits = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let cast_digits = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(digits),
+        RustType::Named("usize".into()),
+    ));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "format".into(),
+            args: vec![
+                RustExpr::synthetic(RustExprKind::StringLit("{:.prec$}".into())),
+                receiver,
+                RustExpr::synthetic(RustExprKind::Ident(format!(
+                    "prec = {}",
+                    emit_inline(&cast_digits)
+                ))),
+            ],
+        },
+        span,
+    )
+}
+
+/// Lower `.toPrecision(digits)` on a number to `format!("{:.prec$e}", num, prec = digits as usize)`.
+///
+/// Emits: `format!("{:.prec$e}", receiver, prec = digits as usize)`
+/// If no argument is provided, falls back to `receiver.to_string()`.
+fn lower_number_to_precision(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut args_iter = args.into_iter();
+    if let Some(digits) = args_iter.next() {
+        let cast_digits = RustExpr::synthetic(RustExprKind::Cast(
+            Box::new(digits),
+            RustType::Named("usize".into()),
+        ));
+        RustExpr::new(
+            RustExprKind::Macro {
+                name: "format".into(),
+                args: vec![
+                    RustExpr::synthetic(RustExprKind::StringLit("{:.prec$e}".into())),
+                    receiver,
+                    RustExpr::synthetic(RustExprKind::Ident(format!(
+                        "prec = {}",
+                        emit_inline(&cast_digits)
+                    ))),
+                ],
+            },
+            span,
+        )
+    } else {
+        // No argument: just convert to string
+        RustExpr::new(RustExprKind::ToString(Box::new(receiver)), span)
+    }
+}
+
+/// Lower `.toString(radix?)` on a number.
+///
+/// Without radix: `receiver.to_string()`
+/// With radix 16: `format!("{:x}", receiver)`
+/// With radix 8: `format!("{:o}", receiver)`
+/// With radix 2: `format!("{:b}", receiver)`
+/// With other radix: falls back to `format!("{}", receiver)` (Rust lacks
+/// arbitrary-radix formatting in `format!`, so we support the common cases).
+fn lower_number_to_string(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut args_iter = args.into_iter();
+    if let Some(radix_arg) = args_iter.next() {
+        // Check for literal radix values to pick the right format specifier
+        let fmt_spec = match &radix_arg.kind {
+            RustExprKind::IntLit(2) => Some("{:b}"),
+            RustExprKind::IntLit(8) => Some("{:o}"),
+            RustExprKind::IntLit(16) => Some("{:x}"),
+            RustExprKind::IntLit(10) => Some("{}"),
+            _ => None,
+        };
+
+        if let Some(fmt) = fmt_spec {
+            RustExpr::new(
+                RustExprKind::Macro {
+                    name: "format".into(),
+                    args: vec![
+                        RustExpr::synthetic(RustExprKind::StringLit(fmt.to_owned())),
+                        receiver,
+                    ],
+                },
+                span,
+            )
+        } else {
+            // Non-literal or unsupported radix: fall back to decimal
+            RustExpr::new(
+                RustExprKind::Macro {
+                    name: "format".into(),
+                    args: vec![
+                        RustExpr::synthetic(RustExprKind::StringLit("{}".to_owned())),
+                        receiver,
+                    ],
+                },
+                span,
+            )
+        }
+    } else {
+        // No radix: just .to_string()
+        RustExpr::new(RustExprKind::ToString(Box::new(receiver)), span)
+    }
+}
+
 /// Check whether a type represents a `Date` (`SystemTime`) value.
 ///
 /// Used for type-aware dispatch of Date instance methods like `.getTime()`.
@@ -7407,5 +7566,200 @@ mod tests {
     #[test]
     fn test_needs_regex_crate_false_for_map() {
         assert!(!needs_regex_crate("Map"));
+    }
+
+    // ---------------------------------------------------------------
+    // Task 160: Number instance methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_number_to_fixed() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("toFixed").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_number_to_precision() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("toPrecision").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_number_to_string() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("toString").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_number_unknown_returns_none() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("foo").is_none());
+    }
+
+    #[test]
+    fn test_lower_number_to_fixed_produces_format_macro() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_fixed(receiver, vec![int_arg(2)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_fixed_default_zero() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_fixed(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                // Should still produce format macro with default 0 digits
+                assert_eq!(args.len(), 3);
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_precision_with_arg() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_precision(receiver, vec![int_arg(4)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$e}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_precision_no_arg() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_precision(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::ToString(_) => {} // good
+            other => panic!("expected ToString, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_string_no_radix() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_string(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::ToString(_) => {} // good
+            other => panic!("expected ToString, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_string_radix_16() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_string(receiver, vec![int_arg(16)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:x}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_string_radix_8() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_string(receiver, vec![int_arg(8)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:o}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_string_radix_2() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_string(receiver, vec![int_arg(2)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:b}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_string_radix_10() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_string(receiver, vec![int_arg(10)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_is_number_type_i32() {
+        assert!(is_number_type(&RustType::I32));
+    }
+
+    #[test]
+    fn test_is_number_type_i64() {
+        assert!(is_number_type(&RustType::I64));
+    }
+
+    #[test]
+    fn test_is_number_type_f64() {
+        assert!(is_number_type(&RustType::F64));
+    }
+
+    #[test]
+    fn test_is_number_type_u8() {
+        assert!(is_number_type(&RustType::U8));
+    }
+
+    #[test]
+    fn test_is_number_type_string_is_not() {
+        assert!(!is_number_type(&RustType::String));
+    }
+
+    #[test]
+    fn test_is_number_type_bool_is_not() {
+        assert!(!is_number_type(&RustType::Bool));
+    }
+
+    #[test]
+    fn test_is_number_type_named_is_not() {
+        assert!(!is_number_type(&RustType::Named("Foo".to_owned())));
     }
 }
