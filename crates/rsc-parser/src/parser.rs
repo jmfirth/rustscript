@@ -3278,7 +3278,10 @@ impl<'src> Parser<'src> {
 
         // Check for binding keyword (const/let/var) — could be for-of/for-in or classic
         let binding_token = self.current_token().clone();
-        let has_binding = matches!(&binding_token.kind, TokenKind::Const | TokenKind::Let | TokenKind::Var);
+        let has_binding = matches!(
+            &binding_token.kind,
+            TokenKind::Const | TokenKind::Let | TokenKind::Var
+        );
 
         if has_binding {
             let binding = match &binding_token.kind {

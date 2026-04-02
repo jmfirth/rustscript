@@ -320,6 +320,7 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_map_set_method("values", lower_values);
     registry.register_map_set_method("entries", lower_entries);
     registry.register_map_set_method("add", lower_set_add);
+    registry.register_map_set_method("forEach", lower_map_for_each);
 
     // Phase 5: Math object methods
     registry.register_method("Math", "floor", lower_math_floor, false);
@@ -2208,6 +2209,134 @@ fn lower_set_add(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExp
         },
         span,
     )
+}
+
+/// Lower `map.forEach((value, key) => { ... })` to `map.iter().for_each(|(key, value)| { ... })`.
+///
+/// In TypeScript, `Map.forEach` passes `(value, key, map)` to the callback.
+/// In Rust, `HashMap::iter()` yields `(&key, &value)` tuples, so we swap
+/// the first two closure parameters into a tuple pattern `(key, value)`.
+///
+/// Instead of using `IteratorChain`/`ForEach` (which only supports single-expression
+/// bodies), this emits `receiver.iter().for_each(closure)` as a method chain,
+/// preserving multi-statement closure bodies.
+fn lower_map_for_each(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let closure = args.into_iter().next().map_or_else(
+        || {
+            RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "_".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                    "()".into(),
+                )))),
+            })
+        },
+        rewrite_map_foreach_closure,
+    );
+
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "for_each".into(),
+            type_args: vec![],
+            args: vec![closure],
+        },
+        span,
+    )
+}
+
+/// Lower `set.forEach((value) => { ... })` to `set.iter().for_each(|value| { ... })`.
+///
+/// Set forEach is identical to array forEach — single-parameter callback.
+/// Uses direct method chain to preserve multi-statement closure bodies.
+pub(crate) fn lower_set_for_each(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let closure = args.into_iter().next().unwrap_or_else(|| {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![RustClosureParam {
+                name: "_".into(),
+                ty: None,
+            }],
+            return_type: None,
+            body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Ident(
+                "()".into(),
+            )))),
+        })
+    });
+
+    let iter_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "iter".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(iter_call),
+            method: "for_each".into(),
+            type_args: vec![],
+            args: vec![closure],
+        },
+        span,
+    )
+}
+
+/// Rewrite a Map `forEach` closure to swap `(value, key)` params to `(key, value)` tuple.
+///
+/// TypeScript's `Map.forEach((value, key) => ...)` passes value first, key second.
+/// Rust's `HashMap::iter()` yields `(key, value)` tuples. This rewrites the closure
+/// params into a single tuple parameter `(key, value)` with the names swapped.
+fn rewrite_map_foreach_closure(arg: RustExpr) -> RustExpr {
+    if let RustExprKind::Closure {
+        is_async,
+        is_move,
+        params,
+        return_type,
+        body,
+    } = arg.kind
+    {
+        let tuple_param = make_map_foreach_param(&params);
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async,
+            is_move,
+            params: vec![tuple_param],
+            return_type,
+            body,
+        })
+    } else {
+        arg
+    }
+}
+
+/// Build a tuple closure param `(key, value)` from the TS forEach params `[value, key, ...]`.
+///
+/// Swaps the first two params (TS: value, key → Rust: key, value) and wraps them
+/// in a tuple pattern for destructuring.
+fn make_map_foreach_param(params: &[RustClosureParam]) -> RustClosureParam {
+    let value_name = params.first().map_or("_v", |p| p.name.as_str());
+    let key_name = params.get(1).map_or("_k", |p| p.name.as_str());
+    RustClosureParam {
+        name: format!("({key_name}, {value_name})"),
+        ty: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4723,7 +4852,7 @@ mod tests {
     fn test_builtin_registry_all_map_set_methods_registered() {
         let registry = BuiltinRegistry::new();
         let methods = [
-            "get", "set", "has", "delete", "clear", "keys", "values", "entries", "add",
+            "get", "set", "has", "delete", "clear", "keys", "values", "entries", "add", "forEach",
         ];
         for method in methods {
             assert!(
@@ -5959,6 +6088,115 @@ mod tests {
             }
             other => panic!("expected MethodCall(insert), got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 161: Map/Set forEach and size
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_map_for_each_produces_iter_for_each_with_swapped_tuple_param() {
+        let closure = make_two_param_closure(
+            "value",
+            "key",
+            RustExpr::synthetic(RustExprKind::Ident("value".into())),
+        );
+        let result = lower_map_for_each(map_receiver(), vec![closure], span());
+        // Outermost: .for_each(closure)
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "for_each");
+                assert_eq!(args.len(), 1);
+                // Check closure has swapped tuple param (key, value)
+                match &args[0].kind {
+                    RustExprKind::Closure { params, .. } => {
+                        assert_eq!(params.len(), 1);
+                        assert_eq!(params[0].name, "(key, value)");
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                }
+                // Inner: .iter()
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, .. } => {
+                        assert_eq!(method, "iter");
+                    }
+                    other => panic!("expected MethodCall(iter), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(for_each), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_map_for_each_single_param_uses_default_key() {
+        let closure = make_closure(
+            "value",
+            RustExpr::synthetic(RustExprKind::Ident("value".into())),
+        );
+        let result = lower_map_for_each(map_receiver(), vec![closure], span());
+        match &result.kind {
+            RustExprKind::MethodCall { args, .. } => {
+                match &args[0].kind {
+                    RustExprKind::Closure { params, .. } => {
+                        // Only one param → key defaults to _k
+                        assert_eq!(params[0].name, "(_k, value)");
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(for_each), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_set_for_each_produces_iter_for_each() {
+        let closure = make_closure(
+            "value",
+            RustExpr::synthetic(RustExprKind::Ident("value".into())),
+        );
+        let result = lower_set_for_each(set_receiver(), vec![closure], span());
+        // Outermost: .for_each(closure)
+        match &result.kind {
+            RustExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                assert_eq!(method, "for_each");
+                assert_eq!(args.len(), 1);
+                // Check closure has the original param
+                match &args[0].kind {
+                    RustExprKind::Closure { params, .. } => {
+                        assert_eq!(params.len(), 1);
+                        assert_eq!(params[0].name, "value");
+                    }
+                    other => panic!("expected Closure, got {other:?}"),
+                }
+                // Inner: .iter()
+                match &receiver.kind {
+                    RustExprKind::MethodCall { method, .. } => {
+                        assert_eq!(method, "iter");
+                    }
+                    other => panic!("expected MethodCall(iter), got {other:?}"),
+                }
+            }
+            other => panic!("expected MethodCall(for_each), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_for_each_registered_as_map_set_method() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_map_set_method("forEach").is_some(),
+            "expected forEach to be registered as map/set method"
+        );
     }
 
     // ---------------------------------------------------------------

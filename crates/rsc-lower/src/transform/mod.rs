@@ -9695,4 +9695,80 @@ function main() {}"#;
             other => panic!("expected MethodCall(unwrap), got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------
+    // Task 161: Map/Set forEach and size
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_map_for_each_emits_iter_for_each_with_tuple() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let m: Map<string, i64> = new Map();
+                m.set("a", 1);
+                m.forEach((value, key) => {
+                    console.log(key);
+                });
+            }
+            "#,
+        );
+        assert!(
+            output.contains(".iter().for_each("),
+            "expected iter().for_each, got:\n{output}"
+        );
+        assert!(
+            output.contains("(key, value)"),
+            "expected swapped tuple param (key, value), got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_set_for_each_emits_iter_for_each() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let s: Set<i64> = new Set();
+                s.add(1);
+                s.forEach((value) => {
+                    console.log(value);
+                });
+            }
+            "#,
+        );
+        assert!(
+            output.contains(".iter().for_each("),
+            "expected iter().for_each, got:\n{output}"
+        );
+        assert!(
+            output.contains("|value|"),
+            "expected single param |value|, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_lower_map_size_emits_len() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let m: Map<string, i64> = new Map();
+                let n: i64 = m.size;
+            }
+            "#,
+        );
+        assert!(output.contains(".len()"), "expected .len(), got:\n{output}");
+    }
+
+    #[test]
+    fn test_lower_set_size_emits_len() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let s: Set<i64> = new Set();
+                let n: i64 = s.size;
+            }
+            "#,
+        );
+        assert!(output.contains(".len()"), "expected .len(), got:\n{output}");
+    }
 }
