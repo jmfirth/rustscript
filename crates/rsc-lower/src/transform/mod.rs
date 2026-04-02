@@ -854,8 +854,7 @@ impl Transform {
             if let ast::TypeKind::Intersection(ref members) = alias.kind {
                 let merged = self.collect_intersection_fields(members, td, ctx);
                 if !merged.is_empty() {
-                    self.type_registry
-                        .register(td.name.name.clone(), merged);
+                    self.type_registry.register(td.name.name.clone(), merged);
                     return;
                 }
             }
@@ -3541,6 +3540,18 @@ fn infer_as_const_slice_element_type(array_expr: &ast::Expr) -> RustType {
         };
     }
     RustType::I64
+}
+
+/// Extract the element type from a generic collection type (e.g., `Vec<i32>` → `i32`).
+///
+/// Returns the first type argument of a `Generic` type, or `None` if the type
+/// is not generic or has no type arguments.
+fn extract_element_type(ty: &RustType) -> Option<&RustType> {
+    if let RustType::Generic(_, args) = ty {
+        args.first()
+    } else {
+        None
+    }
 }
 
 fn element_type_is_copy(ty: &RustType) -> bool {
@@ -10126,6 +10137,171 @@ function main() {}"#;
         assert!(
             !output.contains("(1, 2, 3)"),
             "should not produce tuple for plain array, got:\n{output}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Numeric widening cast tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_widening_i32_to_i64_in_addition() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: i32 = 1;
+                let b: i64 = 2;
+                let c: i64 = a + b;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("a as i64"),
+            "expected i32 widened to i64 in addition, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_i32_to_i64_compound_assign() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let total: i64 = 0;
+                let n: i32 = 5;
+                total += n;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("n as i64"),
+            "expected i32 widened to i64 in compound assign, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_i32_to_f64() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: i32 = 1;
+                let b: f64 = 2.0;
+                let c: f64 = a + b;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("a as f64"),
+            "expected i32 widened to f64 in addition, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_f32_to_f64() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: f32 = 1.0;
+                let b: f64 = 2.0;
+                let c: f64 = a + b;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("a as f64"),
+            "expected f32 widened to f64 in addition, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_no_widening_same_type() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: i32 = 1;
+                let b: i32 = 2;
+                let c: i32 = a + b;
+            }
+            "#,
+        );
+        assert!(
+            !output.contains("as i32"),
+            "should not cast when both are i32, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_no_narrowing_i64_to_i32() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: i64 = 1;
+                let b: i32 = 2;
+                let c: i32 = a + b;
+            }
+            "#,
+        );
+        // The wider type should be i64, so b gets widened to i64, but a should NOT
+        // be narrowed. The result type is i64 (the wider), not i32.
+        assert!(
+            !output.contains("a as i32"),
+            "should not narrow i64 to i32, got:\n{output}"
+        );
+        assert!(
+            output.contains("b as i64"),
+            "should widen i32 to i64, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_in_for_loop() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                const nums: Array<i32> = [1, 2, 3, 4, 5];
+                let total: i64 = 0;
+                for (const n of nums) {
+                    total += n;
+                }
+            }
+            "#,
+        );
+        assert!(
+            output.contains("as i64"),
+            "expected i32 loop var widened to i64 in compound assign, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_comparison_operators() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let a: i32 = 1;
+                let b: i64 = 2;
+                let result: bool = a < b;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("a as i64"),
+            "expected i32 widened to i64 in comparison, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_widening_plain_assign() {
+        let output = compile_and_emit(
+            r#"
+            function main(): void {
+                let total: i64 = 0;
+                let n: i32 = 5;
+                total = n;
+            }
+            "#,
+        );
+        assert!(
+            output.contains("n as i64"),
+            "expected i32 widened to i64 in plain assignment, got:\n{output}"
         );
     }
 }

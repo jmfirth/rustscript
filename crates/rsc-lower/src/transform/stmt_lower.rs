@@ -980,6 +980,17 @@ impl Transform {
             ctx.mark_as_reference(var_name.clone());
         }
 
+        // Declare the loop variable's type in context so that widening casts
+        // and other type-aware lowering can use it. The element type is extracted
+        // from the iterable's collection type (e.g., Vec<i32> → i32).
+        if let ast::ExprKind::Ident(ident) = &for_of.iterable.kind
+            && let Some(elem_ty) = ctx
+                .lookup_variable(&ident.name)
+                .and_then(|info| super::extract_element_type(&info.ty).cloned())
+        {
+            ctx.declare_variable(var_name.clone(), elem_ty);
+        }
+
         let body = self.lower_block(&for_of.body, ctx, use_map, stmt_index, reassigned);
 
         // Unmark the loop variable after leaving the for-of body.

@@ -8,8 +8,8 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind, RustLetStmt,
-    RustStmt, RustType, SpreadOp,
+    ParamMode, RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind,
+    RustLetStmt, RustStmt, RustType, SpreadOp,
 };
 
 use crate::context::LoweringContext;
@@ -75,6 +75,28 @@ impl Transform {
                 let left = self.lower_expr(&bin.left, ctx, use_map, stmt_index);
                 let right = self.lower_expr(&bin.right, ctx, use_map, stmt_index);
                 let op = lower_binary_op(bin.op);
+
+                // Insert widening casts when both sides are numeric but different types
+                let (left, right) = if is_numeric_widenable_op(op) {
+                    if let (Some(left_ty), Some(right_ty)) = (
+                        infer_rust_expr_type(&left, ctx),
+                        infer_rust_expr_type(&right, ctx),
+                    ) {
+                        if let Some(wider) = wider_numeric_type(&left_ty, &right_ty) {
+                            (
+                                maybe_widen(left, &left_ty, &wider),
+                                maybe_widen(right, &right_ty, &wider),
+                            )
+                        } else {
+                            (left, right)
+                        }
+                    } else {
+                        (left, right)
+                    }
+                } else {
+                    (left, right)
+                };
+
                 RustExpr::new(
                     RustExprKind::Binary {
                         op,
@@ -111,6 +133,21 @@ impl Transform {
                     detect_compound_assign(&assign.target.name, &assign.value)
                 {
                     let lowered_rhs = self.lower_expr(rhs, ctx, use_map, stmt_index);
+
+                    // Insert widening cast if the target variable is wider than the rhs
+                    let lowered_rhs = if let Some(target_ty) = ctx
+                        .lookup_variable(&assign.target.name)
+                        .map(|info| info.ty.clone())
+                    {
+                        if let Some(rhs_ty) = infer_rust_expr_type(&lowered_rhs, ctx) {
+                            maybe_widen(lowered_rhs, &rhs_ty, &target_ty)
+                        } else {
+                            lowered_rhs
+                        }
+                    } else {
+                        lowered_rhs
+                    };
+
                     return RustExpr::new(
                         RustExprKind::CompoundAssign {
                             target: assign.target.name.clone(),
@@ -121,6 +158,21 @@ impl Transform {
                     );
                 }
                 let value = self.lower_expr(&assign.value, ctx, use_map, stmt_index);
+
+                // Insert widening cast if the target variable is wider than the value
+                let value = if let Some(target_ty) = ctx
+                    .lookup_variable(&assign.target.name)
+                    .map(|info| info.ty.clone())
+                {
+                    if let Some(val_ty) = infer_rust_expr_type(&value, ctx) {
+                        maybe_widen(value, &val_ty, &target_ty)
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                };
+
                 RustExpr::new(
                     RustExprKind::Assign {
                         target: assign.target.name.clone(),
@@ -1931,10 +1983,7 @@ impl Transform {
                                         }
                                     })
                                     .collect();
-                                return RustExpr::new(
-                                    RustExprKind::Tuple(tuple_parts),
-                                    expr.span,
-                                );
+                                return RustExpr::new(RustExprKind::Tuple(tuple_parts), expr.span);
                             }
                         }
                         self.lower_expr(expr, ctx, use_map, stmt_index)
@@ -2341,6 +2390,126 @@ impl Transform {
             span,
         )
     }
+}
+
+/// Return the numeric promotion rank for a `RustType`.
+///
+/// Smaller integers get lower ranks; floats rank above all integers.
+/// Returns `None` for non-numeric types.
+///
+/// Rank assignments:
+/// - `i8`, `u8` → 1
+/// - `i16`, `u16` → 2
+/// - `i32`, `u32` → 3
+/// - `i64`, `u64` → 4
+/// - `f32` → 5
+/// - `f64` → 6
+fn numeric_rank(ty: &RustType) -> Option<u8> {
+    match ty {
+        RustType::I8 | RustType::U8 => Some(1),
+        RustType::I16 | RustType::U16 => Some(2),
+        RustType::I32 | RustType::U32 => Some(3),
+        RustType::I64 | RustType::U64 => Some(4),
+        RustType::F32 => Some(5),
+        RustType::F64 => Some(6),
+        _ => None,
+    }
+}
+
+/// Determine the wider of two numeric types for automatic promotion.
+///
+/// Returns `Some(wider_type)` when one type can be safely widened to the other.
+/// Returns `None` when:
+/// - Either type is not numeric
+/// - The types are identical (no widening needed)
+/// - Widening would cross signedness boundaries at the same rank
+///   (e.g., `u32` → `i32` is not safe)
+///
+/// Special cases:
+/// - Any integer → `f32` or `f64` is allowed (mirrors TypeScript behavior)
+/// - When both are integer types of different ranks, the higher rank wins
+///   but we pick the specific type (not just the rank) of the wider operand
+pub(super) fn wider_numeric_type(a: &RustType, b: &RustType) -> Option<RustType> {
+    let rank_a = numeric_rank(a)?;
+    let rank_b = numeric_rank(b)?;
+
+    if a == b {
+        return None; // same type, no widening needed
+    }
+
+    if rank_a == rank_b {
+        // Same rank but different types (e.g., i32 vs u32).
+        // Don't auto-widen — this could be lossy in either direction.
+        return None;
+    }
+
+    if rank_a > rank_b {
+        Some(a.clone())
+    } else {
+        Some(b.clone())
+    }
+}
+
+/// Infer the `RustType` of a lowered `RustExpr` from its structure and context.
+///
+/// Returns `Some(ty)` for expressions whose type is concretely known:
+/// - Identifiers → looked up in the lowering context
+/// - Cast expressions → the target type of the cast
+/// - Clone/Paren → delegates to the inner expression
+///
+/// Literals (`IntLit`, `FloatLit`) intentionally return `None` because they are
+/// polymorphic in Rust (a literal `2` adapts to `i32`, `i64`, etc. based on
+/// context). Widening should only occur between expressions with fixed types.
+pub(super) fn infer_rust_expr_type(expr: &RustExpr, ctx: &LoweringContext) -> Option<RustType> {
+    match &expr.kind {
+        RustExprKind::Ident(name) => ctx.lookup_variable(name).map(|info| info.ty.clone()),
+        RustExprKind::Cast(_, target_ty) => Some(target_ty.clone()),
+        RustExprKind::Clone(inner) | RustExprKind::Paren(inner) => infer_rust_expr_type(inner, ctx),
+        _ => None,
+    }
+}
+
+/// Wrap `expr` in a `Cast` to `target_type` if it would be a safe numeric widening.
+///
+/// Returns the expression unchanged if `expr_type` is already the target type
+/// or if no safe widening exists between the two types.
+fn maybe_widen(expr: RustExpr, expr_type: &RustType, target_type: &RustType) -> RustExpr {
+    if expr_type == target_type {
+        return expr;
+    }
+    // Check that target_type is actually wider
+    let Some(rank_expr) = numeric_rank(expr_type) else {
+        return expr;
+    };
+    let Some(rank_target) = numeric_rank(target_type) else {
+        return expr;
+    };
+    if rank_target > rank_expr {
+        RustExpr::synthetic(RustExprKind::Cast(Box::new(expr), target_type.clone()))
+    } else {
+        expr
+    }
+}
+
+/// Check whether a `RustBinaryOp` is a numeric operation that benefits from widening.
+///
+/// Arithmetic (`+`, `-`, `*`, `/`, `%`) and comparison (`<`, `>`, `<=`, `>=`, `==`, `!=`)
+/// operators return `true`. Logical and bitwise operators return `false`.
+fn is_numeric_widenable_op(op: RustBinaryOp) -> bool {
+    matches!(
+        op,
+        RustBinaryOp::Add
+            | RustBinaryOp::Sub
+            | RustBinaryOp::Mul
+            | RustBinaryOp::Div
+            | RustBinaryOp::Rem
+            | RustBinaryOp::Eq
+            | RustBinaryOp::Ne
+            | RustBinaryOp::Lt
+            | RustBinaryOp::Gt
+            | RustBinaryOp::Le
+            | RustBinaryOp::Ge
+    )
 }
 
 /// Check whether a `RustType` is a `HashMap` type.

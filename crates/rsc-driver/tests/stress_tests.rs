@@ -67,7 +67,10 @@ function main() {
   console.log(age);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(rust.contains("struct User"), "should have User struct: {rust}");
+    assert!(
+        rust.contains("struct User"),
+        "should have User struct: {rust}"
+    );
     assert!(rust.contains("name"), "should have name binding: {rust}");
     assert!(rust.contains("age"), "should have age binding: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
@@ -90,10 +93,7 @@ fn test_stress_data_03_filter_map_string_methods() {
         rust.contains("to_uppercase"),
         "should have to_uppercase: {rust}"
     );
-    assert!(
-        rust.contains(".map("),
-        "should have .map() call: {rust}"
-    );
+    assert!(rust.contains(".map("), "should have .map() call: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -123,7 +123,10 @@ function main() {
   console.log(names);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(rust.contains("struct Item"), "should have Item struct: {rust}");
+    assert!(
+        rust.contains("struct Item"),
+        "should have Item struct: {rust}"
+    );
     assert!(rust.contains("filter"), "should have filter: {rust}");
     assert!(rust.contains("map"), "should have map: {rust}");
     assert!(
@@ -176,7 +179,10 @@ function main() {
         rust.contains("(String, i32)"),
         "should have tuple type: {rust}"
     );
-    assert!(rust.contains(".0") && rust.contains(".1"), "should access tuple fields: {rust}");
+    assert!(
+        rust.contains(".0") && rust.contains(".1"),
+        "should access tuple fields: {rust}"
+    );
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -334,10 +340,7 @@ function main() {
         rust.contains("fn increment"),
         "should have increment method: {rust}"
     );
-    assert!(
-        rust.contains("const MAX"),
-        "should have static MAX: {rust}"
-    );
+    assert!(rust.contains("const MAX"), "should have static MAX: {rust}");
     assert!(
         rust.contains("fn create("),
         "should have static create: {rust}"
@@ -469,15 +472,15 @@ function main() {
         rust.contains("struct Container"),
         "should have Container struct: {rust}"
     );
-    assert!(rust.contains("value: i32"), "should have value field: {rust}");
+    assert!(
+        rust.contains("value: i32"),
+        "should have value field: {rust}"
+    );
     assert!(
         rust.contains("fn get(") || rust.contains("fn get "),
         "should have get method: {rust}"
     );
-    assert!(
-        rust.contains("fn set("),
-        "should have set method: {rust}"
-    );
+    assert!(rust.contains("fn set("), "should have set method: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -560,10 +563,7 @@ function main() {
         rust.contains("fn value(&self)"),
         "should have getter: {rust}"
     );
-    assert!(
-        rust.contains("fn set_value("),
-        "should have setter: {rust}"
-    );
+    assert!(rust.contains("fn set_value("), "should have setter: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -718,14 +718,8 @@ function main() {
         rust.contains("struct Stack"),
         "should have Stack struct: {rust}"
     );
-    assert!(
-        rust.contains("fn push("),
-        "should have push method: {rust}"
-    );
-    assert!(
-        rust.contains("fn size("),
-        "should have size method: {rust}"
-    );
+    assert!(rust.contains("fn push("), "should have push method: {rust}");
+    assert!(rust.contains("fn size("), "should have size method: {rust}");
     assert!(
         rust.contains(".len()"),
         ".length should lower to .len(): {rust}"
@@ -940,10 +934,7 @@ function main() {
         rust.contains("name"),
         "Person should have name field: {rust}"
     );
-    assert!(
-        rust.contains("age"),
-        "Person should have age field: {rust}"
-    );
+    assert!(rust.contains("age"), "Person should have age field: {rust}");
     assert!(
         rust.contains("email"),
         "Person should have email field: {rust}"
@@ -1057,10 +1048,7 @@ function main() {
   console.log(sum(data));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(
-        rust.contains("fn sum("),
-        "should have sum fn: {rust}"
-    );
+    assert!(rust.contains("fn sum("), "should have sum fn: {rust}");
     assert!(
         rust.contains("for") && rust.contains("in"),
         "for-of should produce for..in: {rust}"
@@ -1092,10 +1080,7 @@ function main() {
         rust.contains("Option<String>"),
         "T | null should produce Option: {rust}"
     );
-    assert!(
-        rust.contains("None"),
-        "null should produce None: {rust}"
-    );
+    assert!(rust.contains("None"), "null should produce None: {rust}");
     assert!(
         rust.contains("Some("),
         "non-null return should produce Some: {rust}"
@@ -1211,10 +1196,7 @@ fn test_stress_flow_33_for_of_iteration() {
 }"#;
     let rust = compile_to_rust(source);
     assert!(rust.contains("fn main()"), "should have main: {rust}");
-    assert!(
-        rust.contains("for"),
-        "should have for loop: {rust}"
-    );
+    assert!(rust.contains("for"), "should have for loop: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -1355,14 +1337,8 @@ function main() {
         rust.contains("fn find_first_even"),
         "should have find_first_even fn: {rust}"
     );
-    assert!(
-        rust.contains("while"),
-        "should have while loop: {rust}"
-    );
-    assert!(
-        rust.contains("return"),
-        "should have early return: {rust}"
-    );
+    assert!(rust.contains("while"), "should have while loop: {rust}");
+    assert!(rust.contains("return"), "should have early return: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -1432,14 +1408,8 @@ function main() {
   console.log(gcd(48, 18));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(
-        rust.contains("fn gcd("),
-        "should have gcd fn: {rust}"
-    );
-    assert!(
-        rust.contains("while"),
-        "should have while loop: {rust}"
-    );
+    assert!(rust.contains("fn gcd("), "should have gcd fn: {rust}");
+    assert!(rust.contains("while"), "should have while loop: {rust}");
     assert!(
         rust.contains("let mut"),
         "should have mutable bindings: {rust}"
@@ -1645,7 +1615,10 @@ function main() {
         "should have make_adder fn: {rust}"
     );
     assert!(
-        rust.contains("move") || rust.contains("Fn(") || rust.contains("impl") || rust.contains("Box"),
+        rust.contains("move")
+            || rust.contains("Fn(")
+            || rust.contains("impl")
+            || rust.contains("Box"),
         "should have closure type or move: {rust}"
     );
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
@@ -1670,14 +1643,8 @@ function main() {
   console.log(result);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(
-        rust.contains("fn apply("),
-        "should have apply fn: {rust}"
-    );
-    assert!(
-        rust.contains("fn double("),
-        "should have double fn: {rust}"
-    );
+    assert!(rust.contains("fn apply("), "should have apply fn: {rust}");
+    assert!(rust.contains("fn double("), "should have double fn: {rust}");
     assert!(
         rust.contains("Fn(") || rust.contains("fn(") || rust.contains("impl"),
         "should have function type: {rust}"
@@ -1719,10 +1686,7 @@ function main() {
         rust.contains("struct Logger"),
         "should have Logger struct: {rust}"
     );
-    assert!(
-        rust.contains("fn log("),
-        "should have log method: {rust}"
-    );
+    assert!(rust.contains("fn log("), "should have log method: {rust}");
     assert!(
         rust.contains("fn count("),
         "should have count method: {rust}"
@@ -1803,10 +1767,7 @@ function main() {
         rust.contains("Iterator"),
         "generator should produce Iterator impl: {rust}"
     );
-    assert!(
-        rust.contains("type Item"),
-        "should have Item type: {rust}"
-    );
+    assert!(rust.contains("type Item"), "should have Item type: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -1826,10 +1787,7 @@ fn test_stress_advanced_53_string_methods() {
   console.log(has_hello);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(
-        rust.contains("trim()"),
-        "should have trim(): {rust}"
-    );
+    assert!(rust.contains("trim()"), "should have trim(): {rust}");
     assert!(
         rust.contains("to_uppercase()"),
         "should have to_uppercase(): {rust}"
@@ -1932,10 +1890,7 @@ function main() {
         rust.contains("struct Response"),
         "should have Response struct: {rust}"
     );
-    assert!(
-        rust.contains("fn handle("),
-        "should have handle fn: {rust}"
-    );
+    assert!(rust.contains("fn handle("), "should have handle fn: {rust}");
     assert!(
         rust.contains("format!("),
         "template literal should produce format!: {rust}"
@@ -2131,10 +2086,7 @@ function main() {
         rust.contains("fn has_flag"),
         "should have has_flag fn: {rust}"
     );
-    assert!(
-        rust.contains("for"),
-        "should have for loop: {rust}"
-    );
+    assert!(rust.contains("for"), "should have for loop: {rust}");
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
 }
 
@@ -2155,9 +2107,9 @@ function main() {
 fn test_stress_e2e_data_pipeline() {
     let source = r#"function main() {
   const nums: Array<i32> = [1, 2, 3, 4, 5];
-  let total: i32 = 0;
+  let total: i64 = 0;
   for (const n of nums) {
-    total = total + n;
+    total += n;
   }
   console.log(total);
 }"#;
