@@ -865,9 +865,7 @@ type NotString = i32 extends string ? bool : f64"#;
 
 #[test]
 fn test_stress_types_25_intersection_types() {
-    // NOTE: intersection types currently lower to type alias of the first type,
-    // not a merged struct. This test validates compilation succeeds and the
-    // alias is generated.
+    // Intersection types merge fields from all constituent struct types.
     let source = r#"type Named = { name: string }
 type Aged = { age: i32 }
 type Person = Named & Aged
@@ -886,10 +884,97 @@ function main() {
         "should have Aged struct: {rust}"
     );
     assert!(
-        rust.contains("Person"),
-        "should reference Person type: {rust}"
+        rust.contains("struct Person"),
+        "should have Person struct (merged intersection): {rust}"
     );
     assert!(!rust.contains("todo!()"), "should not have todo: {rust}");
+}
+
+#[test]
+fn test_intersection_merges_fields() {
+    // Two inline object types intersected produce a struct with all fields.
+    let source = r#"type A = { x: i32 }
+type B = { y: string }
+type C = A & B
+
+function main() {
+  const c: C = { x: 42, y: "hello" };
+  console.log(c.x);
+  console.log(c.y);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("struct C"),
+        "intersection should produce struct C: {rust}"
+    );
+    // Verify the struct contains both fields
+    assert!(
+        rust.contains("x:") || rust.contains("x :"),
+        "struct C should have field x: {rust}"
+    );
+    assert!(
+        rust.contains("y:") || rust.contains("y :"),
+        "struct C should have field y: {rust}"
+    );
+}
+
+#[test]
+fn test_intersection_three_types() {
+    // Three types intersected should merge all fields.
+    let source = r#"type HasName = { name: string }
+type HasAge = { age: i32 }
+type HasEmail = { email: string }
+type Person = HasName & HasAge & HasEmail
+
+function main() {
+  const p: Person = { name: "Alice", age: 30, email: "alice@example.com" };
+  console.log(p.name);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("struct Person"),
+        "three-way intersection should produce struct Person: {rust}"
+    );
+    // Verify the struct contains all three fields
+    assert!(
+        rust.contains("name"),
+        "Person should have name field: {rust}"
+    );
+    assert!(
+        rust.contains("age"),
+        "Person should have age field: {rust}"
+    );
+    assert!(
+        rust.contains("email"),
+        "Person should have email field: {rust}"
+    );
+}
+
+#[test]
+fn test_intersection_with_named_types() {
+    // Intersection of named types: type C = A & B
+    let source = r#"type A = { x: i32 }
+type B = { y: string }
+type C = A & B
+
+function main() {
+  const c: C = { x: 1, y: "test" };
+  console.log(c.x);
+  console.log(c.y);
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("struct C"),
+        "intersection of named types should produce struct C: {rust}"
+    );
+    assert!(
+        rust.contains("struct A"),
+        "should still have struct A: {rust}"
+    );
+    assert!(
+        rust.contains("struct B"),
+        "should still have struct B: {rust}"
+    );
 }
 
 // ---------------------------------------------------------------------------

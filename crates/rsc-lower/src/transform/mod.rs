@@ -580,6 +580,26 @@ impl Transform {
                                     ident.name
                                 )));
                             }
+                        } else if let ast::TypeKind::Intersection(ref members) = alias.kind {
+                            // Intersection type: type X = A & B
+                            // Merge fields from all constituent struct types into one struct.
+                            let merged = self.collect_intersection_fields(members, td, &mut ctx);
+                            if !merged.is_empty() {
+                                let mut lowered = self.lower_intersection_struct(td, &merged);
+                                lowered.public = exported;
+                                items.push(RustItem::Struct(lowered));
+                            } else {
+                                // Fallback: produce a type alias to the first member
+                                let rust_ty = self.resolve_type_alias_body(alias, td, &mut ctx);
+                                self.type_alias_types
+                                    .insert(td.name.name.clone(), rust_ty.clone());
+                                items.push(RustItem::TypeAlias(RustTypeAlias {
+                                    public: exported,
+                                    name: td.name.name.clone(),
+                                    ty: rust_ty,
+                                    span: Some(td.span),
+                                }));
+                            }
                         } else {
                             // Non-utility type alias: type X = SomeType
                             let rust_ty = self.resolve_type_alias_body(alias, td, &mut ctx);
@@ -829,6 +849,16 @@ impl Transform {
                 }
                 return;
             }
+            // Intersection type alias: type X = A & B
+            // Merge fields from all constituent struct types into one struct.
+            if let ast::TypeKind::Intersection(ref members) = alias.kind {
+                let merged = self.collect_intersection_fields(members, td, ctx);
+                if !merged.is_empty() {
+                    self.type_registry
+                        .register(td.name.name.clone(), merged);
+                    return;
+                }
+            }
             // Non-utility type alias — register as empty struct
             // (the actual lowering will produce a type alias)
             self.type_registry
@@ -855,6 +885,108 @@ impl Transform {
             ctx.emit_diagnostic(d);
         }
         self.type_registry.register(td.name.name.clone(), fields);
+    }
+
+    /// Collect merged fields from all constituent types of an intersection.
+    ///
+    /// For `type X = A & B`, looks up A and B in the type registry and merges
+    /// their fields. Duplicate field names are kept once (first occurrence wins).
+    /// Returns an empty vec if any member is not a struct type.
+    fn collect_intersection_fields(
+        &self,
+        members: &[ast::TypeAnnotation],
+        td: &ast::TypeDef,
+        ctx: &mut LoweringContext,
+    ) -> Vec<(String, Type)> {
+        let mut merged_fields: Vec<(String, Type)> = Vec::new();
+        let mut seen_names: HashSet<String> = HashSet::new();
+        let generic_names = collect_generic_param_names(td.type_params.as_ref());
+
+        for member in members {
+            match &member.kind {
+                ast::TypeKind::Named(ident) => {
+                    if let Some(reg_type) = self.type_registry.lookup(&ident.name) {
+                        if let Some(fields) = reg_type.struct_fields() {
+                            for (name, ty) in fields {
+                                if seen_names.insert(name.clone()) {
+                                    merged_fields.push((name.clone(), ty.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Inline object types are not supported in type annotation position,
+                // but handle Named types with generics gracefully.
+                _ => {
+                    // Resolve the member type normally for non-named types
+                    let mut diags = Vec::new();
+                    let ty = resolve::resolve_type_annotation_with_generics(
+                        member,
+                        &self.type_registry,
+                        &generic_names,
+                        &mut diags,
+                    );
+                    for d in diags {
+                        ctx.emit_diagnostic(d);
+                    }
+                    // If this resolves to a named type, try looking it up
+                    if let Type::Named(ref name) = ty {
+                        if let Some(reg_type) = self.type_registry.lookup(name) {
+                            if let Some(fields) = reg_type.struct_fields() {
+                                for (name, ty) in fields {
+                                    if seen_names.insert(name.clone()) {
+                                        merged_fields.push((name.clone(), ty.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        merged_fields
+    }
+
+    /// Lower an intersection type alias to a Rust struct with merged fields.
+    ///
+    /// `type Person = Named & Aged` where Named has `name: String` and Aged has
+    /// `age: i32` produces `struct Person { pub name: String, pub age: i32 }`.
+    fn lower_intersection_struct(
+        &self,
+        td: &ast::TypeDef,
+        merged_fields: &[(String, Type)],
+    ) -> RustStructDef {
+        let type_params = lower_type_params(td.type_params.as_ref());
+        let fields: Vec<RustFieldDef> = merged_fields
+            .iter()
+            .map(|(name, ty)| {
+                let rust_ty = rsc_typeck::bridge::type_to_rust_type(ty);
+                RustFieldDef {
+                    public: true,
+                    name: name.clone(),
+                    ty: rust_ty,
+                    doc_comment: None,
+                    span: Some(td.span),
+                }
+            })
+            .collect();
+        let field_types: Vec<&RustType> = fields.iter().map(|f| &f.ty).collect();
+        let has_type_params = !type_params.is_empty();
+        let derives = merge_derives(
+            derive_inference::infer_struct_derives(&field_types, has_type_params),
+            &td.derives,
+        );
+        RustStructDef {
+            public: false,
+            name: td.name.name.clone(),
+            type_params,
+            fields,
+            derives,
+            attributes: vec![],
+            doc_comment: td.doc_comment.clone(),
+            span: Some(td.span),
+        }
     }
 
     /// Lower a type definition to a Rust struct.
