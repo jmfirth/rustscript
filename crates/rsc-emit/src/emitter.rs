@@ -1817,6 +1817,9 @@ impl Emitter {
             IteratorOp::Cloned => {
                 self.write(".cloned()");
             }
+            IteratorOp::Rev => {
+                self.write(".rev()");
+            }
         }
     }
 

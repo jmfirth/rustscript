@@ -1327,6 +1327,8 @@ pub enum IteratorOp {
     FilterFnRef(Box<RustExpr>),
     /// `.cloned()` — clone referenced elements to produce owned values.
     Cloned,
+    /// `.rev()` — reverse the iterator direction.
+    Rev,
 }
 
 /// The terminal operation of an iterator chain.
