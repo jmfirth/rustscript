@@ -3085,6 +3085,34 @@ function main() {
 }
 
 #[test]
+fn test_snapshot_angle_bracket_cast_emits_same_as_as_cast() {
+    let source_angle = "\
+function main() {
+  const x: i64 = 42;
+  const y: f64 = <f64>x;
+  console.log(y);
+}";
+
+    let source_as = "\
+function main() {
+  const x: i64 = 42;
+  const y: f64 = x as f64;
+  console.log(y);
+}";
+
+    let actual_angle = compile_to_rust(source_angle);
+    let actual_as = compile_to_rust(source_as);
+    assert!(
+        actual_angle.contains("x as f64"),
+        "angle bracket cast should emit 'as f64', got: {actual_angle}"
+    );
+    assert_eq!(
+        actual_angle, actual_as,
+        "angle bracket cast and as cast should produce identical output"
+    );
+}
+
+#[test]
 fn test_snapshot_typeof_number_emits_string_literal() {
     let source = "\
 function main() {

@@ -3278,7 +3278,10 @@ impl<'src> Parser<'src> {
 
         // Check for binding keyword (const/let/var) — could be for-of/for-in or classic
         let binding_token = self.current_token().clone();
-        let has_binding = matches!(&binding_token.kind, TokenKind::Const | TokenKind::Let | TokenKind::Var);
+        let has_binding = matches!(
+            &binding_token.kind,
+            TokenKind::Const | TokenKind::Let | TokenKind::Var
+        );
 
         if has_binding {
             let binding = match &binding_token.kind {
@@ -4449,6 +4452,20 @@ impl<'src> Parser<'src> {
                 let span = op_token.span.merge(operand.span);
                 Some(Expr {
                     kind: ExprKind::PrefixDecrement(Box::new(operand)),
+                    span,
+                })
+            }
+            TokenKind::Lt => {
+                // Angle bracket type cast: `<Type>expr`
+                // In expression-start position, `<` is always a type cast
+                // (less-than is handled as a binary op in parse_comparison).
+                let open = self.advance(); // consume `<`
+                let ty = self.parse_type_annotation()?;
+                self.expect(&TokenKind::Gt)?;
+                let operand = self.parse_unary()?;
+                let span = open.span.merge(operand.span);
+                Some(Expr {
+                    kind: ExprKind::Cast(Box::new(operand), ty),
                     span,
                 })
             }
@@ -9503,6 +9520,74 @@ function main(): void {
                 );
             } else {
                 panic!("expected Cast, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_angle_bracket_cast() {
+        let module = parse_ok("function f() { const x: string = <string>value; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Cast(ref inner, ref ty) = decl.init.kind {
+                assert!(
+                    matches!(&ty.kind, TypeKind::Named(ident) if ident.name == "string"),
+                    "expected string type, got: {:?}",
+                    ty.kind
+                );
+                assert!(
+                    matches!(&inner.kind, ExprKind::Ident(ident) if ident.name == "value"),
+                    "expected ident 'value', got: {:?}",
+                    inner.kind
+                );
+            } else {
+                panic!("expected Cast, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_angle_bracket_cast_complex_type() {
+        let module = parse_ok("function f() { const x = <Array<i32>>y; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Cast(ref inner, ref ty) = decl.init.kind {
+                assert!(
+                    matches!(&ty.kind, TypeKind::Generic(ident, args)
+                        if ident.name == "Array" && args.len() == 1),
+                    "expected Array<i32> type, got: {:?}",
+                    ty.kind
+                );
+                assert!(
+                    matches!(&inner.kind, ExprKind::Ident(ident) if ident.name == "y"),
+                    "expected ident 'y', got: {:?}",
+                    inner.kind
+                );
+            } else {
+                panic!("expected Cast, got: {:?}", decl.init.kind);
+            }
+        } else {
+            panic!("expected VarDecl");
+        }
+    }
+
+    #[test]
+    fn test_parser_less_than_not_confused() {
+        // `a < b` in binary position should still parse as comparison, not cast
+        let module = parse_ok("function f() { const x: bool = a < b; }");
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::VarDecl(decl) = stmt {
+            if let ExprKind::Binary(ref bin) = decl.init.kind {
+                assert_eq!(bin.op, BinaryOp::Lt);
+            } else {
+                panic!("expected Binary Lt, got: {:?}", decl.init.kind);
             }
         } else {
             panic!("expected VarDecl");
