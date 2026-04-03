@@ -96,6 +96,12 @@ impl Transform {
                     &generic_names,
                     &mut diags,
                 );
+                // Optional fields (`name?: Type`) wrap the resolved type in Option<T>
+                let ty = if f.optional {
+                    Type::Option(Box::new(ty))
+                } else {
+                    ty
+                };
                 (f.name.name.clone(), ty)
             })
             .collect();
@@ -226,6 +232,12 @@ impl Transform {
                     &generic_names,
                     &mut diags,
                 );
+                // Optional fields (`name?: Type`) wrap in Option<T>
+                let ty = if f.optional {
+                    Type::Option(Box::new(ty))
+                } else {
+                    ty
+                };
                 let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
                 RustFieldDef {
                     public: true,
@@ -1415,6 +1427,12 @@ impl Transform {
                                 &[],
                                 &mut diags,
                             );
+                            // Optional fields (`name?: Type`) wrap in Option<T>
+                            let ty = if f.optional {
+                                Type::Option(Box::new(ty))
+                            } else {
+                                ty
+                            };
                             let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
                             RustFieldDef {
                                 public: true,

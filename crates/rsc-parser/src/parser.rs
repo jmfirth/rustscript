@@ -1456,6 +1456,7 @@ impl<'src> Parser<'src> {
                 fields.push(FieldDef {
                     name: field_name,
                     type_ann,
+                    optional: false,
                     span: field_span,
                 });
             }
@@ -1607,6 +1608,8 @@ impl<'src> Parser<'src> {
             let Some(name) = self.parse_ident() else {
                 break;
             };
+            // Check for optional field syntax: `name?: Type`
+            let optional = self.eat(&TokenKind::Question);
             if self.expect(&TokenKind::Colon).is_none() {
                 break;
             }
@@ -1617,6 +1620,7 @@ impl<'src> Parser<'src> {
             fields.push(FieldDef {
                 name,
                 type_ann,
+                optional,
                 span: field_span,
             });
 
@@ -7202,6 +7206,44 @@ mod tests {
                 assert_eq!(td.fields.len(), 2);
                 assert_eq!(td.fields[0].name.name, "name");
                 assert_eq!(td.fields[1].name.name, "age");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test: Parse optional field in type def: `port?: i32` produces optional field
+    #[test]
+    fn test_parser_optional_field_in_type_def() {
+        let source = "type Config = { port?: i32 }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Config");
+                assert_eq!(td.fields.len(), 1);
+                assert_eq!(td.fields[0].name.name, "port");
+                assert!(td.fields[0].optional, "port field should be optional");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test: Mix of required and optional fields in type def
+    #[test]
+    fn test_parser_optional_field_mixed() {
+        let source = "type Config = { host: string, port?: i32, debug?: bool }";
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Config");
+                assert_eq!(td.fields.len(), 3);
+                assert_eq!(td.fields[0].name.name, "host");
+                assert!(!td.fields[0].optional, "host should not be optional");
+                assert_eq!(td.fields[1].name.name, "port");
+                assert!(td.fields[1].optional, "port should be optional");
+                assert_eq!(td.fields[2].name.name, "debug");
+                assert!(td.fields[2].optional, "debug should be optional");
             }
             _ => panic!("expected TypeDef"),
         }

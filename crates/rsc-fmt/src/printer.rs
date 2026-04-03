@@ -546,7 +546,11 @@ impl Printer {
     /// Print a field definition.
     fn print_field_def(&mut self, field: &FieldDef) {
         self.write(&field.name.name);
-        self.write(": ");
+        if field.optional {
+            self.write("?: ");
+        } else {
+            self.write(": ");
+        }
         self.print_type_annotation(&field.type_ann);
     }
 

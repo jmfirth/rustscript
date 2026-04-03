@@ -2025,7 +2025,6 @@ function main() {
 
 #[test]
 fn test_conformance_type_required() {
-    // NOTE: Required utility type + optional field syntax may not be supported yet.
     let source = r#"
 type MaybeConfig = { host?: string, port?: i32 }
 type FullConfig = Required<MaybeConfig>
@@ -2033,7 +2032,10 @@ type FullConfig = Required<MaybeConfig>
 function main() {
   console.log("done");
 }"#;
-    let _result = compile_source(source, "test.rts");
+    let rust = compile_to_rust(source);
+    // MaybeConfig fields should be Option<T>
+    assert!(rust.contains("Option<String>"), "host? should produce Option<String>: {rust}");
+    assert!(rust.contains("Option<i32>"), "port? should produce Option<i32>: {rust}");
 }
 
 #[test]
@@ -2049,7 +2051,6 @@ function main() {
 
 #[test]
 fn test_conformance_type_optional_field() {
-    // NOTE: Optional field syntax `port?: i32` may not be fully supported yet.
     let source = r#"
 type Config = { host: string, port?: i32 }
 
@@ -2057,7 +2058,10 @@ function main() {
   const c: Config = { host: "localhost" };
   console.log(c.host);
 }"#;
-    let _result = compile_source(source, "test.rts");
+    let rust = compile_to_rust(source);
+    // host should be String (not Option), port should be Option<i32>
+    assert!(rust.contains("pub host: String"), "host should be String: {rust}");
+    assert!(rust.contains("pub port: Option<i32>"), "port? should produce Option<i32>: {rust}");
 }
 
 // ===========================================================================

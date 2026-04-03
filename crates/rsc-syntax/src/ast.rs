@@ -589,14 +589,18 @@ pub struct ClassSetter {
 
 /// A field in a type definition.
 ///
-/// Corresponds to `name: Type` within a type definition body.
-/// Lowers to a `pub` field in the Rust struct.
+/// Corresponds to `name: Type` or `name?: Type` within a type definition body.
+/// Lowers to a `pub` field in the Rust struct. Optional fields (`name?: Type`)
+/// lower to `Option<T>`.
 #[derive(Debug, Clone)]
 pub struct FieldDef {
     /// The field name.
     pub name: Ident,
     /// The field type annotation.
     pub type_ann: TypeAnnotation,
+    /// Whether this field is optional (`name?: Type` syntax).
+    /// Lowers to `Option<T>` in Rust.
+    pub optional: bool,
     /// The span covering the field definition.
     pub span: Span,
 }
