@@ -335,6 +335,17 @@ impl UseMap {
                     uses,
                 );
             }
+            ast::Stmt::Block(block) => {
+                for inner_stmt in &block.stmts {
+                    Self::collect_stmt_uses(
+                        inner_stmt,
+                        stmt_index,
+                        is_ref_call,
+                        callee_param_modes,
+                        uses,
+                    );
+                }
+            }
             ast::Stmt::Break(_)
             | ast::Stmt::Continue(_)
             | ast::Stmt::RustBlock(_)
@@ -985,6 +996,11 @@ fn collect_assignments(stmt: &ast::Stmt, reassigned: &mut HashSet<String>) {
                 }
             }
         }
+        ast::Stmt::Block(block) => {
+            for inner in &block.stmts {
+                collect_assignments(inner, reassigned);
+            }
+        }
     }
 }
 
@@ -1333,6 +1349,11 @@ fn collect_param_usage_stmt(
         }
         ast::Stmt::Using(decl) => {
             collect_param_usage_expr(&decl.init, param_set, is_ref_call, result);
+        }
+        ast::Stmt::Block(block) => {
+            for inner in &block.stmts {
+                collect_param_usage_stmt(inner, param_set, is_ref_call, result);
+            }
         }
         ast::Stmt::Break(_)
         | ast::Stmt::Continue(_)
@@ -1855,6 +1876,11 @@ fn collect_idents_in_stmt(stmt: &ast::Stmt, names: &mut HashSet<String>) {
         ast::Stmt::Destructure(d) => collect_idents_in_expr(&d.init, names),
         ast::Stmt::ArrayDestructure(ad) => collect_idents_in_expr(&ad.init, names),
         ast::Stmt::Using(decl) => collect_idents_in_expr(&decl.init, names),
+        ast::Stmt::Block(block) => {
+            for s in &block.stmts {
+                collect_idents_in_stmt(s, names);
+            }
+        }
         ast::Stmt::Break(_)
         | ast::Stmt::Continue(_)
         | ast::Stmt::RustBlock(_)

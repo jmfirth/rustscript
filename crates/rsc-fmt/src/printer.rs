@@ -10,7 +10,8 @@ use rsc_syntax::ast::{
     DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr, ExprKind,
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt, ForInStmt,
     ForInit, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, InlineRustBlock,
-    InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, MethodCallExpr, Module,
+    InterfaceDef, InterfaceField, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
+    MethodCallExpr, Module,
     NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
     ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchPattern, SwitchStmt,
     TemplateLitExpr,
@@ -685,6 +686,9 @@ impl Printer {
         self.print_optional_type_params(iface.type_params.as_ref());
         self.writeln(" {");
         self.indent();
+        for field in &iface.fields {
+            self.print_interface_field(field);
+        }
         for method in &iface.methods {
             self.print_interface_method(method);
         }
@@ -701,6 +705,14 @@ impl Printer {
         if let Some(ret) = &method.return_type {
             self.print_return_type(ret);
         }
+        self.writeln(";");
+    }
+
+    /// Print an interface field declaration.
+    fn print_interface_field(&mut self, field: &InterfaceField) {
+        self.write(&field.name.name);
+        self.write(": ");
+        self.print_type_annotation(&field.type_ann);
         self.writeln(";");
     }
 
@@ -973,6 +985,15 @@ impl Printer {
             Stmt::RustBlock(rb) => self.print_rust_block(rb),
             Stmt::Using(u) => self.print_using_decl(u),
             Stmt::Debugger(_) => self.writeln("debugger;"),
+            Stmt::Block(block) => {
+                self.writeln("{");
+                self.indent();
+                for s in &block.stmts {
+                    self.print_stmt(s);
+                }
+                self.dedent();
+                self.writeln("}");
+            }
         }
     }
 

@@ -662,6 +662,9 @@ pub enum RustStmt {
     /// An infinite `loop { ... }` with an internal break condition.
     /// Produced by lowering `do { ... } while (condition)`.
     Loop(RustLoopStmt),
+    /// A bare block scope: `{ stmts }`.
+    /// Produced by lowering standalone `{ ... }` blocks in statement position.
+    Block(RustBlock),
 }
 
 /// A `try {} finally {}` block without catch.

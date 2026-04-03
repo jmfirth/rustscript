@@ -618,6 +618,9 @@ fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_ha
         RustStmt::Loop(loop_stmt) => {
             scan_block_for_collections(&loop_stmt.body, needs_hashmap, needs_hashset);
         }
+        RustStmt::Block(block) => {
+            scan_block_for_collections(block, needs_hashmap, needs_hashset);
+        }
         RustStmt::Break { .. } | RustStmt::Continue { .. } | RustStmt::RawRust(_) => {}
     }
 }
