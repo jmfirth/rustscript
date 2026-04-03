@@ -1551,8 +1551,6 @@ function main() {
 
 #[test]
 fn test_conformance_closure_destructured_param() {
-    // NOTE: Destructuring in closure params is not yet supported.
-    // This test verifies the compiler doesn't crash on this pattern.
     let source = r#"
 type Pair = { name: string, age: i32 }
 
@@ -1561,8 +1559,7 @@ function main() {
   const names = pairs.map(({ name, age }: Pair): string => name);
   console.log(names.length);
 }"#;
-    let _result = compile_source(source, "test.rts");
-    // Does not crash — feature may or may not be supported
+    assert!(compiles_ok(source), "destructuring in closure params should compile");
 }
 
 #[test]
@@ -1647,8 +1644,6 @@ function main() {
 
 #[test]
 fn test_conformance_closure_immediate_return_struct() {
-    // NOTE: Closure returning struct literal in block body may not be supported yet.
-    // This test verifies the compiler doesn't crash on this pattern.
     let source = r#"
 type Point = { x: i32, y: i32 }
 
@@ -1657,8 +1652,8 @@ function main() {
   const points = nums.map((n: i32): Point => { return { x: n, y: n * 2 }; });
   console.log(points.length);
 }"#;
-    let _result = compile_source(source, "test.rts");
-    // Does not crash — feature may or may not be supported
+    // Known gap: closure returning struct literal in block body — struct type inference doesn't reach into closure return position
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
@@ -1702,7 +1697,6 @@ function main() {
 
 #[test]
 fn test_conformance_loop_destructuring_in_while() {
-    // NOTE: Destructuring inside while body with array index may not be supported yet.
     let source = r#"
 type Pair = { a: i32, b: i32 }
 
@@ -1715,12 +1709,12 @@ function main() {
     i = i + 1;
   }
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: destructuring in while body with array index — type inference for indexed access
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
 fn test_conformance_loop_switch_inside_for() {
-    // NOTE: Switch inside for-of may not be fully supported yet.
     let source = r#"
 function main() {
   const commands: Array<string> = ["start", "stop", "start"];
@@ -1731,7 +1725,8 @@ function main() {
     }
   }
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: switch inside for-of — switch type inference for loop variables
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
@@ -1914,7 +1909,6 @@ function main() {
 
 #[test]
 fn test_conformance_type_function_type_as_param() {
-    // NOTE: Function type syntax `(x: i32) => i32` in param position may not parse yet.
     let source = r#"
 function apply(f: (x: i32) => i32, val: i32): i32 {
   return f(val);
@@ -1924,7 +1918,7 @@ function main() {
   const result = apply((x: i32): i32 => x * 2, 21);
   console.log(result);
 }"#;
-    let _result = compile_source(source, "test.rts");
+    assert!(compiles_ok(source), "function type with named params should compile");
 }
 
 #[test]
@@ -2099,7 +2093,6 @@ function main() {
 
 #[test]
 fn test_conformance_nested_switch_inside_if() {
-    // NOTE: Switch inside if body may not be fully supported yet.
     let source = r#"
 function main() {
   const mode = "fast";
@@ -2110,12 +2103,12 @@ function main() {
     }
   }
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: switch inside if body — switch type inference in nested context
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
 fn test_conformance_nested_for_inside_switch() {
-    // NOTE: For loop inside switch case block may not be fully supported yet.
     let source = r#"
 function main() {
   const mode = "iterate";
@@ -2127,7 +2120,8 @@ function main() {
     }
   }
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: for loop inside switch case — block parsing in case body
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
@@ -2173,7 +2167,6 @@ function main() {
 
 #[test]
 fn test_conformance_nested_var_in_block() {
-    // NOTE: Bare block scopes (not attached to if/for/etc) may not be supported yet.
     let source = r#"
 function main() {
   let x: i32 = 1;
@@ -2183,12 +2176,11 @@ function main() {
   }
   console.log(x);
 }"#;
-    let _result = compile_source(source, "test.rts");
+    assert!(compiles_ok(source), "bare block scopes should compile");
 }
 
 #[test]
 fn test_conformance_nested_labeled_break_switch_in_loop() {
-    // NOTE: Labeled break from switch inside loop may not be fully supported yet.
     let source = r#"
 function main() {
   const items: Array<string> = ["a", "stop", "b"];
@@ -2199,7 +2191,8 @@ function main() {
     console.log(item);
   }
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: labeled break from switch inside loop — switch type inference + label propagation
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 #[test]
@@ -2299,7 +2292,6 @@ function main() {
 
 #[test]
 fn test_conformance_class_constructor_defaults_and_super() {
-    // NOTE: Constructor with default param values may not be fully supported yet.
     let source = r#"
 class Base {
   name: string;
@@ -2320,7 +2312,7 @@ function main() {
   const d = new Derived("test", 42);
   console.log(d.name);
 }"#;
-    let _result = compile_source(source, "test.rts");
+    assert!(compiles_ok(source), "constructor with default params should compile");
 }
 
 #[test]
@@ -2583,7 +2575,6 @@ function main() {
 
 #[test]
 fn test_conformance_interact_enum_in_switch() {
-    // NOTE: Enum member access in switch cases (Color.Red) may not be fully supported yet.
     let source = r#"
 enum Color {
   Red = "red",
@@ -2602,7 +2593,7 @@ function describe(c: Color): string {
 function main() {
   console.log(describe(Color.Red));
 }"#;
-    let _result = compile_source(source, "test.rts");
+    assert!(compiles_ok(source), "enum member access in switch cases should compile");
 }
 
 #[test]
@@ -2737,7 +2728,6 @@ function main() {
 
 #[test]
 fn test_conformance_interact_interface_with_methods_and_fields() {
-    // NOTE: Interface with both fields and methods may not be fully supported yet.
     let source = r#"
 interface Describable {
   name: string;
@@ -2760,7 +2750,7 @@ function main() {
   const p = new Product("Widget", 9.99);
   console.log(p.describe());
 }"#;
-    let _result = compile_source(source, "test.rts");
+    assert!(compiles_ok(source), "interface with fields and methods should compile");
 }
 
 #[test]
@@ -2786,7 +2776,6 @@ function main() {
 
 #[test]
 fn test_conformance_interact_multiple_generics() {
-    // NOTE: Multiple generic type parameters may not be fully supported yet.
     let source = r#"
 function pair<A, B>(a: A, b: B): [A, B] {
   return [a, b];
@@ -2797,7 +2786,8 @@ function main() {
   console.log(p[0]);
   console.log(p[1]);
 }"#;
-    let _result = compile_source(source, "test.rts");
+    // Known gap: multiple generic type params with tuple return — tuple type + multi-generic interaction
+    let _result = compile_source(source, "conformance_test.rts");
 }
 
 // ===========================================================================
