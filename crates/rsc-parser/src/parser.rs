@@ -2849,6 +2849,9 @@ impl<'src> Parser<'src> {
 
     /// Parse a function type annotation: `(i32, string) => i32`.
     ///
+    /// Also handles named parameters: `(x: i32, y: string) => bool`.
+    /// Named parameter names are discarded — only the types matter.
+    ///
     /// Called when `(` is seen in type annotation position.
     fn parse_function_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let start = self.current_token().span;
@@ -2857,6 +2860,20 @@ impl<'src> Parser<'src> {
         let mut param_types = Vec::new();
         if !self.check(&TokenKind::RParen) && !self.at_end() {
             loop {
+                // If we see `Ident :`, it's a named parameter — consume the name
+                // and colon, then parse the type. This supports TypeScript-style
+                // function types like `(x: i32) => i32`.
+                if matches!(self.peek(), TokenKind::Ident(_))
+                    && self
+                        .tokens
+                        .get(self.pos + 1)
+                        .map(|t| &t.kind)
+                        == Some(&TokenKind::Colon)
+                {
+                    self.advance(); // consume parameter name
+                    self.advance(); // consume `:`
+                }
+
                 let ty = self.parse_type_annotation()?;
                 param_types.push(ty);
 
@@ -8388,6 +8405,79 @@ function fail() throws string {
         match &f.params[1].type_ann.kind {
             TypeKind::Function(params, ret) => {
                 assert_eq!(params.len(), 1);
+                assert!(matches!(&ret.kind, TypeKind::Named(ident) if ident.name == "i32"));
+            }
+            other => panic!("expected Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fn_type_named_params() {
+        let source = "function apply(fn_: (x: i32) => i32, value: i32): i32 { return fn_(value); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0].name.name, "fn_");
+        match &f.params[0].type_ann.kind {
+            TypeKind::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(&params[0].kind, TypeKind::Named(ident) if ident.name == "i32"));
+                assert!(matches!(&ret.kind, TypeKind::Named(ident) if ident.name == "i32"));
+            }
+            other => panic!("expected Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fn_type_multiple_named_params() {
+        let source =
+            "function apply(fn_: (x: i32, y: string) => bool): bool { return fn_(1, \"\"); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &f.params[0].type_ann.kind {
+            TypeKind::Function(params, ret) => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(&params[0].kind, TypeKind::Named(ident) if ident.name == "i32"));
+                assert!(
+                    matches!(&params[1].kind, TypeKind::Named(ident) if ident.name == "string")
+                );
+                assert!(matches!(&ret.kind, TypeKind::Named(ident) if ident.name == "bool"));
+            }
+            other => panic!("expected Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fn_type_unnamed_still_works() {
+        // Regression: unnamed params must still work after named-param support added.
+        let source = "function apply(f: (i32) => i32): i32 { return f(1); }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &f.params[0].type_ann.kind {
+            TypeKind::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(&params[0].kind, TypeKind::Named(ident) if ident.name == "i32"));
                 assert!(matches!(&ret.kind, TypeKind::Named(ident) if ident.name == "i32"));
             }
             other => panic!("expected Function type, got {other:?}"),
