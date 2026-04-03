@@ -418,6 +418,78 @@ function main() {
         );
     }
 
+    // ---- Multi-generic type parameter correctness scenarios ----
+
+    #[test]
+    fn test_compile_source_multi_generic_function() {
+        let source = r#"function swap<T, U>(a: T, b: U): T { return a; }"#;
+        let result = compile_source(source, "swap.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors for multi-generic function, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.rust_source.contains("fn swap<T, U>(a: T, b: U) -> T"),
+            "expected multi-generic function in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    #[test]
+    fn test_compile_source_multi_generic_type() {
+        let source = r#"type Pair<K, V> = { key: K, value: V }"#;
+        let result = compile_source(source, "pair2.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors for multi-generic type, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.rust_source.contains("struct Pair<K, V>"),
+            "expected multi-generic struct in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    #[test]
+    fn test_compile_source_multi_generic_constrained_and_unconstrained() {
+        let source =
+            r#"function process<T extends Clone, U>(a: T, b: U): T { return a; }"#;
+        let result = compile_source(source, "proc.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors for constrained+unconstrained generics, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("fn process<T: Clone, U>(a: T, b: U) -> T"),
+            "expected constrained+unconstrained generic in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
+    #[test]
+    fn test_compile_source_multi_generic_three_params() {
+        let source =
+            r#"function triple<T, U, V>(a: T, b: U, c: V): T { return a; }"#;
+        let result = compile_source(source, "triple.rts");
+        assert!(
+            !result.has_errors,
+            "expected no errors for three-param generic, got: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .rust_source
+                .contains("fn triple<T, U, V>(a: T, b: U, c: V) -> T"),
+            "expected three generic params in output, got:\n{}",
+            result.rust_source
+        );
+    }
+
     // ---- Task 020: T | null → Option correctness scenarios ----
 
     // Correctness scenario 1: Null check narrowing e2e
