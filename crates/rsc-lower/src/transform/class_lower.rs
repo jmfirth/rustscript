@@ -96,6 +96,58 @@ impl Transform {
             setters,
             static_methods,
         );
+
+        // Register constructor FnSignature for default-value filling at call sites.
+        // Key: "ClassName::new" — matches the StaticCall pattern used by `new ClassName(...)`.
+        for member in &cls.members {
+            if let ast::ClassMember::Constructor(ctor) = member {
+                let has_defaults = ctor.params.iter().any(|p| p.default_value.is_some());
+                if has_defaults {
+                    let use_map = ownership::UseMap::empty();
+                    let mut temp_diags = Vec::new();
+                    let param_types: Vec<RustType> = ctor
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let ty =
+                                rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                                    &p.type_ann,
+                                    &self.type_registry,
+                                    &generic_names,
+                                    &mut temp_diags,
+                                );
+                            rsc_typeck::bridge::type_to_rust_type(&ty)
+                        })
+                        .collect();
+                    let optional_params: Vec<bool> =
+                        ctor.params.iter().map(|p| p.default_value.is_some()).collect();
+                    let default_values: Vec<Option<RustExpr>> = ctor
+                        .params
+                        .iter()
+                        .map(|p| {
+                            p.default_value
+                                .as_ref()
+                                .map(|dv| self.lower_expr(dv, ctx, &use_map, 0))
+                        })
+                        .collect();
+                    let param_count = ctor.params.len();
+                    let key = format!("{}::new", cls.name.name);
+                    self.fn_signatures.insert(
+                        key,
+                        super::FnSignature {
+                            throws: false,
+                            param_types,
+                            param_modes: None,
+                            optional_params,
+                            default_values,
+                            has_rest_param: false,
+                            param_count,
+                        },
+                    );
+                }
+                break;
+            }
+        }
     }
 
     /// Lower a class definition to a struct + impl block(s).

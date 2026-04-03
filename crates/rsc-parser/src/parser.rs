@@ -2327,11 +2327,24 @@ impl<'src> Parser<'src> {
             let Some(type_ann) = self.parse_type_annotation() else {
                 break;
             };
-            let span = param_start.merge(self.previous_span());
+
+            // Default value: `name: Type = expr`
+            let default_value = if self.eat(&TokenKind::Eq) {
+                let Some(dv) = self.parse_expr() else {
+                    break;
+                };
+                Some(dv)
+            } else {
+                None
+            };
+
+            let end_span = default_value.as_ref().map_or(type_ann.span, |dv| dv.span);
+            let span = param_start.merge(end_span);
             params.push(ConstructorParam {
                 property_visibility,
                 name,
                 type_ann,
+                default_value,
                 span,
             });
             if !self.eat(&TokenKind::Comma) {
@@ -10291,6 +10304,82 @@ function main(): void {
             Some(Visibility::Private)
         );
         assert_eq!(ctor.params[1].name.name, "age");
+    }
+
+    #[test]
+    fn test_constructor_default_param() {
+        let module = parse_ok(
+            "class Server {
+                port: i32;
+                constructor(port: i32 = 8080) {
+                    this.port = port;
+                }
+            }",
+        );
+        let cls = first_class(&module);
+        let ctor = cls.members.iter().find_map(|m| match m {
+            ClassMember::Constructor(c) => Some(c),
+            _ => None,
+        });
+        let ctor = ctor.expect("should have constructor");
+        assert_eq!(ctor.params.len(), 1);
+        assert_eq!(ctor.params[0].name.name, "port");
+        assert!(
+            ctor.params[0].default_value.is_some(),
+            "port should have a default value"
+        );
+        if let Some(Expr {
+            kind: ExprKind::IntLit(v),
+            ..
+        }) = &ctor.params[0].default_value
+        {
+            assert_eq!(*v, 8080);
+        } else {
+            panic!("expected IntLit default value 8080");
+        }
+    }
+
+    #[test]
+    fn test_constructor_multiple_defaults() {
+        let module = parse_ok(
+            r#"class Config {
+                host: string;
+                port: i32;
+                constructor(host: string = "localhost", port: i32 = 3000) {
+                    this.host = host;
+                    this.port = port;
+                }
+            }"#,
+        );
+        let cls = first_class(&module);
+        let ctor = cls.members.iter().find_map(|m| match m {
+            ClassMember::Constructor(c) => Some(c),
+            _ => None,
+        });
+        let ctor = ctor.expect("should have constructor");
+        assert_eq!(ctor.params.len(), 2);
+        assert!(
+            ctor.params[0].default_value.is_some(),
+            "host should have default"
+        );
+        assert!(
+            ctor.params[1].default_value.is_some(),
+            "port should have default"
+        );
+    }
+
+    #[test]
+    fn test_function_default_still_works() {
+        // Regression: regular function defaults must still parse.
+        let source = "function serve(port: i32 = 8080): void { }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        if let ItemKind::Function(f) = &module.items[0].kind {
+            assert_eq!(f.params.len(), 1);
+            assert!(f.params[0].default_value.is_some());
+        } else {
+            panic!("expected function");
+        }
     }
 
     #[test]

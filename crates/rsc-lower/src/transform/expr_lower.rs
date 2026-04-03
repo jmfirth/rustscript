@@ -2225,6 +2225,22 @@ impl Transform {
             _ => {
                 // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`
                 // `new ClassName(args)` → `ClassName::new(args)` (class constructor)
+                //
+                // Fill in default values for omitted constructor arguments.
+                let mut args = args;
+                let sig_key = format!("{rust_type_name}::new");
+                if let Some(sig) = self.fn_signatures.get(&sig_key) {
+                    let supplied_count = args.len();
+                    for i in supplied_count..sig.param_count {
+                        if let Some(default_expr) =
+                            sig.default_values.get(i).and_then(|d| d.as_ref())
+                        {
+                            args.push(default_expr.clone());
+                        } else if sig.optional_params.get(i).copied().unwrap_or(false) {
+                            args.push(RustExpr::synthetic(RustExprKind::None));
+                        }
+                    }
+                }
                 RustExpr::new(
                     RustExprKind::StaticCall {
                         type_name: rust_type_name,
