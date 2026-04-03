@@ -45,7 +45,7 @@ impl Transform {
             .and_then(|info| extract_named_type(&info.ty))
             .unwrap_or_else(|| {
                 ctx.emit_diagnostic(Diagnostic::error(
-                    "cannot infer enum type for switch expression",
+                    "cannot infer enum type for switch expression; add a type annotation to the switch variable",
                 ));
                 "_UnknownEnum".to_owned()
             });

@@ -202,7 +202,7 @@ impl Transform {
                 // External `obj.#field` access — emit diagnostic
                 if fa.field.name.starts_with('#') {
                     ctx.emit_diagnostic(Diagnostic::error(format!(
-                        "cannot access private field `{}`",
+                        "cannot access private field `{}` from outside the class",
                         fa.field.name
                     )));
                 }
@@ -684,7 +684,7 @@ impl Transform {
                 // In expression context, lower the value as a fallback — the
                 // statement lowering path intercepts these before reaching here.
                 ctx.emit_diagnostic(Diagnostic::error(
-                    "logical assignment operators (??=, ||=, &&=) can only be used as statements",
+                    "logical assignment operators (??=, ||=, &&=) can only be used as statements, not inside expressions",
                 ));
                 self.lower_expr(&la.value, ctx, use_map, stmt_index)
             }
@@ -826,7 +826,7 @@ impl Transform {
                 // `new.target` is not meaningful in Rust — constructors are just functions.
                 // Emit a warning and lower to an empty string literal.
                 ctx.emit_diagnostic(Diagnostic::warning(
-                    "new.target is not supported in RustScript; there is no equivalent in Rust",
+                    "new.target is not supported in RustScript; constructors are regular functions and do not have a `new.target` equivalent",
                 ));
                 RustExpr::new(RustExprKind::StringLit(String::new()), expr.span)
             }
@@ -1822,7 +1822,7 @@ impl Transform {
             .map(|n| n.name.clone())
             .or_else(|| ctx.current_struct_type_name().map(String::from))
             .unwrap_or_else(|| {
-                ctx.emit_diagnostic(Diagnostic::error("cannot infer struct type for literal"));
+                ctx.emit_diagnostic(Diagnostic::error("cannot infer struct type for literal; specify the type explicitly, e.g., `const x: MyType = { ... }`"));
                 "_UnknownStruct".to_owned()
             });
 
@@ -2115,7 +2115,7 @@ impl Transform {
             ident.name.clone()
         } else {
             ctx.emit_diagnostic(Diagnostic::error(
-                "tagged template literal tag must be an identifier",
+                "tagged template literal tag must be a simple identifier, e.g., `html`...``",
             ));
             "unknown_tag".to_owned()
         };

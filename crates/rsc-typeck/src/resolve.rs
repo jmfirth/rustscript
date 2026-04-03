@@ -113,7 +113,10 @@ pub fn resolve_type_annotation(
         ast::TypeKind::Never => Type::Never,
         ast::TypeKind::Unknown => Type::Unknown,
         ast::TypeKind::Named(ident) => resolve_type_name(&ident.name).unwrap_or_else(|| {
-            diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
+            diagnostics.push(
+                Diagnostic::error(format!("unknown type `{}`", ident.name))
+                    .with_note("check that the type is defined or imported; built-in types include: i32, f64, bool, string, void"),
+            );
             Type::Primitive(PrimitiveType::I64)
         }),
         ast::TypeKind::Generic(ident, args) => {
@@ -158,8 +161,8 @@ pub fn resolve_type_annotation(
                         resolved.extend(inner_types);
                     } else {
                         diagnostics.push(Diagnostic::error(
-                            "spread in tuple type must refer to a tuple type".to_owned(),
-                        ));
+                            "spread in tuple type must refer to a tuple type",
+                        ).with_note("the `...T` syntax requires T to be a tuple type, e.g., `[...SomeTuple, string]`"));
                     }
                 } else {
                     resolved.push(resolve_type_annotation(t, diagnostics));
@@ -170,8 +173,8 @@ pub fn resolve_type_annotation(
         ast::TypeKind::TupleSpread(_) => {
             // TupleSpread outside of a Tuple — invalid position
             diagnostics.push(Diagnostic::error(
-                "spread type is only valid inside a tuple type".to_owned(),
-            ));
+                "spread type is only valid inside a tuple type",
+            ).with_note("use `...T` inside a tuple type like `[...T, string]`"));
             Type::Error
         }
         ast::TypeKind::IndexSignature(sig) => {
@@ -217,9 +220,8 @@ pub fn resolve_type_annotation(
         ast::TypeKind::Infer(_) => {
             // infer outside a conditional type — cannot resolve
             diagnostics.push(Diagnostic::error(
-                "`infer` is only valid inside the `extends` clause of a conditional type"
-                    .to_owned(),
-            ));
+                "`infer` is only valid inside the `extends` clause of a conditional type",
+            ).with_note("example: `type Unwrap<T> = T extends Array<infer U> ? U : T`"));
             Type::Error
         }
         ast::TypeKind::Readonly(inner) => {
@@ -297,7 +299,10 @@ pub fn resolve_type_annotation_with_generics(
                 return Type::Named(ident.name.clone());
             }
             // Unknown type
-            diagnostics.push(Diagnostic::error(format!("unknown type `{}`", ident.name)));
+            diagnostics.push(
+                Diagnostic::error(format!("unknown type `{}`", ident.name))
+                    .with_note("check that the type is defined or imported; built-in types include: i32, f64, bool, string, void"),
+            );
             Type::Primitive(PrimitiveType::I64)
         }
         ast::TypeKind::Generic(ident, args) => {
@@ -374,8 +379,8 @@ pub fn resolve_type_annotation_with_generics(
                         resolved.extend(inner_types);
                     } else {
                         diagnostics.push(Diagnostic::error(
-                            "spread in tuple type must refer to a tuple type".to_owned(),
-                        ));
+                            "spread in tuple type must refer to a tuple type",
+                        ).with_note("the `...T` syntax requires T to be a tuple type, e.g., `[...SomeTuple, string]`"));
                     }
                 } else {
                     resolved.push(resolve_type_annotation_with_generics(
@@ -390,9 +395,10 @@ pub fn resolve_type_annotation_with_generics(
         }
         ast::TypeKind::TupleSpread(_) => {
             // TupleSpread outside of a Tuple — invalid position
-            diagnostics.push(Diagnostic::error(
-                "spread type is only valid inside a tuple type".to_owned(),
-            ));
+            diagnostics.push(
+                Diagnostic::error("spread type is only valid inside a tuple type")
+                    .with_note("use `...T` inside a tuple type like `[...T, string]`"),
+            );
             Type::Error
         }
         ast::TypeKind::IndexSignature(sig) => {
@@ -473,10 +479,12 @@ pub fn resolve_type_annotation_with_generics(
         ),
         ast::TypeKind::Infer(_) => {
             // infer outside a conditional type — cannot resolve
-            diagnostics.push(Diagnostic::error(
-                "`infer` is only valid inside the `extends` clause of a conditional type"
-                    .to_owned(),
-            ));
+            diagnostics.push(
+                Diagnostic::error(
+                    "`infer` is only valid inside the `extends` clause of a conditional type",
+                )
+                .with_note("example: `type Unwrap<T> = T extends Array<infer U> ? U : T`"),
+            );
             Type::Error
         }
         ast::TypeKind::Readonly(inner) => {
@@ -566,9 +574,11 @@ fn resolve_index_access_type(
             )));
         }
     } else {
-        diagnostics.push(Diagnostic::error(format!(
-            "unknown type `{type_name}` in index access"
-        )));
+        diagnostics.push(
+            Diagnostic::error(format!("unknown type `{type_name}` in index access")).with_note(
+                "check that the type is defined before this index access type expression",
+            ),
+        );
     }
     Type::Error
 }

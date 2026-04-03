@@ -256,7 +256,8 @@ static ENRICHMENT_PATTERNS: LazyLock<EnrichmentPatterns> = LazyLock::new(|| Enri
     )
     .expect("valid regex"),
     type_mismatch: Regex::new(r"(?i)mismatched types|expected .*, found .*").expect("valid regex"),
-    trait_not_impl: Regex::new(r"(?i)the trait .* is not implemented").expect("valid regex"),
+    trait_not_impl: Regex::new(r"(?i)the (?:trait|abstract class) .* is not implemented")
+        .expect("valid regex"),
     lifetime_error: Regex::new(r"(?i)lifetime|does not live long enough").expect("valid regex"),
     value_not_found: Regex::new(r"(?i)cannot find value|not found in this scope")
         .expect("valid regex"),
@@ -498,7 +499,7 @@ fn enrich_error_message(message: &str) -> Option<String> {
     if p.borrow_conflict.is_match(message) {
         return Some(
             "You have a mutable reference and an immutable reference to the same \
-             value at the same time. Rust requires exclusive access for mutation. \
+             value at the same time. RustScript requires exclusive access for mutation. \
              Restructure so the mutable use completes before the immutable read."
                 .to_owned(),
         );
