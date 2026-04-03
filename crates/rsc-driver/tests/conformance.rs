@@ -3128,3 +3128,156 @@ class Foo {
         "incomplete class should produce error"
     );
 }
+
+// ===========================================================================
+// SWITCH STATEMENT: Integer, Enum Variant, and Regression Tests
+// ===========================================================================
+
+// Switch on integer values should compile to a Rust match on integers.
+#[test]
+fn test_switch_on_integer() {
+    let source = r#"
+function describe(x: i32): string {
+  switch (x) {
+    case 1: return "one";
+    case 2: return "two";
+    case 3: return "three";
+    default: return "other";
+  }
+}
+
+function main() {
+  console.log(describe(2));
+}
+"#;
+    let rust = compile_to_rust(source);
+    assert!(rust.contains("match x"), "should produce match on x: {rust}");
+    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
+    assert!(rust.contains("2 =>"), "should have integer pattern 2: {rust}");
+    assert!(rust.contains("3 =>"), "should have integer pattern 3: {rust}");
+    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+}
+
+// Switch on enum variant using Color.Red style member access.
+#[test]
+fn test_switch_on_enum_variant() {
+    let source = r#"
+const enum Color { Red, Green, Blue }
+
+function name_color(c: Color): string {
+  switch (c) {
+    case Color.Red: return "red";
+    case Color.Green: return "green";
+    case Color.Blue: return "blue";
+  }
+}
+
+function main() {
+  console.log(name_color(Color.Red));
+}
+"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match c"),
+        "should produce match on c: {rust}"
+    );
+    assert!(
+        rust.contains("Color::Red"),
+        "should have Color::Red pattern: {rust}"
+    );
+    assert!(
+        rust.contains("Color::Green"),
+        "should have Color::Green pattern: {rust}"
+    );
+    assert!(
+        rust.contains("Color::Blue"),
+        "should have Color::Blue pattern: {rust}"
+    );
+}
+
+// Regression: switch on string enum still works after the integer/enum changes.
+#[test]
+fn test_switch_on_string_still_works() {
+    let source = r#"
+type Direction = "north" | "south" | "east" | "west"
+
+function go(d: Direction): i32 {
+  switch (d) {
+    case "north": return 1;
+    case "south": return 2;
+    case "east": return 3;
+    case "west": return 4;
+  }
+}
+
+function main() {
+  console.log(go("north"));
+}
+"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match d"),
+        "should produce match on d: {rust}"
+    );
+    assert!(
+        rust.contains("Direction::North"),
+        "should have Direction::North: {rust}"
+    );
+    assert!(
+        rust.contains("Direction::South"),
+        "should have Direction::South: {rust}"
+    );
+}
+
+// Switch nested inside an if body.
+#[test]
+fn test_switch_nested_in_if() {
+    let source = r#"
+function classify(x: i32): string {
+  if (x > 0) {
+    switch (x) {
+      case 1: return "one";
+      case 2: return "two";
+      default: return "positive";
+    }
+  }
+  return "non-positive";
+}
+
+function main() {
+  console.log(classify(1));
+}
+"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match x"),
+        "should produce match inside if: {rust}"
+    );
+    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
+    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+}
+
+// Switch nested inside a for loop body.
+#[test]
+fn test_switch_nested_in_loop() {
+    let source = r#"
+function main() {
+  const items: Array<i32> = [1, 2, 3];
+  for (const x of items) {
+    switch (x) {
+      case 1: console.log("one"); break;
+      case 2: console.log("two"); break;
+      default: console.log("other"); break;
+    }
+  }
+}
+"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match x"),
+        "should produce match inside for loop: {rust}"
+    );
+    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
+    assert!(rust.contains("2 =>"), "should have integer pattern 2: {rust}");
+    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+}

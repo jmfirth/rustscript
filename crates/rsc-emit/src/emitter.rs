@@ -677,6 +677,17 @@ impl Emitter {
                 }
                 self.write(" }");
             }
+            RustPattern::IntLiteral(value) => {
+                self.write(&value.to_string());
+            }
+            RustPattern::StringLiteral(value) => {
+                self.write("\"");
+                self.write(value);
+                self.write("\"");
+            }
+            RustPattern::Wildcard => {
+                self.write("_");
+            }
         }
     }
 

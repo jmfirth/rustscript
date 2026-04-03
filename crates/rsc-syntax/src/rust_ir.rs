@@ -950,6 +950,12 @@ pub enum RustPattern {
     /// A destructuring enum variant: `Shape::Circle { radius }`.
     /// Fields: `(enum_name, variant_name, field_names)`.
     EnumVariantFields(String, String, Vec<String>),
+    /// An integer literal pattern: `1`, `-3`.
+    IntLiteral(i64),
+    /// A string literal pattern: `"hello"`.
+    StringLiteral(String),
+    /// The wildcard pattern: `_`.
+    Wildcard,
 }
 
 /// A Rust expression with optional source span.

@@ -16,7 +16,7 @@ use rsc_syntax::ast::{
     IndexSignature, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
     LogicalAssignExpr, LogicalAssignOp, MappedModifier, MethodCallExpr, Module, NewExpr,
     NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
+    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchPattern, SwitchStmt,
     TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
     TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl,
     VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
@@ -149,6 +149,12 @@ impl<'src> Parser<'src> {
     /// Check whether the current token matches the given kind without consuming it.
     fn check(&self, kind: &TokenKind) -> bool {
         self.peek() == kind
+    }
+
+    /// Check whether the current token is an identifier with the given name.
+    /// Used for contextual keywords like `default` that are not reserved words.
+    fn check_ident(&self, name: &str) -> bool {
+        matches!(self.peek(), TokenKind::Ident(n) if n == name)
     }
 
     /// Whether we have reached the end of the token stream.
@@ -3730,7 +3736,10 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a switch statement: `switch (expr) { case "v": stmts; ... }`.
+    /// Parse a switch statement: `switch (expr) { case <pattern>: stmts; ... default: stmts; }`.
+    ///
+    /// Patterns can be string literals (`"north"`), integer literals (`1`),
+    /// enum member access (`Color.Red`), or `default`.
     fn parse_switch_stmt(&mut self) -> Option<SwitchStmt> {
         let switch_token = self.advance(); // consume `switch`
         let start = switch_token.span;
@@ -3742,31 +3751,25 @@ impl<'src> Parser<'src> {
         self.expect(&TokenKind::LBrace)?;
 
         let mut cases = Vec::new();
-        while self.check(&TokenKind::Case) {
-            let case_token = self.advance(); // consume `case`
+        while self.check(&TokenKind::Case) || self.check_ident("default") {
+            let is_default = self.check_ident("default");
+            let case_token = self.advance(); // consume `case` or `default`
             let case_start = case_token.span;
 
-            let pattern_token = self.current_token().clone();
-            let pattern = if let TokenKind::StringLit(value) = &pattern_token.kind {
-                let v = value.clone();
-                self.advance();
-                v
+            let pattern = if is_default {
+                SwitchPattern::Default
             } else {
-                self.diagnostics.push(
-                    Diagnostic::error("expected string literal for case pattern").with_label(
-                        pattern_token.span,
-                        self.file_id,
-                        "expected string literal",
-                    ),
-                );
-                return None;
+                self.parse_switch_case_pattern()?
             };
 
             self.expect(&TokenKind::Colon)?;
 
-            // Parse the body: statements until next `case` or `}`
+            // Parse the body: statements until next `case`, `default`, or `}`
             let mut body = Vec::new();
-            while !self.check(&TokenKind::Case) && !self.check(&TokenKind::RBrace) && !self.at_end()
+            while !self.check(&TokenKind::Case)
+                && !self.check_ident("default")
+                && !self.check(&TokenKind::RBrace)
+                && !self.at_end()
             {
                 if let Some(stmt) = self.parse_stmt() {
                     body.push(stmt);
@@ -3787,6 +3790,82 @@ impl<'src> Parser<'src> {
             cases,
             span: start.merge(close.span),
         })
+    }
+
+    /// Parse a switch case pattern: string literal, integer literal, or enum member access.
+    fn parse_switch_case_pattern(&mut self) -> Option<SwitchPattern> {
+        let token = self.current_token().clone();
+        match &token.kind {
+            TokenKind::StringLit(value) => {
+                let v = value.clone();
+                self.advance();
+                Some(SwitchPattern::StringLit(v))
+            }
+            TokenKind::IntLit(value) => {
+                let v = *value;
+                self.advance();
+                Some(SwitchPattern::IntLit(v))
+            }
+            TokenKind::Minus => {
+                // Negative integer literal: `case -1:`
+                self.advance(); // consume `-`
+                let next = self.current_token().clone();
+                if let TokenKind::IntLit(value) = &next.kind {
+                    let v = -value;
+                    self.advance();
+                    Some(SwitchPattern::IntLit(v))
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error("expected integer literal after `-` in case pattern")
+                            .with_label(next.span, self.file_id, "expected integer literal"),
+                    );
+                    None
+                }
+            }
+            TokenKind::Ident(name) => {
+                let first = name.clone();
+                self.advance();
+                // Check for `Enum.Variant` (member access pattern)
+                if self.check(&TokenKind::Dot) {
+                    self.advance(); // consume `.`
+                    let variant_token = self.current_token().clone();
+                    if let TokenKind::Ident(variant) = &variant_token.kind {
+                        let v = variant.clone();
+                        self.advance();
+                        Some(SwitchPattern::EnumMember(first, v))
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "expected identifier after `.` in case pattern",
+                            )
+                            .with_label(
+                                variant_token.span,
+                                self.file_id,
+                                "expected identifier",
+                            ),
+                        );
+                        None
+                    }
+                } else {
+                    // Bare identifier — treat as enum member access where
+                    // the enum name will be inferred from the scrutinee type
+                    Some(SwitchPattern::EnumMember(String::new(), first))
+                }
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "expected case pattern (string literal, integer, or enum variant)",
+                    )
+                    .with_label(
+                        token.span,
+                        self.file_id,
+                        "expected case pattern",
+                    ),
+                );
+                None
+            }
+        }
     }
 
     /// Parse a try/catch/finally statement.
@@ -7782,8 +7861,8 @@ function test(dir: Direction): Direction {
         match &f.body.stmts[0] {
             Stmt::Switch(switch) => {
                 assert_eq!(switch.cases.len(), 2);
-                assert_eq!(switch.cases[0].pattern, "north");
-                assert_eq!(switch.cases[1].pattern, "south");
+                assert_eq!(switch.cases[0].pattern, SwitchPattern::StringLit("north".to_owned()));
+                assert_eq!(switch.cases[1].pattern, SwitchPattern::StringLit("south".to_owned()));
                 assert_eq!(switch.cases[0].body.len(), 1);
                 assert_eq!(switch.cases[1].body.len(), 1);
             }

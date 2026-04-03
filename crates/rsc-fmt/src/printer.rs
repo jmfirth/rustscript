@@ -12,7 +12,8 @@ use rsc_syntax::ast::{
     ForInit, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, InlineRustBlock,
     InterfaceDef, InterfaceMethod, Item, ItemKind, LogicalAssignExpr, MethodCallExpr, Module,
     NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchStmt, TemplateLitExpr,
+    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchPattern, SwitchStmt,
+    TemplateLitExpr,
     TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef,
     TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl, VarBinding, VarDecl,
     Visibility, WhileStmt, WildcardReExportDecl,
@@ -1119,9 +1120,34 @@ impl Printer {
 
     /// Print a switch case.
     fn print_switch_case(&mut self, case: &SwitchCase) {
-        self.write("case \"");
-        self.write(&case.pattern);
-        self.writeln("\":");
+        match &case.pattern {
+            SwitchPattern::StringLit(s) => {
+                self.write("case \"");
+                self.write(s);
+                self.writeln("\":");
+            }
+            SwitchPattern::IntLit(v) => {
+                self.write("case ");
+                self.write(&v.to_string());
+                self.writeln(":");
+            }
+            SwitchPattern::EnumMember(enum_name, variant) => {
+                if enum_name.is_empty() {
+                    self.write("case ");
+                    self.write(variant);
+                    self.writeln(":");
+                } else {
+                    self.write("case ");
+                    self.write(enum_name);
+                    self.write(".");
+                    self.write(variant);
+                    self.writeln(":");
+                }
+            }
+            SwitchPattern::Default => {
+                self.writeln("default:");
+            }
+        }
         self.indent();
         for stmt in &case.body {
             self.print_stmt(stmt);
