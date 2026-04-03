@@ -1631,7 +1631,7 @@ impl Transform {
             }
         } else {
             ctx.emit_diagnostic(Diagnostic::error(
-                "mapped type constraint must be `keyof T`".to_owned(),
+                "mapped type constraint must be `keyof T`; example: `{ [K in keyof MyType]: ... }`",
             ));
             None
         };

@@ -1098,7 +1098,7 @@ impl Transform {
             _ => None,
         };
         let Some(type_name) = type_name else {
-            ctx.emit_diagnostic(Diagnostic::error("cannot infer type for destructuring"));
+            ctx.emit_diagnostic(Diagnostic::error("cannot infer type for destructuring; add a type annotation to the variable being destructured"));
             return RustStmt::Semi(init);
         };
 

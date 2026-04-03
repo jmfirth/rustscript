@@ -650,13 +650,13 @@ impl<'src> Parser<'src> {
                 let current = self.current_token().clone();
                 self.diagnostics.push(
                     Diagnostic::error(format!(
-                        "expected item, found {}",
+                        "expected a declaration (function, class, type, const, etc.), found {}",
                         Self::describe_kind(&current.kind)
                     ))
                     .with_label(
                         current.span,
                         self.file_id,
-                        "unexpected token",
+                        "expected declaration",
                     ),
                 );
                 // Advance past the unexpected token to prevent infinite loops
@@ -3141,12 +3141,13 @@ impl<'src> Parser<'src> {
         let close_span = if let Some(close) = self.expect(&TokenKind::RBrace) {
             close.span
         } else {
-            self.diagnostics
-                .push(Diagnostic::error("unterminated block").with_label(
+            self.diagnostics.push(
+                Diagnostic::error("unterminated block; expected closing `}`").with_label(
                     open,
                     self.file_id,
                     "block starts here",
-                ));
+                ),
+            );
             self.previous_span()
         };
 
@@ -5449,7 +5450,7 @@ impl<'src> Parser<'src> {
                 }
                 // Otherwise fall through to error (blocks are not expressions in Phase 1)
                 self.diagnostics.push(
-                    Diagnostic::error("unexpected `{` in expression position").with_label(
+                    Diagnostic::error("unexpected `{` in expression position; for an object literal, use `TypeName { field: value }` syntax").with_label(
                         token.span,
                         self.file_id,
                         "expected expression",
