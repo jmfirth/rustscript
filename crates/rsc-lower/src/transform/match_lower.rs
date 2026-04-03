@@ -15,14 +15,28 @@ use crate::ownership::UseMap;
 
 use super::{Transform, capitalize_first, extract_named_type, lower_binary_op};
 
+/// Classification of a switch statement based on its case patterns.
+enum SwitchKind {
+    /// Integer literal patterns: `case 1:`, `case 2:`.
+    Integer,
+    /// Enum member access patterns: `case Color.Red:`.
+    EnumMember,
+    /// String literal patterns (original behavior): `case "north":`.
+    StringEnum,
+}
+
 impl Transform {
     /// Lower a switch statement to a Rust match statement.
     ///
-    /// Resolves the scrutinee type to determine the enum being matched.
-    /// For simple enums, generates `EnumVariant` patterns.
-    /// For data enums, generates `EnumVariantFields` patterns with field bindings.
-    /// Inside case bodies, rewrites `scrutinee.field` to just `field` (the
-    /// destructured binding from the match arm).
+    /// Handles three kinds of switch patterns:
+    /// - **String literals** (original behavior): resolves the scrutinee type to determine
+    ///   the enum being matched and generates `EnumVariant` or `EnumVariantFields` patterns.
+    /// - **Integer literals**: generates `IntLiteral` patterns for numeric matching.
+    /// - **Enum member access** (`Color.Red`): generates `EnumVariant` patterns directly.
+    /// - **Default**: generates `Wildcard` (`_`) patterns.
+    ///
+    /// For data enums with string-based patterns, rewrites `scrutinee.field` to just `field`
+    /// inside case bodies.
     pub(super) fn lower_switch(
         &self,
         switch: &ast::SwitchStmt,
@@ -33,12 +47,127 @@ impl Transform {
     ) -> RustStmt {
         let scrutinee = self.lower_expr(&switch.scrutinee, ctx, use_map, stmt_index);
 
-        // Determine the enum name from the scrutinee's type
         let scrutinee_var_name = match &switch.scrutinee.kind {
             ast::ExprKind::Ident(ident) => Some(ident.name.clone()),
             _ => None,
         };
 
+        // Determine switch kind from the patterns present
+        let switch_kind = Self::classify_switch(&switch.cases);
+
+        match switch_kind {
+            SwitchKind::Integer => self.lower_integer_switch(
+                switch, scrutinee, ctx, use_map, stmt_index, reassigned,
+            ),
+            SwitchKind::EnumMember => self.lower_enum_member_switch(
+                switch, scrutinee, ctx, use_map, stmt_index, reassigned,
+            ),
+            SwitchKind::StringEnum => self.lower_string_enum_switch(
+                switch,
+                scrutinee,
+                ctx,
+                use_map,
+                stmt_index,
+                reassigned,
+                scrutinee_var_name,
+            ),
+        }
+    }
+
+    /// Classify a switch statement based on its case patterns.
+    fn classify_switch(cases: &[ast::SwitchCase]) -> SwitchKind {
+        for case in cases {
+            match &case.pattern {
+                ast::SwitchPattern::IntLit(_) => return SwitchKind::Integer,
+                ast::SwitchPattern::EnumMember(_, _) => return SwitchKind::EnumMember,
+                ast::SwitchPattern::StringLit(_) => return SwitchKind::StringEnum,
+                ast::SwitchPattern::Default => continue,
+            }
+        }
+        // All-default or empty: default to string enum for backwards compat
+        SwitchKind::StringEnum
+    }
+
+    /// Lower a switch on integer values.
+    fn lower_integer_switch(
+        &self,
+        switch: &ast::SwitchStmt,
+        scrutinee: RustExpr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        let arms: Vec<RustMatchArm> = switch
+            .cases
+            .iter()
+            .map(|case| {
+                let pattern = match &case.pattern {
+                    ast::SwitchPattern::IntLit(v) => RustPattern::IntLiteral(*v),
+                    ast::SwitchPattern::Default => RustPattern::Wildcard,
+                    _ => RustPattern::Wildcard,
+                };
+                let body = self.lower_switch_case_body(
+                    &case.body, ctx, use_map, stmt_index, reassigned, None, &[], "",
+                );
+                RustMatchArm { pattern, body }
+            })
+            .collect();
+
+        RustStmt::Match(RustMatchStmt {
+            scrutinee,
+            arms,
+            span: Some(switch.span),
+        })
+    }
+
+    /// Lower a switch with enum member access patterns (`Color.Red`).
+    fn lower_enum_member_switch(
+        &self,
+        switch: &ast::SwitchStmt,
+        scrutinee: RustExpr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        let arms: Vec<RustMatchArm> = switch
+            .cases
+            .iter()
+            .map(|case| {
+                let pattern = match &case.pattern {
+                    ast::SwitchPattern::EnumMember(enum_name, variant) => {
+                        RustPattern::EnumVariant(enum_name.clone(), variant.clone())
+                    }
+                    ast::SwitchPattern::Default => RustPattern::Wildcard,
+                    _ => RustPattern::Wildcard,
+                };
+                let body = self.lower_switch_case_body(
+                    &case.body, ctx, use_map, stmt_index, reassigned, None, &[], "",
+                );
+                RustMatchArm { pattern, body }
+            })
+            .collect();
+
+        RustStmt::Match(RustMatchStmt {
+            scrutinee,
+            arms,
+            span: Some(switch.span),
+        })
+    }
+
+    /// Lower a switch with string literal patterns (original enum-based behavior).
+    #[allow(clippy::too_many_arguments)]
+    fn lower_string_enum_switch(
+        &self,
+        switch: &ast::SwitchStmt,
+        scrutinee: RustExpr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+        scrutinee_var_name: Option<String>,
+    ) -> RustStmt {
         let enum_name = scrutinee_var_name
             .as_ref()
             .and_then(|name| ctx.lookup_variable(name))
@@ -56,44 +185,82 @@ impl Transform {
             .cases
             .iter()
             .map(|case| {
-                let variant_name = capitalize_first(&case.pattern);
-
-                let (pattern, bound_fields) = match td.map(|t| &t.kind) {
-                    Some(rsc_typeck::registry::TypeDefKind::DataEnum(variants)) => {
-                        // Find the variant's fields
-                        let field_names: Vec<String> = variants
-                            .iter()
-                            .find(|(vn, _)| *vn == variant_name)
-                            .map(|(_, fields)| fields.iter().map(|(n, _)| n.clone()).collect())
-                            .unwrap_or_default();
-                        (
-                            RustPattern::EnumVariantFields(
-                                enum_name.clone(),
-                                variant_name.clone(),
-                                field_names.clone(),
-                            ),
-                            field_names,
-                        )
+                match &case.pattern {
+                    ast::SwitchPattern::Default => {
+                        let body = self.lower_switch_case_body(
+                            &case.body,
+                            ctx,
+                            use_map,
+                            stmt_index,
+                            reassigned,
+                            scrutinee_var_name.as_deref(),
+                            &[],
+                            &enum_name,
+                        );
+                        RustMatchArm {
+                            pattern: RustPattern::Wildcard,
+                            body,
+                        }
                     }
-                    _ => (
-                        RustPattern::EnumVariant(enum_name.clone(), variant_name),
-                        Vec::new(),
-                    ),
-                };
+                    ast::SwitchPattern::StringLit(pat) => {
+                        let variant_name = capitalize_first(pat);
 
-                // Lower case body with field binding context
-                let body = self.lower_switch_case_body(
-                    &case.body,
-                    ctx,
-                    use_map,
-                    stmt_index,
-                    reassigned,
-                    scrutinee_var_name.as_deref(),
-                    &bound_fields,
-                    &enum_name,
-                );
+                        let (pattern, bound_fields) = match td.map(|t| &t.kind) {
+                            Some(rsc_typeck::registry::TypeDefKind::DataEnum(variants)) => {
+                                let field_names: Vec<String> = variants
+                                    .iter()
+                                    .find(|(vn, _)| *vn == variant_name)
+                                    .map(|(_, fields)| {
+                                        fields.iter().map(|(n, _)| n.clone()).collect()
+                                    })
+                                    .unwrap_or_default();
+                                (
+                                    RustPattern::EnumVariantFields(
+                                        enum_name.clone(),
+                                        variant_name.clone(),
+                                        field_names.clone(),
+                                    ),
+                                    field_names,
+                                )
+                            }
+                            _ => (
+                                RustPattern::EnumVariant(enum_name.clone(), variant_name),
+                                Vec::new(),
+                            ),
+                        };
 
-                RustMatchArm { pattern, body }
+                        let body = self.lower_switch_case_body(
+                            &case.body,
+                            ctx,
+                            use_map,
+                            stmt_index,
+                            reassigned,
+                            scrutinee_var_name.as_deref(),
+                            &bound_fields,
+                            &enum_name,
+                        );
+
+                        RustMatchArm { pattern, body }
+                    }
+                    // Non-string patterns in a string-enum switch are unexpected;
+                    // treat as wildcard to avoid panics.
+                    _ => {
+                        let body = self.lower_switch_case_body(
+                            &case.body,
+                            ctx,
+                            use_map,
+                            stmt_index,
+                            reassigned,
+                            scrutinee_var_name.as_deref(),
+                            &[],
+                            &enum_name,
+                        );
+                        RustMatchArm {
+                            pattern: RustPattern::Wildcard,
+                            body,
+                        }
+                    }
+                }
             })
             .collect();
 

@@ -1058,16 +1058,30 @@ pub struct SwitchStmt {
 
 /// A single case in a switch statement.
 ///
-/// Corresponds to `case "variant_name": body_stmts;`.
+/// Corresponds to `case <pattern>: body_stmts;` or `default: body_stmts;`.
 /// Lowers to a single match arm.
 #[derive(Debug, Clone)]
 pub struct SwitchCase {
-    /// The pattern string literal (enum variant name, e.g., `"north"` or `"circle"`).
-    pub pattern: String,
+    /// The pattern to match against.
+    pub pattern: SwitchPattern,
     /// The body of the case.
     pub body: Vec<Stmt>,
     /// The span covering this case.
     pub span: Span,
+}
+
+/// A pattern in a switch case label.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SwitchPattern {
+    /// A string literal pattern: `case "north":`.
+    StringLit(String),
+    /// An integer literal pattern: `case 1:`.
+    IntLit(i64),
+    /// An enum member access pattern: `case Color.Red:`.
+    /// Fields: `(enum_name, variant_name)`.
+    EnumMember(String, String),
+    /// The default/wildcard pattern: `default:`.
+    Default,
 }
 
 /// A `try/catch/finally` statement for catching `Result` errors.
