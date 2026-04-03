@@ -7550,6 +7550,93 @@ mod tests {
         }
     }
 
+    // Test: Multiple generic params on a function parses correctly
+    #[test]
+    fn test_multiple_generic_params_function() {
+        let source = "function zip<T, U>(a: T, b: U): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 2);
+        assert_eq!(tp.params[0].name.name, "T");
+        assert!(tp.params[0].constraint.is_none());
+        assert_eq!(tp.params[1].name.name, "U");
+        assert!(tp.params[1].constraint.is_none());
+    }
+
+    // Test: Multiple generic params on a type alias parses correctly
+    #[test]
+    fn test_multiple_generic_params_type() {
+        let source = "type Pair<K, V> = { key: K, value: V }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::TypeDef(td) => {
+                assert_eq!(td.name.name, "Pair");
+                let tp = td.type_params.as_ref().expect("expected type params");
+                assert_eq!(tp.params.len(), 2);
+                assert_eq!(tp.params[0].name.name, "K");
+                assert_eq!(tp.params[1].name.name, "V");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    // Test: Multiple generic params on a class parses correctly
+    #[test]
+    fn test_multiple_generic_params_class() {
+        let source = "class Map<K, V> { }";
+        let module = parse_ok(source);
+        match &module.items[0].kind {
+            ItemKind::Class(cd) => {
+                assert_eq!(cd.name.name, "Map");
+                let tp = cd.type_params.as_ref().expect("expected type params");
+                assert_eq!(tp.params.len(), 2);
+                assert_eq!(tp.params[0].name.name, "K");
+                assert_eq!(tp.params[1].name.name, "V");
+            }
+            _ => panic!("expected Class"),
+        }
+    }
+
+    // Test: Single generic still works (regression check)
+    #[test]
+    fn test_single_generic_still_works() {
+        let source = "function identity<T>(x: T): T { return x; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 1);
+        assert_eq!(tp.params[0].name.name, "T");
+    }
+
+    // Test: Three generic params parse
+    #[test]
+    fn test_three_generic_params() {
+        let source = "function triple<T, U, V>(a: T, b: U, c: V): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 3);
+        assert_eq!(tp.params[0].name.name, "T");
+        assert_eq!(tp.params[1].name.name, "U");
+        assert_eq!(tp.params[2].name.name, "V");
+    }
+
+    // Test: Constrained + unconstrained generic params
+    #[test]
+    fn test_constrained_and_unconstrained_generic_params() {
+        let source =
+            "function process<T extends Clone, U>(a: T, b: U): T { return a; }";
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let tp = f.type_params.as_ref().expect("expected type params");
+        assert_eq!(tp.params.len(), 2);
+        assert_eq!(tp.params[0].name.name, "T");
+        assert!(tp.params[0].constraint.is_some());
+        assert_eq!(tp.params[1].name.name, "U");
+        assert!(tp.params[1].constraint.is_none());
+    }
+
     // ---------------------------------------------------------------
     // Template literal parsing tests
     // ---------------------------------------------------------------
