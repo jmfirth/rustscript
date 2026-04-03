@@ -1021,6 +1021,7 @@ mod tests {
             optional: false,
             default_value: None,
             is_rest: false,
+            destructure_fields: None,
             span: span(0, 10),
         }
     }
@@ -2234,6 +2235,7 @@ mod tests {
                 optional: false,
                 default_value: None,
                 is_rest: false,
+                destructure_fields: None,
                 span: span(0, 3),
             }],
             return_type: Some(ret_type(TypeAnnotation {
@@ -2293,6 +2295,7 @@ mod tests {
                     optional: false,
                     default_value: None,
                     is_rest: false,
+                    destructure_fields: None,
                     span: span(0, 3),
                 },
                 Param {
@@ -2304,6 +2307,7 @@ mod tests {
                     optional: false,
                     default_value: None,
                     is_rest: false,
+                    destructure_fields: None,
                     span: span(0, 3),
                 },
             ],
@@ -3665,6 +3669,7 @@ mod tests {
                             optional: false,
                             default_value: None,
                             is_rest: false,
+                            destructure_fields: None,
                             span: span(73, 104),
                         }],
                         return_type: Some(ReturnTypeAnnotation {

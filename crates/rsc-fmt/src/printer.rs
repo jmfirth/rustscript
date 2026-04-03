@@ -308,7 +308,23 @@ impl Printer {
             if param.is_rest {
                 self.write("...");
             }
-            self.write(&param.name.name);
+            if let Some(fields) = &param.destructure_fields {
+                // Destructuring param: `{ field, field }: Type`
+                self.write("{ ");
+                for (j, field) in fields.iter().enumerate() {
+                    if j > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&field.field_name.name);
+                    if let Some(local) = &field.local_name {
+                        self.write(": ");
+                        self.write(&local.name);
+                    }
+                }
+                self.write(" }");
+            } else {
+                self.write(&param.name.name);
+            }
             if param.optional {
                 self.write("?");
             }
@@ -1837,6 +1853,7 @@ mod tests {
                             optional: false,
                             default_value: None,
                             is_rest: false,
+                            destructure_fields: None,
                             span: Span::dummy(),
                         },
                         Param {
@@ -1845,6 +1862,7 @@ mod tests {
                             optional: false,
                             default_value: None,
                             is_rest: false,
+                            destructure_fields: None,
                             span: Span::dummy(),
                         },
                         Param {
@@ -1853,6 +1871,7 @@ mod tests {
                             optional: false,
                             default_value: None,
                             is_rest: false,
+                            destructure_fields: None,
                             span: Span::dummy(),
                         },
                     ],
@@ -2025,6 +2044,7 @@ mod tests {
                         optional: false,
                         default_value: None,
                         is_rest: false,
+                        destructure_fields: None,
                         span: Span::dummy(),
                     }],
                     return_type: None,
@@ -2079,6 +2099,7 @@ mod tests {
                     optional: false,
                     default_value: None,
                     is_rest: false,
+                    destructure_fields: None,
                     span: Span::dummy(),
                 }],
                 return_type: Some(named_type("i32")),

@@ -8,8 +8,8 @@
 use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
-    ParamMode, RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustExpr, RustExprKind,
-    RustLetStmt, RustStmt, RustType, SpreadOp,
+    ParamMode, RustBinaryOp, RustBlock, RustClosureBody, RustClosureParam, RustDestructureField,
+    RustDestructureStmt, RustExpr, RustExprKind, RustLetStmt, RustStmt, RustType, SpreadOp,
 };
 
 use crate::context::LoweringContext;
@@ -1267,6 +1267,9 @@ impl Transform {
     ) -> RustExpr {
         let mut diags = Vec::new();
 
+        // Collect destructuring statements that need to be prepended to the body
+        let mut destructure_stmts: Vec<RustStmt> = Vec::new();
+
         // Lower parameters
         let params: Vec<RustClosureParam> = closure
             .params
@@ -1286,6 +1289,30 @@ impl Transform {
                     &mut diags,
                 );
                 let rust_ty = rsc_typeck::bridge::type_to_rust_type(&ty);
+
+                // If this param has destructure fields, generate a destructure
+                // statement to prepend to the body
+                if let Some(fields) = &p.destructure_fields {
+                    let type_name = match &p.type_ann.kind {
+                        ast::TypeKind::Named(ident) => ident.name.clone(),
+                        _ => "__Destructured".to_owned(),
+                    };
+                    let rust_fields: Vec<RustDestructureField> = fields
+                        .iter()
+                        .map(|f| RustDestructureField {
+                            field_name: f.field_name.name.clone(),
+                            local_name: f.local_name.as_ref().map(|l| l.name.clone()),
+                        })
+                        .collect();
+                    destructure_stmts.push(RustStmt::Destructure(RustDestructureStmt {
+                        type_name,
+                        fields: rust_fields,
+                        init: RustExpr::synthetic(RustExprKind::Ident(p.name.name.clone())),
+                        mutable: false,
+                        span: None,
+                    }));
+                }
+
                 RustClosureParam {
                     name: p.name.name.clone(),
                     ty: Some(rust_ty),
@@ -1313,7 +1340,7 @@ impl Transform {
         });
 
         // Lower body
-        let body = match &closure.body {
+        let mut body = match &closure.body {
             ast::ClosureBody::Expr(expr) => {
                 let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
                 RustClosureBody::Expr(Box::new(lowered))
@@ -1325,6 +1352,26 @@ impl Transform {
                 RustClosureBody::Block(lowered)
             }
         };
+
+        // If there are destructuring params, prepend the destructure statements
+        // to the body. Expression bodies are converted to block bodies.
+        if !destructure_stmts.is_empty() {
+            body = match body {
+                RustClosureBody::Expr(expr) => {
+                    // Convert expression body to block body with destructure + trailing expr
+                    RustClosureBody::Block(RustBlock {
+                        stmts: destructure_stmts,
+                        expr: Some(expr),
+                    })
+                }
+                RustClosureBody::Block(mut block) => {
+                    // Prepend destructure statements to the existing block
+                    destructure_stmts.append(&mut block.stmts);
+                    block.stmts = destructure_stmts;
+                    RustClosureBody::Block(block)
+                }
+            };
+        }
 
         RustExpr::new(
             RustExprKind::Closure {

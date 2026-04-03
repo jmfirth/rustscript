@@ -2461,6 +2461,7 @@ impl<'src> Parser<'src> {
             optional,
             default_value,
             is_rest,
+            destructure_fields: None,
             span,
         })
     }
@@ -2494,11 +2495,18 @@ impl<'src> Parser<'src> {
         params
     }
 
-    /// Parse a single closure parameter: `IDENT` or `IDENT : type`.
+    /// Parse a single closure parameter: `IDENT`, `IDENT : type`,
+    /// or `{ field, field }: Type` (destructuring pattern).
     ///
     /// When the type annotation is omitted, uses `TypeKind::Inferred`.
     fn parse_closure_param(&mut self) -> Option<Param> {
         let start = self.current_token().span;
+
+        // Check for destructuring pattern: `{ field, field, ... }: Type`
+        if self.check(&TokenKind::LBrace) {
+            return self.parse_destructure_param(start);
+        }
+
         let name = self.parse_ident()?;
 
         // Type annotation is optional in closures
@@ -2512,6 +2520,7 @@ impl<'src> Parser<'src> {
                 optional: false,
                 default_value: None,
                 is_rest: false,
+                destructure_fields: None,
                 span,
             })
         } else {
@@ -2525,9 +2534,86 @@ impl<'src> Parser<'src> {
                 optional: false,
                 default_value: None,
                 is_rest: false,
+                destructure_fields: None,
                 span,
             })
         }
+    }
+
+    /// Parse a destructuring parameter pattern: `{ field, field, ... }: Type`.
+    ///
+    /// Used in both closure and function parameter lists.
+    /// The parameter name is synthesized from the type name (lowercased).
+    /// Lowers to a named param with destructuring let-bindings in the body.
+    fn parse_destructure_param(&mut self, start: Span) -> Option<Param> {
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.at_end() {
+            let field_name = self.parse_ident()?;
+            let field_span = field_name.span;
+
+            // Check for rename: `field: localName`
+            let local_name = if self.eat(&TokenKind::Colon) {
+                // Peek: if the next token is an ident and after that comes `,` or `}`,
+                // it's a rename. Otherwise this could be something else — but for
+                // destructuring params, rename is the standard interpretation.
+                Some(self.parse_ident()?)
+            } else {
+                None
+            };
+
+            // Check for default: `field = expr`
+            let default_value = if self.eat(&TokenKind::Eq) {
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
+
+            fields.push(DestructureField {
+                field_name,
+                local_name,
+                default_value,
+                span: field_span,
+            });
+
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+
+        // Type annotation is required for destructuring params
+        self.expect(&TokenKind::Colon)?;
+        let type_ann = self.parse_type_annotation()?;
+
+        // Synthesize a parameter name from the type name (lowercased first char)
+        let synth_name = match &type_ann.kind {
+            TypeKind::Named(ident) => {
+                let mut name = ident.name.clone();
+                if let Some(first) = name.get_mut(..1) {
+                    first.make_ascii_lowercase();
+                }
+                name
+            }
+            _ => "__destructured".to_owned(),
+        };
+
+        let span = start.merge(type_ann.span);
+        let name = Ident {
+            name: synth_name,
+            span: start,
+        };
+
+        Some(Param {
+            name,
+            type_ann,
+            optional: false,
+            default_value: None,
+            is_rest: false,
+            destructure_fields: Some(fields),
+            span,
+        })
     }
 
     /// Parse a type annotation: `void`, a named type, a generic type, a union type,
@@ -5181,24 +5267,54 @@ impl<'src> Parser<'src> {
             return self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::FatArrow);
         }
 
-        // Non-empty params: scan for pattern `ident :` at start
-        // If the first token after `(` is not an ident, or the second is
-        // not `:` or `,` or `)`, this is not an arrow function.
-        if !matches!(
-            self.tokens.get(i).map(|t| &t.kind),
-            Some(TokenKind::Ident(_))
-        ) {
-            return false;
-        }
+        // Destructuring param: `({ field, ... }: Type) =>`
+        // If first token after `(` is `{`, scan past matched braces and check
+        // for `: Type ) =>`
+        if self.tokens.get(i).map(|t| &t.kind) == Some(&TokenKind::LBrace) {
+            // Scan past the `{ ... }` block
+            let mut brace_depth: u32 = 1;
+            i += 1;
+            while let Some(token) = self.tokens.get(i) {
+                match &token.kind {
+                    TokenKind::LBrace => brace_depth += 1,
+                    TokenKind::RBrace => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                i += 1;
+            }
+            if brace_depth != 0 {
+                return false;
+            }
+            // After `}`, expect `: Type` then `)` or `,`
+            // Just scan to matching `)` and check for `=>`
+            // Fall through to the paren-scanning loop below
+        } else {
+            // Non-empty params: scan for pattern `ident :` at start
+            // If the first token after `(` is not an ident, or the second is
+            // not `:` or `,` or `)`, this is not an arrow function.
+            if !matches!(
+                self.tokens.get(i).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            ) {
+                return false;
+            }
 
-        // Quick heuristic: check if second token after ident is `:` or `,` or `)`
-        let after_ident = self.tokens.get(i + 1).map(|t| &t.kind);
-        let looks_like_param = matches!(
-            after_ident,
-            Some(TokenKind::Colon | TokenKind::Comma | TokenKind::RParen)
-        );
-        if !looks_like_param {
-            return false;
+            // Quick heuristic: check if second token after ident is `:` or `,` or `)`
+            let after_ident = self.tokens.get(i + 1).map(|t| &t.kind);
+            let looks_like_param = matches!(
+                after_ident,
+                Some(TokenKind::Colon | TokenKind::Comma | TokenKind::RParen)
+            );
+            if !looks_like_param {
+                return false;
+            }
         }
 
         // Scan to matching `)`, tracking nesting depth for `<>` and `()`
@@ -5461,6 +5577,7 @@ impl<'src> Parser<'src> {
                                 optional: false,
                                 default_value: None,
                                 is_rest: false,
+                                destructure_fields: None,
                                 span: param_span,
                             }],
                             return_type: None,
@@ -8691,6 +8808,93 @@ function fail() throws string {
         assert_eq!(closure.params.len(), 2);
         assert_eq!(closure.params[0].name.name, "a");
         assert_eq!(closure.params[1].name.name, "b");
+    }
+
+    // ---- Closure destructuring param tests ----
+
+    #[test]
+    fn test_closure_destructure_param() {
+        let source = "function f() { const x = ({ name }: User) => name; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert_eq!(closure.params.len(), 1);
+        // Synthetic name derived from type
+        assert_eq!(closure.params[0].name.name, "user");
+        // Type annotation should be User
+        assert!(matches!(&closure.params[0].type_ann.kind, TypeKind::Named(n) if n.name == "User"));
+        // Destructure fields present
+        let fields = closure.params[0].destructure_fields.as_ref().expect("expected destructure fields");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].field_name.name, "name");
+        assert!(fields[0].local_name.is_none());
+    }
+
+    #[test]
+    fn test_closure_destructure_multiple_fields() {
+        let source = "function f() { const x = ({ name, age }: User) => name; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert_eq!(closure.params.len(), 1);
+        let fields = closure.params[0].destructure_fields.as_ref().expect("expected destructure fields");
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].field_name.name, "name");
+        assert_eq!(fields[1].field_name.name, "age");
+    }
+
+    #[test]
+    fn test_closure_simple_param_still_works() {
+        // Regression test: ensure simple `x => x` still works
+        let source = "function f() { const id = x => x; }";
+        let (module, diagnostics) = parse_source(source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        let f = match &module.items[0].kind {
+            ItemKind::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        let decl = match &f.body.stmts[0] {
+            Stmt::VarDecl(d) => d,
+            _ => panic!("expected VarDecl"),
+        };
+        let closure = match &decl.init.kind {
+            ExprKind::Closure(c) => c,
+            other => panic!("expected Closure, got {other:?}"),
+        };
+        assert_eq!(closure.params.len(), 1);
+        assert_eq!(closure.params[0].name.name, "x");
+        assert!(closure.params[0].destructure_fields.is_none());
     }
 
     // ---- Task 022: Interface parsing tests ----

@@ -615,6 +615,7 @@ pub struct FieldDef {
 #[derive(Debug, Clone)]
 pub struct Param {
     /// The parameter name.
+    /// For destructuring params, this is a synthetic name derived from the type.
     pub name: Ident,
     /// The type annotation.
     pub type_ann: TypeAnnotation,
@@ -627,6 +628,10 @@ pub struct Param {
     /// Whether this is a rest parameter (`...name` syntax).
     /// Must be the last parameter. Lowers to `Vec<T>` in Rust.
     pub is_rest: bool,
+    /// Optional destructuring fields for pattern parameters.
+    /// When present, the parameter is a destructuring pattern: `({ name, age }: User)`.
+    /// Lowers to `|param| { let Type { name, age, .. } = param; ... }` in Rust.
+    pub destructure_fields: Option<Vec<DestructureField>>,
     /// The span covering the parameter.
     pub span: Span,
 }
@@ -1800,6 +1805,7 @@ mod tests {
                     optional: false,
                     default_value: None,
                     is_rest: false,
+                    destructure_fields: None,
                     span: span(4, 10),
                 },
                 Param {
@@ -1811,6 +1817,7 @@ mod tests {
                     optional: false,
                     default_value: None,
                     is_rest: false,
+                    destructure_fields: None,
                     span: span(12, 18),
                 },
             ],
