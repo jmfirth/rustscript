@@ -368,9 +368,25 @@ pub struct InterfaceDef {
     pub type_params: Option<TypeParams>,
     /// The method signatures declared in this interface.
     pub methods: Vec<InterfaceMethod>,
+    /// The field declarations in this interface (getter-style accessors).
+    pub fields: Vec<InterfaceField>,
     /// `JSDoc` comment attached to this interface definition, if any.
     pub doc_comment: Option<String>,
     /// The span covering the entire interface definition.
+    pub span: Span,
+}
+
+/// A field declaration in an interface (getter-style accessor).
+///
+/// Corresponds to `fieldName: Type;` within an interface body.
+/// Lowers to a Rust trait getter method: `fn field_name(&self) -> Type;`.
+#[derive(Debug, Clone)]
+pub struct InterfaceField {
+    /// The field name.
+    pub name: Ident,
+    /// The field type annotation.
+    pub type_ann: TypeAnnotation,
+    /// The span covering the field declaration.
     pub span: Span,
 }
 
@@ -847,6 +863,9 @@ pub enum Stmt {
     /// A `debugger;` statement — breakpoint hint for JavaScript debuggers.
     /// No Rust equivalent; lowers to a no-op (skipped in output).
     Debugger(Span),
+    /// A bare block scope: `{ ... }`.
+    /// Lowers to a Rust block: `{ ... }`.
+    Block(Block),
 }
 
 /// A `using` or `await using` declaration for explicit resource management.

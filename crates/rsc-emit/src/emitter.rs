@@ -1046,6 +1046,11 @@ impl Emitter {
                 self.emit_loop(loop_stmt);
                 self.newline();
             }
+            RustStmt::Block(block) => {
+                self.write_indent();
+                self.emit_block(block);
+                self.newline();
+            }
         }
     }
 

@@ -795,6 +795,7 @@ fn stmt_span(stmt: &rsc_syntax::ast::Stmt) -> rsc_syntax::span::Span {
         Stmt::RustBlock(rb) => rb.span,
         Stmt::Using(u) => u.span,
         Stmt::Debugger(span) => *span,
+        Stmt::Block(b) => b.span,
     }
 }
 
@@ -995,6 +996,11 @@ fn find_hover_in_stmts(
                     ));
                 }
                 if let Some(info) = find_hover_in_expr(&decl.init, pos, cache) {
+                    return Some(info);
+                }
+            }
+            Stmt::Block(block) => {
+                if let Some(info) = find_hover_in_stmts(&block.stmts, pos, cache) {
                     return Some(info);
                 }
             }

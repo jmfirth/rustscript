@@ -171,6 +171,10 @@ impl Transform {
             }
             // ForClassic is normally handled by lower_block expansion;
             // if reached here, lower as general while pattern.
+            ast::Stmt::Block(block) => {
+                let lowered = self.lower_block(block, ctx, use_map, stmt_index, reassigned);
+                RustStmt::Block(lowered)
+            }
             ast::Stmt::ForClassic(fc) => {
                 let stmts = self.lower_for_classic(fc, ctx, use_map, stmt_index, reassigned);
                 // Wrap in a while if there's only one, or take the last

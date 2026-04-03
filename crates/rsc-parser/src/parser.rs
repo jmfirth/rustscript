@@ -13,7 +13,7 @@ use rsc_syntax::ast::{
     DestructureField, DestructureStmt, DoWhileStmt, ElseClause, EnumDef, EnumVariant, Expr,
     ExprKind, FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt,
     ForInStmt, ForInit, ForOfStmt, Ident, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr,
-    IndexSignature, InlineRustBlock, InterfaceDef, InterfaceMethod, Item, ItemKind,
+    IndexSignature, InlineRustBlock, InterfaceDef, InterfaceField, InterfaceMethod, Item, ItemKind,
     LogicalAssignExpr, LogicalAssignOp, MappedModifier, MethodCallExpr, Module, NewExpr,
     NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
     ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchStmt,
@@ -1774,8 +1774,29 @@ impl<'src> Parser<'src> {
         self.expect(&TokenKind::LBrace)?;
 
         let mut methods = Vec::new();
+        let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.at_end() {
-            if let Some(method) = self.parse_interface_method() {
+            // Lookahead to distinguish fields from methods:
+            // - `name(` → method
+            // - `name:` → field
+            let is_field = self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| t.kind == TokenKind::Colon);
+            if is_field {
+                if let Some(field) = self.parse_interface_field() {
+                    fields.push(field);
+                } else {
+                    // Error recovery: skip to next semicolon or closing brace
+                    while !self.at_end()
+                        && !self.check(&TokenKind::Semicolon)
+                        && !self.check(&TokenKind::RBrace)
+                    {
+                        self.advance();
+                    }
+                    self.eat(&TokenKind::Semicolon);
+                }
+            } else if let Some(method) = self.parse_interface_method() {
                 methods.push(method);
             } else {
                 // Error recovery: skip to next semicolon or closing brace
@@ -1796,6 +1817,7 @@ impl<'src> Parser<'src> {
             name,
             type_params,
             methods,
+            fields,
             doc_comment,
             span,
         })
@@ -1820,6 +1842,24 @@ impl<'src> Parser<'src> {
             name,
             params,
             return_type,
+            span,
+        })
+    }
+
+    /// Parse a single interface field declaration: `name: Type;`.
+    fn parse_interface_field(&mut self) -> Option<InterfaceField> {
+        let start = self.current_token().span;
+        let name = self.parse_ident()?;
+
+        self.expect(&TokenKind::Colon)?;
+        let type_ann = self.parse_type_annotation()?;
+
+        self.expect(&TokenKind::Semicolon)?;
+
+        let span = start.merge(self.previous_span());
+        Some(InterfaceField {
+            name,
+            type_ann,
             span,
         })
     }
@@ -3207,6 +3247,11 @@ impl<'src> Parser<'src> {
         }
 
         match self.peek() {
+            // Bare block scope: `{ ... }` at statement position is a block, not an object literal.
+            TokenKind::LBrace => {
+                let block = self.parse_block()?;
+                return Some(Stmt::Block(block));
+            }
             TokenKind::Const
                 if self
                     .tokens
@@ -13653,6 +13698,139 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
             }
         } else {
             panic!("expected VarDecl, got {stmt:?}");
+        }
+    }
+
+    // ---- Bug fix tests: interface fields + methods, bare blocks, for-in-switch ----
+
+    #[test]
+    fn test_interface_fields_and_methods() {
+        let source = r#"interface Animal {
+            name: string;
+            age: i32;
+            speak(): string;
+            walk(distance: i32): void;
+        }"#;
+        let module = parse_ok(source);
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::Interface(iface) = &module.items[0].kind {
+            assert_eq!(iface.name.name, "Animal");
+            assert_eq!(iface.fields.len(), 2, "expected 2 fields");
+            assert_eq!(iface.methods.len(), 2, "expected 2 methods");
+            assert_eq!(iface.fields[0].name.name, "name");
+            assert_eq!(iface.fields[1].name.name, "age");
+            assert_eq!(iface.methods[0].name.name, "speak");
+            assert_eq!(iface.methods[1].name.name, "walk");
+            assert_eq!(iface.methods[1].params.len(), 1);
+        } else {
+            panic!("expected Interface, got {:?}", module.items[0].kind);
+        }
+    }
+
+    #[test]
+    fn test_interface_fields_only() {
+        let source = r#"interface Point {
+            x: i32;
+            y: i32;
+        }"#;
+        let module = parse_ok(source);
+        if let ItemKind::Interface(iface) = &module.items[0].kind {
+            assert_eq!(iface.fields.len(), 2);
+            assert_eq!(iface.methods.len(), 0);
+        } else {
+            panic!("expected Interface");
+        }
+    }
+
+    #[test]
+    fn test_bare_block_scope() {
+        let source = r#"function main() {
+            {
+                const x: i32 = 1;
+            }
+        }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::Block(block) = stmt {
+            assert_eq!(block.stmts.len(), 1);
+            assert!(
+                matches!(block.stmts[0], Stmt::VarDecl(_)),
+                "expected VarDecl inside block"
+            );
+        } else {
+            panic!("expected Block, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_bare_block_scope_multiple_stmts() {
+        let source = r#"function main() {
+            const a: i32 = 1;
+            {
+                const x: i32 = 2;
+                const y: i32 = 3;
+            }
+            const b: i32 = 4;
+        }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        assert_eq!(f.body.stmts.len(), 3);
+        assert!(matches!(f.body.stmts[0], Stmt::VarDecl(_)));
+        assert!(matches!(f.body.stmts[1], Stmt::Block(_)));
+        assert!(matches!(f.body.stmts[2], Stmt::VarDecl(_)));
+    }
+
+    #[test]
+    fn test_for_in_switch_case() {
+        let source = r#"function main() {
+            switch (x) {
+                case "loop":
+                    for (let i = 0; i < 3; i++) { const a: i32 = i; }
+                    break;
+            }
+        }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::Switch(switch) = stmt {
+            assert_eq!(switch.cases.len(), 1);
+            assert_eq!(switch.cases[0].pattern, "loop");
+            // The case body should have a for-classic + break
+            assert_eq!(switch.cases[0].body.len(), 2, "expected for + break in case body");
+            assert!(
+                matches!(switch.cases[0].body[0], Stmt::ForClassic(_)),
+                "expected ForClassic as first case stmt"
+            );
+            assert!(
+                matches!(switch.cases[0].body[1], Stmt::Break(_)),
+                "expected Break as second case stmt"
+            );
+        } else {
+            panic!("expected Switch, got {stmt:?}");
+        }
+    }
+
+    #[test]
+    fn test_labeled_break_from_switch() {
+        let source = r#"function main() {
+            outer: while (true) {
+                switch (x) {
+                    case "exit":
+                        break;
+                }
+            }
+        }"#;
+        let module = parse_ok(source);
+        let f = first_fn(&module);
+        let stmt = first_stmt(f);
+        if let Stmt::While(while_stmt) = stmt {
+            assert!(while_stmt.label.is_some());
+            assert_eq!(while_stmt.label.as_deref(), Some("outer"));
+            assert_eq!(while_stmt.body.stmts.len(), 1);
+            assert!(matches!(while_stmt.body.stmts[0], Stmt::Switch(_)));
+        } else {
+            panic!("expected While, got {stmt:?}");
         }
     }
 }
