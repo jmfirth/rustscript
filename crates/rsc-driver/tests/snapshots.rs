@@ -5581,3 +5581,65 @@ function main() {
         "expected unwrap_or in output, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Constructor default parameter values
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_constructor_default_param() {
+    let source = "\
+class Server {
+  port: i32;
+  constructor(port: i32 = 8080) {
+    this.port = port;
+  }
+}
+function main() {
+  const s = new Server();
+  console.log(s.port);
+}";
+
+    let actual = compile_to_rust(source);
+    // The constructor should accept the parameter normally
+    assert!(
+        actual.contains("fn new(port: i32) -> Self"),
+        "expected fn new(port: i32) -> Self in output, got:\n{actual}"
+    );
+    // Call site with no args should get the default value filled in
+    assert!(
+        actual.contains("Server::new(8080)"),
+        "expected Server::new(8080) in output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_constructor_multiple_defaults() {
+    let source = r#"
+class Config {
+  host: string;
+  port: i32;
+  constructor(host: string = "localhost", port: i32 = 3000) {
+    this.host = host;
+    this.port = port;
+  }
+}
+function main() {
+  const c1 = new Config();
+  const c2 = new Config("example.com");
+  console.log(c1.host);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    // Full defaults filled in
+    assert!(
+        actual.contains(r#"Config::new("localhost".to_string(), 3000)"#),
+        "expected Config::new with both defaults, got:\n{actual}"
+    );
+    // Partial: only port default filled in
+    assert!(
+        actual.contains(r#"Config::new("example.com".to_string(), 3000)"#),
+        "expected Config::new with one supplied and port default, got:\n{actual}"
+    );
+}

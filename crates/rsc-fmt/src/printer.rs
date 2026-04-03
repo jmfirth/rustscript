@@ -793,6 +793,10 @@ impl Printer {
             self.write(&param.name.name);
             self.write(": ");
             self.print_type_annotation(&param.type_ann);
+            if let Some(ref default) = param.default_value {
+                self.write(" = ");
+                self.print_expr(default);
+            }
         }
     }
 

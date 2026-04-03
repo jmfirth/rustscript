@@ -510,6 +510,9 @@ pub struct ConstructorParam {
     pub name: Ident,
     /// The type annotation.
     pub type_ann: TypeAnnotation,
+    /// Optional default value expression.
+    /// When present, the default is inlined at call sites that omit this argument.
+    pub default_value: Option<Expr>,
     /// The span covering the parameter.
     pub span: Span,
 }
