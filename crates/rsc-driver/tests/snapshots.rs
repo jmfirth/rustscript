@@ -7203,3 +7203,145 @@ function main() {
         "new Array(variable) should emit vec![Default::default(); n as usize]:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// String switch on plain string variables (not named enum types)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_string_switch_in_for_of_loop() {
+    let source = r#"
+function main() {
+  const commands: Array<string> = ["start", "stop", "start"];
+  for (const cmd of commands) {
+    switch (cmd) {
+      case "start": console.log("starting");
+      case "stop": console.log("stopping");
+    }
+  }
+}"#;
+
+    let expected = "\
+fn main() {
+    let commands: Vec<String> = vec![\"start\".to_string(), \"stop\".to_string(), \"start\".to_string()];
+    for cmd in &commands {
+        match cmd.as_str() {
+            \"start\" => {
+                println!(\"{}\", \"starting\");
+            }
+            \"stop\" => {
+                println!(\"{}\", \"stopping\");
+            }
+            _ => {
+            }
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_switch_in_for_of", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_string_switch_inside_if() {
+    let source = r#"
+function main() {
+  const mode = "fast";
+  if (true) {
+    switch (mode) {
+      case "fast": console.log("speedy");
+      case "slow": console.log("careful");
+    }
+  }
+}"#;
+
+    let expected = "\
+fn main() {
+    let mode = \"fast\".to_string();
+    if true {
+        match mode.as_str() {
+            \"fast\" => {
+                println!(\"{}\", \"speedy\");
+            }
+            \"slow\" => {
+                println!(\"{}\", \"careful\");
+            }
+            _ => {
+            }
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("string_switch_inside_if", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_for_loop_inside_string_switch() {
+    let source = r#"
+function main() {
+  const mode = "iterate";
+  switch (mode) {
+    case "iterate": {
+      for (let i: i32 = 0; i < 3; i = i + 1) {
+        console.log(i);
+      }
+    }
+  }
+}"#;
+
+    let expected = "\
+fn main() {
+    let mode = \"iterate\".to_string();
+    match mode.as_str() {
+        \"iterate\" => {
+            {
+                for i in 0..3 {
+                    println!(\"{}\", i);
+                }
+            }
+        }
+        _ => {
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("for_loop_inside_string_switch", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_labeled_break_from_string_switch() {
+    let source = r#"
+function main() {
+  const items: Array<string> = ["a", "stop", "b"];
+  outer: for (const item of items) {
+    switch (item) {
+      case "stop": break outer;
+    }
+    console.log(item);
+  }
+}"#;
+
+    let expected = "\
+fn main() {
+    let items: Vec<String> = vec![\"a\".to_string(), \"stop\".to_string(), \"b\".to_string()];
+    'outer: for item in &items {
+        match item.as_str() {
+            \"stop\" => {
+                break 'outer;
+            }
+            _ => {
+            }
+        }
+        println!(\"{}\", item);
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("labeled_break_from_string_switch", &actual, expected);
+}

@@ -1731,8 +1731,16 @@ function main() {
     }
   }
 }"#;
-    // Known gap: switch inside for-of — switch type inference for loop variables
-    let _result = compile_source(source, "conformance_test.rts");
+    assert!(compiles_ok(source), "switch inside for-of should compile");
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".as_str()"),
+        "should match on .as_str() for string switch: {rust}"
+    );
+    assert!(
+        rust.contains("\"start\""),
+        "should have string literal pattern: {rust}"
+    );
 }
 
 #[test]
@@ -2163,8 +2171,16 @@ function main() {
     }
   }
 }"#;
-    // Known gap: switch inside if body — switch type inference in nested context
-    let _result = compile_source(source, "conformance_test.rts");
+    assert!(compiles_ok(source), "switch inside if body should compile");
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".as_str()"),
+        "should match on .as_str() for string switch: {rust}"
+    );
+    assert!(
+        rust.contains("\"fast\""),
+        "should have string literal pattern: {rust}"
+    );
 }
 
 #[test]
@@ -2180,8 +2196,19 @@ function main() {
     }
   }
 }"#;
-    // Known gap: for loop inside switch case — block parsing in case body
-    let _result = compile_source(source, "conformance_test.rts");
+    assert!(
+        compiles_ok(source),
+        "for loop inside switch case should compile"
+    );
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".as_str()"),
+        "should match on .as_str() for string switch: {rust}"
+    );
+    assert!(
+        rust.contains("\"iterate\""),
+        "should have string literal pattern: {rust}"
+    );
 }
 
 #[test]
@@ -2254,8 +2281,20 @@ function main() {
     console.log(item);
   }
 }"#;
-    // Known gap: labeled break from switch inside loop — switch type inference + label propagation
-    let _result = compile_source(source, "conformance_test.rts");
+    assert!(
+        compiles_ok(source),
+        "labeled break from switch in loop should compile"
+    );
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".as_str()"),
+        "should match on .as_str() for string switch: {rust}"
+    );
+    assert!(
+        rust.contains("\"stop\""),
+        "should have string literal pattern: {rust}"
+    );
+    assert!(rust.contains("'outer"), "should have 'outer label: {rust}");
 }
 
 #[test]

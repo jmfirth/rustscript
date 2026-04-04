@@ -3994,3 +3994,175 @@ function main() {
         "new Set(iterable) should create a set with 3 elements"
     );
 }
+
+// ===========================================================================
+//
+// CATEGORY: String switch on plain string variables
+//
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Switch on string variable inside for-of loop
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_string_switch_in_for_of_snapshot() {
+    let source = r#"
+function main() {
+  const commands: Array<string> = ["start", "stop", "start"];
+  for (const cmd of commands) {
+    switch (cmd) {
+      case "start": console.log("starting");
+      case "stop": console.log("stopping");
+    }
+  }
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match cmd.as_str()"),
+        "should produce match on cmd.as_str(): {rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_string_switch_in_for_of_run() {
+    let source = r#"
+function main() {
+  const commands: Array<string> = ["start", "stop", "start"];
+  for (const cmd of commands) {
+    switch (cmd) {
+      case "start": console.log("starting");
+      case "stop": console.log("stopping");
+    }
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "starting\nstopping\nstarting\n");
+}
+
+// ---------------------------------------------------------------------------
+// Switch on string variable inside if body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_string_switch_inside_if_snapshot() {
+    let source = r#"
+function main() {
+  const mode = "fast";
+  if (true) {
+    switch (mode) {
+      case "fast": console.log("speedy");
+      case "slow": console.log("careful");
+    }
+  }
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match mode.as_str()"),
+        "should produce match on mode.as_str(): {rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_string_switch_inside_if_run() {
+    let source = r#"
+function main() {
+  const mode = "fast";
+  if (true) {
+    switch (mode) {
+      case "fast": console.log("speedy");
+      case "slow": console.log("careful");
+    }
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "speedy\n");
+}
+
+// ---------------------------------------------------------------------------
+// For loop inside string switch case
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_for_loop_inside_string_switch_snapshot() {
+    let source = r#"
+function main() {
+  const mode = "iterate";
+  switch (mode) {
+    case "iterate": {
+      for (let i: i32 = 0; i < 3; i = i + 1) {
+        console.log(i);
+      }
+    }
+  }
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match mode.as_str()"),
+        "should produce match on mode.as_str(): {rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_for_loop_inside_string_switch_run() {
+    let source = r#"
+function main() {
+  const mode = "iterate";
+  switch (mode) {
+    case "iterate": {
+      for (let i: i32 = 0; i < 3; i = i + 1) {
+        console.log(i);
+      }
+    }
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "0\n1\n2\n");
+}
+
+// ---------------------------------------------------------------------------
+// Labeled break from string switch in loop
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p6_labeled_break_from_string_switch_snapshot() {
+    let source = r#"
+function main() {
+  const items: Array<string> = ["a", "stop", "b"];
+  outer: for (const item of items) {
+    switch (item) {
+      case "stop": break outer;
+    }
+    console.log(item);
+  }
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("match item.as_str()"),
+        "should produce match on item.as_str(): {rust}"
+    );
+    assert!(
+        rust.contains("break 'outer"),
+        "should contain break 'outer: {rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p6_labeled_break_from_string_switch_run() {
+    let source = r#"
+function main() {
+  const items: Array<string> = ["a", "stop", "b"];
+  outer: for (const item of items) {
+    switch (item) {
+      case "stop": break outer;
+    }
+    console.log(item);
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "a\n");
+}

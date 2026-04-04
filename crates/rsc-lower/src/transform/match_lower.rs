@@ -7,7 +7,7 @@ use rsc_syntax::ast;
 use rsc_syntax::diagnostic::Diagnostic;
 use rsc_syntax::rust_ir::{
     RustBlock, RustExpr, RustExprKind, RustMatchArm, RustMatchStmt, RustPattern, RustReturnStmt,
-    RustStmt,
+    RustStmt, RustType,
 };
 
 use crate::context::LoweringContext;
@@ -55,12 +55,22 @@ impl Transform {
         // Determine switch kind from the patterns present
         let switch_kind = Self::classify_switch(&switch.cases);
 
+        // Check if the scrutinee is a plain string type (not a named enum).
+        // If so, route to string-match lowering instead of enum-based lowering.
+        let is_string_type = scrutinee_var_name
+            .as_ref()
+            .and_then(|name| ctx.lookup_variable(name))
+            .map(|info| matches!(info.ty, RustType::String))
+            .unwrap_or(false);
+
         match switch_kind {
             SwitchKind::Integer => {
                 self.lower_integer_switch(switch, scrutinee, ctx, use_map, stmt_index, reassigned)
             }
             SwitchKind::EnumMember => self
                 .lower_enum_member_switch(switch, scrutinee, ctx, use_map, stmt_index, reassigned),
+            SwitchKind::StringEnum if is_string_type => self
+                .lower_string_match_switch(switch, scrutinee, ctx, use_map, stmt_index, reassigned),
             SwitchKind::StringEnum => self.lower_string_enum_switch(
                 switch,
                 scrutinee,
@@ -164,6 +174,77 @@ impl Transform {
 
         RustStmt::Match(RustMatchStmt {
             scrutinee,
+            arms,
+            span: Some(switch.span),
+        })
+    }
+
+    /// Lower a switch on a plain `String` variable with string literal case patterns.
+    ///
+    /// Generates `match scrutinee.as_str() { "lit" => { ... }, _ => {} }`.
+    /// This is used when the scrutinee's type is `RustType::String` (not a named enum).
+    fn lower_string_match_switch(
+        &self,
+        switch: &ast::SwitchStmt,
+        scrutinee: RustExpr,
+        ctx: &mut LoweringContext,
+        use_map: &UseMap,
+        stmt_index: usize,
+        reassigned: &std::collections::HashSet<String>,
+    ) -> RustStmt {
+        // Wrap the scrutinee in `.as_str()` so we match `&str` patterns against `String`.
+        let scrutinee_as_str = RustExpr::new(
+            RustExprKind::MethodCall {
+                receiver: Box::new(scrutinee),
+                method: "as_str".to_owned(),
+                type_args: vec![],
+                args: vec![],
+            },
+            switch.span,
+        );
+
+        let has_default = switch
+            .cases
+            .iter()
+            .any(|c| matches!(c.pattern, ast::SwitchPattern::Default));
+
+        let mut arms: Vec<RustMatchArm> = switch
+            .cases
+            .iter()
+            .map(|case| {
+                let pattern = match &case.pattern {
+                    ast::SwitchPattern::StringLit(s) => RustPattern::StringLiteral(s.clone()),
+                    ast::SwitchPattern::Default => RustPattern::Wildcard,
+                    _ => RustPattern::Wildcard,
+                };
+                let body = self.lower_switch_case_body(
+                    &case.body,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    reassigned,
+                    None,
+                    &[],
+                    "",
+                );
+                RustMatchArm { pattern, body }
+            })
+            .collect();
+
+        // String matches in Rust must be exhaustive. Add a wildcard arm if
+        // the source switch has no `default:` case.
+        if !has_default {
+            arms.push(RustMatchArm {
+                pattern: RustPattern::Wildcard,
+                body: RustBlock {
+                    stmts: vec![],
+                    expr: None,
+                },
+            });
+        }
+
+        RustStmt::Match(RustMatchStmt {
+            scrutinee: scrutinee_as_str,
             arms,
             span: Some(switch.span),
         })
