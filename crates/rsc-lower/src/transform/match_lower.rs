@@ -56,12 +56,11 @@ impl Transform {
         let switch_kind = Self::classify_switch(&switch.cases);
 
         match switch_kind {
-            SwitchKind::Integer => self.lower_integer_switch(
-                switch, scrutinee, ctx, use_map, stmt_index, reassigned,
-            ),
-            SwitchKind::EnumMember => self.lower_enum_member_switch(
-                switch, scrutinee, ctx, use_map, stmt_index, reassigned,
-            ),
+            SwitchKind::Integer => {
+                self.lower_integer_switch(switch, scrutinee, ctx, use_map, stmt_index, reassigned)
+            }
+            SwitchKind::EnumMember => self
+                .lower_enum_member_switch(switch, scrutinee, ctx, use_map, stmt_index, reassigned),
             SwitchKind::StringEnum => self.lower_string_enum_switch(
                 switch,
                 scrutinee,
@@ -108,7 +107,14 @@ impl Transform {
                     _ => RustPattern::Wildcard,
                 };
                 let body = self.lower_switch_case_body(
-                    &case.body, ctx, use_map, stmt_index, reassigned, None, &[], "",
+                    &case.body,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    reassigned,
+                    None,
+                    &[],
+                    "",
                 );
                 RustMatchArm { pattern, body }
             })
@@ -143,7 +149,14 @@ impl Transform {
                     _ => RustPattern::Wildcard,
                 };
                 let body = self.lower_switch_case_body(
-                    &case.body, ctx, use_map, stmt_index, reassigned, None, &[], "",
+                    &case.body,
+                    ctx,
+                    use_map,
+                    stmt_index,
+                    reassigned,
+                    None,
+                    &[],
+                    "",
                 );
                 RustMatchArm { pattern, body }
             })

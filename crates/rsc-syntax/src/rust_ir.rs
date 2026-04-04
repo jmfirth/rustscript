@@ -540,7 +540,12 @@ impl std::fmt::Display for RustType {
             Self::Unit => "()",
             Self::Never => "!",
             Self::Named(name) | Self::TypeParam(name) | Self::GeneratedUnion { name, .. } => {
-                return f.write_str(name);
+                // Map well-known RustScript type names to their Rust equivalents
+                let mapped = match name.as_str() {
+                    "Date" => "std::time::SystemTime",
+                    _ => name.as_str(),
+                };
+                return f.write_str(mapped);
             }
             Self::DynRef(trait_name) => return write!(f, "&dyn {trait_name}"),
             Self::Generic(base, args) => {

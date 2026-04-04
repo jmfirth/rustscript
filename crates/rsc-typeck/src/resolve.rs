@@ -32,6 +32,7 @@ pub fn resolve_type_name(name: &str) -> Option<Type> {
         "string" => Some(Type::String),
         "void" => Some(Type::Unit),
         "RegExp" => Some(Type::Named("Regex".to_owned())),
+        "Date" => Some(Type::Named("Date".to_owned())),
         _ => None,
     }
 }

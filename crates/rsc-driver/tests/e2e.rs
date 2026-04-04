@@ -1167,3 +1167,47 @@ function main() {
     assert_eq!(lines[0], "true");
     assert_eq!(lines[1], "false");
 }
+
+// ---------------------------------------------------------------------------
+// Task 172: Date formatting methods — compile_and_run
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_date_value_of_returns_positive_millis() {
+    let source = r#"
+function main() {
+  const d: Date = new Date();
+  const v: i64 = d.valueOf() as i64;
+  if v > 0 {
+    console.log("positive");
+  } else {
+    console.log("not positive");
+  }
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "positive");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_date_to_json_contains_iso_markers() {
+    let source = r#"
+function main() {
+  const d: Date = new Date(0);
+  const json: string = d.toJSON();
+  const has_t: bool = json.includes("T");
+  const has_z: bool = json.includes("Z");
+  if has_t && has_z {
+    console.log("iso");
+  } else {
+    console.log("not iso");
+  }
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "iso");
+}

@@ -430,7 +430,9 @@ function main() {
             result.diagnostics
         );
         assert!(
-            result.rust_source.contains("fn swap<T, U>(a: T, b: U) -> T"),
+            result
+                .rust_source
+                .contains("fn swap<T, U>(a: T, b: U) -> T"),
             "expected multi-generic function in output, got:\n{}",
             result.rust_source
         );
@@ -454,8 +456,7 @@ function main() {
 
     #[test]
     fn test_compile_source_multi_generic_constrained_and_unconstrained() {
-        let source =
-            r#"function process<T extends Clone, U>(a: T, b: U): T { return a; }"#;
+        let source = r#"function process<T extends Clone, U>(a: T, b: U): T { return a; }"#;
         let result = compile_source(source, "proc.rts");
         assert!(
             !result.has_errors,
@@ -473,8 +474,7 @@ function main() {
 
     #[test]
     fn test_compile_source_multi_generic_three_params() {
-        let source =
-            r#"function triple<T, U, V>(a: T, b: U, c: V): T { return a; }"#;
+        let source = r#"function triple<T, U, V>(a: T, b: U, c: V): T { return a; }"#;
         let result = compile_source(source, "triple.rts");
         assert!(
             !result.has_errors,

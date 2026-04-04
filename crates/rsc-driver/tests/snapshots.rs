@@ -6005,7 +6005,11 @@ function main() {
   console.log(r);
 }";
     let output = test_utils::compile_and_run(source);
-    assert_eq!(output.trim(), "-1", "expected localeCompare(\"abc\", \"abd\") = -1");
+    assert_eq!(
+        output.trim(),
+        "-1",
+        "expected localeCompare(\"abc\", \"abd\") = -1"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -6599,5 +6603,225 @@ function main() {
     assert!(
         actual.contains("__DURI_RESERVED") || actual.contains("__duri_bytes"),
         "decodeURI should emit URI-aware percent-decoding block:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 172: Date formatting methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_date_to_date_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toDateString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__DAYS") && actual.contains("__MONTHS") && actual.contains("__dow"),
+        "toDateString should emit day/month names and day-of-week:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_time_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toTimeString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__hours") && actual.contains("GMT+0000"),
+        "toTimeString should emit time components and GMT offset:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_utc_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toUTCString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__DAYS") && actual.contains("GMT"),
+        "toUTCString should emit day names and GMT suffix:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_json() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toJSON());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("format!"),
+        "toJSON should delegate to toISOString:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_locale_date_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toLocaleDateString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__DAYS") && actual.contains("__MONTHS"),
+        "toLocaleDateString should delegate to toDateString:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_locale_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toLocaleString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("format!(\"{:?}\""),
+        "toLocaleString should delegate to toString (Debug format):\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_to_locale_time_string() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.toLocaleTimeString());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__hours") && actual.contains("GMT+0000"),
+        "toLocaleTimeString should delegate to toTimeString:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_value_of() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.valueOf());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("as_millis"),
+        "valueOf should delegate to getTime (as_millis):\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 173: Date constructor patterns and static methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_new_date_no_args() {
+    let source = "\
+function main() {
+  const d: Date = new Date();
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("SystemTime::now()"),
+        "new Date() should emit SystemTime::now():\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_millis() {
+    let source = "\
+function main() {
+  const d: Date = new Date(1705276800000);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("Duration::from_millis"),
+        "new Date(millis) should emit UNIX_EPOCH + Duration::from_millis:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_string() {
+    let source = r#"
+function main() {
+  const d: Date = new Date("2024-01-15");
+  console.log(d.getTime());
+}
+"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("split('-')") && actual.contains("UNIX_EPOCH"),
+        "new Date(string) should parse ISO date and construct SystemTime:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_components() {
+    let source = "\
+function main() {
+  const d: Date = new Date(2024, 0, 15);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__yr") && actual.contains("__mo") && actual.contains("UNIX_EPOCH"),
+        "new Date(y,m,d) should emit civil-to-days construction:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_parse() {
+    let source = r#"
+function main() {
+  const ms: i64 = Date.parse("2024-01-15");
+  console.log(ms);
+}
+"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("split('-')") && actual.contains("__total_secs"),
+        "Date.parse should emit ISO parsing block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_utc() {
+    let source = "\
+function main() {
+  const ms: i64 = Date.UTC(2024, 0, 15);
+  console.log(ms);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__yr") && actual.contains("__total_days"),
+        "Date.UTC should emit civil-to-days millis computation:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_millis_zero() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("Duration::from_millis"),
+        "new Date(0) should emit epoch construction:\n{actual}"
     );
 }

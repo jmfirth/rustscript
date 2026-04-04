@@ -3785,3 +3785,103 @@ fn test_p175_btoa_atob_roundtrip_e2e() {
         "btoa/atob roundtrip should preserve original string"
     );
 }
+
+// ===========================================================================
+//
+// Task 173: Date constructor patterns and static methods (e2e)
+//
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_p173_new_date_millis_epoch_e2e() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.getTime());
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "0",
+        "new Date(0).getTime() should be 0 (epoch)"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p173_date_utc_e2e() {
+    let source = "\
+function main() {
+  const ms: i64 = Date.UTC(2024, 0, 1);
+  console.log(ms);
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1704067200000",
+        "Date.UTC(2024, 0, 1) should return millis for 2024-01-01T00:00:00Z"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p173_date_parse_e2e() {
+    let source = r#"function main() {
+  const ms: i64 = Date.parse("2024-01-15");
+  console.log(ms);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1705276800000",
+        "Date.parse('2024-01-15') should return millis for 2024-01-15T00:00:00Z"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p173_new_date_components_e2e() {
+    let source = "\
+function main() {
+  const d: Date = new Date(2024, 0, 15);
+  console.log(d.getTime());
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1705276800000",
+        "new Date(2024, 0, 15).getTime() should match Date.parse('2024-01-15')"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p173_new_date_string_iso_e2e() {
+    let source = r#"function main() {
+  const d: Date = new Date("2024-01-15");
+  console.log(d.getTime());
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1705276800000",
+        "new Date('2024-01-15').getTime() should return correct millis"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p173_new_date_millis_specific_e2e() {
+    let source = "\
+function main() {
+  const d: Date = new Date(1705276800000);
+  console.log(d.getTime());
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1705276800000",
+        "new Date(ms).getTime() should roundtrip"
+    );
+}
