@@ -508,3 +508,27 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "100\n101");
 }
+
+// ---------------------------------------------------------------------------
+// Closure returning struct literal in block body
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_conformance_e2e_closure_return_struct_literal() {
+    let source = "\
+type Point = { x: i32, y: i32 }
+
+function make_point(f: (x: i32) => Point): Point {
+  return f(5);
+}
+
+function main() {
+  const p: Point = make_point((n: i32): Point => { return { x: n, y: n * 2 }; });
+  console.log(p.x);
+  console.log(p.y);
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "5\n10");
+}

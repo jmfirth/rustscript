@@ -1427,6 +1427,15 @@ impl Transform {
             rsc_typeck::bridge::type_to_rust_type(&ty)
         });
 
+        // If the closure has a named return type, set struct context so struct
+        // literals in the body know their type.
+        let prev_struct_name = ctx.current_struct_type_name().map(String::from);
+        if let Some(ref rt) = return_type {
+            if let Some(name) = extract_named_type(rt) {
+                ctx.set_struct_type_name(Some(name));
+            }
+        }
+
         // Lower body
         let mut body = match &closure.body {
             ast::ClosureBody::Expr(expr) => {
@@ -1440,6 +1449,9 @@ impl Transform {
                 RustClosureBody::Block(lowered)
             }
         };
+
+        // Restore previous struct type context
+        ctx.set_struct_type_name(prev_struct_name);
 
         // If there are destructuring params, prepend the destructure statements
         // to the body. Expression bodies are converted to block bodies.

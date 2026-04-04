@@ -1658,8 +1658,11 @@ function main() {
   const points = nums.map((n: i32): Point => { return { x: n, y: n * 2 }; });
   console.log(points.length);
 }"#;
-    // Known gap: closure returning struct literal in block body — struct type inference doesn't reach into closure return position
-    let _result = compile_source(source, "conformance_test.rts");
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("Point {"),
+        "closure returning struct should emit Point {{ ... }}: {rust}"
+    );
 }
 
 #[test]
