@@ -2405,11 +2405,120 @@ impl Transform {
                 RustExpr::new(RustExprKind::VecLit(args), span)
             }
             "Date" => {
-                // `new Date()` → `std::time::SystemTime::now()`
-                RustExpr::new(
-                    RustExprKind::Raw("std::time::SystemTime::now()".to_owned()),
-                    span,
-                )
+                // Task 173: Date constructor patterns
+                match args.len() {
+                    0 => {
+                        // `new Date()` → `std::time::SystemTime::now()`
+                        RustExpr::new(
+                            RustExprKind::Raw("std::time::SystemTime::now()".to_owned()),
+                            span,
+                        )
+                    }
+                    1 => {
+                        // Determine whether the argument is a string or number.
+                        // Check the AST arg to classify.
+                        let ast_arg = &new_expr.args[0];
+                        let is_string = matches!(&ast_arg.kind, ast::ExprKind::StringLit(_))
+                            || matches!(&ast_arg.kind, ast::ExprKind::TemplateLit(_));
+                        if is_string {
+                            // `new Date("2024-01-15")` → parse ISO string → SystemTime
+                            let arg_code = crate::builtins::emit_expr_raw_pub(&args[0]);
+                            RustExpr::new(
+                                RustExprKind::Raw(format!(
+                                    "{{ \
+                                    let __ds: &str = &{arg_code}; \
+                                    let __ds = __ds.trim_end_matches('Z'); \
+                                    let (__date_part, __time_part) = if let Some(__i) = __ds.find('T') {{ \
+                                        (__ds[..__i].to_string(), __ds[__i + 1..].to_string()) \
+                                    }} else {{ \
+                                        (__ds.to_string(), String::new()) \
+                                    }}; \
+                                    let __dp: Vec<&str> = __date_part.split('-').collect(); \
+                                    let __yr: i64 = __dp[0].parse().unwrap_or(1970); \
+                                    let __mo: i64 = if __dp.len() > 1 {{ __dp[1].parse().unwrap_or(1) }} else {{ 1 }}; \
+                                    let __dy: i64 = if __dp.len() > 2 {{ __dp[2].parse().unwrap_or(1) }} else {{ 1 }}; \
+                                    let (__hr, __mi, __sc, __ms): (i64, i64, i64, i64) = if !__time_part.is_empty() {{ \
+                                        let (__main, __frac) = if let Some(__dot) = __time_part.find('.') {{ \
+                                            (__time_part[..__dot].to_string(), __time_part[__dot + 1..].to_string()) \
+                                        }} else {{ \
+                                            (__time_part.clone(), String::new()) \
+                                        }}; \
+                                        let __tp: Vec<&str> = __main.split(':').collect(); \
+                                        let __h: i64 = __tp.first().and_then(|s| s.parse().ok()).unwrap_or(0); \
+                                        let __m: i64 = __tp.get(1).and_then(|s| s.parse().ok()).unwrap_or(0); \
+                                        let __s: i64 = __tp.get(2).and_then(|s| s.parse().ok()).unwrap_or(0); \
+                                        let __f: i64 = if !__frac.is_empty() {{ \
+                                            let mut __fv: i64 = __frac[..std::cmp::min(__frac.len(), 3)].parse().unwrap_or(0); \
+                                            if __frac.len() == 1 {{ __fv *= 100; }} \
+                                            else if __frac.len() == 2 {{ __fv *= 10; }} \
+                                            __fv \
+                                        }} else {{ 0 }}; \
+                                        (__h, __m, __s, __f) \
+                                    }} else {{ \
+                                        (0, 0, 0, 0) \
+                                    }}; \
+                                    let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+                                    let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+                                    let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+                                    let __yoe = (__y - __era * 400) as u64; \
+                                    let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+                                    let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+                                    let __total_days = __era * 146097 + __doe as i64 - 719468; \
+                                    let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
+                                    let __total_ms = __total_secs * 1000 + __ms; \
+                                    std::time::UNIX_EPOCH + std::time::Duration::from_millis(__total_ms as u64) \
+                                    }}"
+                                )),
+                                span,
+                            )
+                        } else {
+                            // `new Date(millis)` → `UNIX_EPOCH + Duration::from_millis(ms as u64)`
+                            let arg_code = crate::builtins::emit_expr_raw_pub(&args[0]);
+                            RustExpr::new(
+                                RustExprKind::Raw(format!(
+                                    "std::time::UNIX_EPOCH + std::time::Duration::from_millis({arg_code} as u64)"
+                                )),
+                                span,
+                            )
+                        }
+                    }
+                    _ => {
+                        // `new Date(year, month, day?, hours?, minutes?, seconds?, ms?)`
+                        // month is 0-based (JS convention)
+                        let yr = crate::builtins::emit_expr_raw_pub(&args[0]);
+                        let mo = crate::builtins::emit_expr_raw_pub(&args[1]);
+                        let dy = args.get(2).map(|a| crate::builtins::emit_expr_raw_pub(a)).unwrap_or_else(|| "1".to_owned());
+                        let hr = args.get(3).map(|a| crate::builtins::emit_expr_raw_pub(a)).unwrap_or_else(|| "0".to_owned());
+                        let mi = args.get(4).map(|a| crate::builtins::emit_expr_raw_pub(a)).unwrap_or_else(|| "0".to_owned());
+                        let sc = args.get(5).map(|a| crate::builtins::emit_expr_raw_pub(a)).unwrap_or_else(|| "0".to_owned());
+                        let ms = args.get(6).map(|a| crate::builtins::emit_expr_raw_pub(a)).unwrap_or_else(|| "0".to_owned());
+
+                        RustExpr::new(
+                            RustExprKind::Raw(format!(
+                                "{{ \
+                                let __yr: i64 = {yr} as i64; \
+                                let __mo: i64 = ({mo} as i64) + 1; \
+                                let __dy: i64 = {dy} as i64; \
+                                let __hr: i64 = {hr} as i64; \
+                                let __mi: i64 = {mi} as i64; \
+                                let __sc: i64 = {sc} as i64; \
+                                let __ms: i64 = {ms} as i64; \
+                                let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+                                let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+                                let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+                                let __yoe = (__y - __era * 400) as u64; \
+                                let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+                                let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+                                let __total_days = __era * 146097 + __doe as i64 - 719468; \
+                                let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
+                                let __total_ms = __total_secs * 1000 + __ms; \
+                                std::time::UNIX_EPOCH + std::time::Duration::from_millis(__total_ms as u64) \
+                                }}"
+                            )),
+                            span,
+                        )
+                    }
+                }
             }
             "Regex" => {
                 // `new RegExp("pattern")` → `Regex::new("pattern").unwrap()`

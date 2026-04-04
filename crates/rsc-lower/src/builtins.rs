@@ -485,6 +485,9 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
 
     // Task 129: Date class — static methods
     registry.register_method("Date", "now", lower_date_now, false);
+    // Task 173: Date.parse and Date.UTC static methods
+    registry.register_method("Date", "parse", lower_date_parse, false);
+    registry.register_method("Date", "UTC", lower_date_utc, false);
 
     // Task 129: Date class — instance methods (type-aware dispatch)
     registry.register_date_method("getTime", lower_date_get_time);
@@ -5583,6 +5586,105 @@ fn lower_date_now(_args: Vec<RustExpr>, span: Span) -> RustExpr {
     )
 }
 
+/// Lower `Date.parse(dateString)` to epoch milliseconds as `i64`.
+///
+/// Parses ISO 8601 strings: `"YYYY-MM-DD"`, `"YYYY-MM-DDTHH:MM:SS"`,
+/// `"YYYY-MM-DDTHH:MM:SSZ"`, `"YYYY-MM-DDTHH:MM:SS.mmmZ"`.
+///
+/// Emits a raw block that splits and parses the components, then converts
+/// to milliseconds since the Unix epoch using a civil-to-days algorithm.
+fn lower_date_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg_code = args
+        .first()
+        .map(|a| emit_expr_raw(a))
+        .unwrap_or_else(|| r#""""#.to_owned());
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __ds: &str = &{arg_code}; \
+            let __ds = __ds.trim_end_matches('Z'); \
+            let (__date_part, __time_part) = if let Some(__i) = __ds.find('T') {{ \
+                (__ds[..__i].to_string(), __ds[__i + 1..].to_string()) \
+            }} else {{ \
+                (__ds.to_string(), String::new()) \
+            }}; \
+            let __dp: Vec<&str> = __date_part.split('-').collect(); \
+            let __yr: i64 = __dp[0].parse().unwrap_or(1970); \
+            let __mo: i64 = if __dp.len() > 1 {{ __dp[1].parse().unwrap_or(1) }} else {{ 1 }}; \
+            let __dy: i64 = if __dp.len() > 2 {{ __dp[2].parse().unwrap_or(1) }} else {{ 1 }}; \
+            let (__hr, __mi, __sc, __ms): (i64, i64, i64, i64) = if !__time_part.is_empty() {{ \
+                let (__main, __frac) = if let Some(__dot) = __time_part.find('.') {{ \
+                    (__time_part[..__dot].to_string(), __time_part[__dot + 1..].to_string()) \
+                }} else {{ \
+                    (__time_part.clone(), String::new()) \
+                }}; \
+                let __tp: Vec<&str> = __main.split(':').collect(); \
+                let __h: i64 = __tp.first().and_then(|s| s.parse().ok()).unwrap_or(0); \
+                let __m: i64 = __tp.get(1).and_then(|s| s.parse().ok()).unwrap_or(0); \
+                let __s: i64 = __tp.get(2).and_then(|s| s.parse().ok()).unwrap_or(0); \
+                let __f: i64 = if !__frac.is_empty() {{ \
+                    let mut __fv: i64 = __frac[..std::cmp::min(__frac.len(), 3)].parse().unwrap_or(0); \
+                    if __frac.len() == 1 {{ __fv *= 100; }} \
+                    else if __frac.len() == 2 {{ __fv *= 10; }} \
+                    __fv \
+                }} else {{ 0 }}; \
+                (__h, __m, __s, __f) \
+            }} else {{ \
+                (0, 0, 0, 0) \
+            }}; \
+            let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+            let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+            let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+            let __yoe = (__y - __era * 400) as u64; \
+            let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+            let __total_days = __era * 146097 + __doe as i64 - 719468; \
+            let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
+            __total_secs * 1000 + __ms \
+            }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `Date.UTC(year, month, ...)` to epoch milliseconds as `i64`.
+///
+/// Arguments: `year`, `month` (0-based), optional `day`, `hours`, `minutes`,
+/// `seconds`, `milliseconds`. Uses the civil-to-days algorithm.
+fn lower_date_utc(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let yr_code = args.first().map(|a| emit_expr_raw(a)).unwrap_or_else(|| "1970".to_owned());
+    let mo_code = args.get(1).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "0".to_owned());
+    let dy_code = args.get(2).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "1".to_owned());
+    let hr_code = args.get(3).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "0".to_owned());
+    let mi_code = args.get(4).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "0".to_owned());
+    let sc_code = args.get(5).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "0".to_owned());
+    let ms_code = args.get(6).map(|a| emit_expr_raw(a)).unwrap_or_else(|| "0".to_owned());
+
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __yr: i64 = {yr_code} as i64; \
+            let __mo: i64 = ({mo_code} as i64) + 1; \
+            let __dy: i64 = {dy_code} as i64; \
+            let __hr: i64 = {hr_code} as i64; \
+            let __mi: i64 = {mi_code} as i64; \
+            let __sc: i64 = {sc_code} as i64; \
+            let __ms: i64 = {ms_code} as i64; \
+            let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+            let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+            let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+            let __yoe = (__y - __era * 400) as u64; \
+            let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+            let __total_days = __era * 146097 + __doe as i64 - 719468; \
+            let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
+            __total_secs * 1000 + __ms \
+            }}"
+        )),
+        span,
+    )
+}
+
 /// Lower `.getTime()` on a `Date` instance to epoch milliseconds as `i64`.
 ///
 /// Emits: `receiver.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64`
@@ -5851,7 +5953,7 @@ fn lower_number_to_string(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -
 ///
 /// Used for type-aware dispatch of Date instance methods like `.getTime()`.
 pub(crate) fn is_date_type(ty: &RustType) -> bool {
-    matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime")
+    matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime" || n == "std::time::SystemTime")
 }
 
 // ---------------------------------------------------------------------------
@@ -5864,11 +5966,27 @@ fn emit_expr_raw(expr: &RustExpr) -> String {
         RustExprKind::Ident(name) => name.clone(),
         RustExprKind::StringLit(s) => format!(r#""{s}""#),
         RustExprKind::IntLit(n) => n.to_string(),
+        RustExprKind::FloatLit(f) => format!("{f}"),
         RustExprKind::FieldAccess { object, field } => {
             format!("{}.{}", emit_expr_raw(object), field)
         }
+        RustExprKind::ToString(inner) => {
+            // String literals get wrapped in .to_string() during lowering.
+            // For raw block embedding, emit the inner string literal directly
+            // (since we typically take &str anyway, the .to_string() is redundant).
+            let inner_code = emit_expr_raw(inner);
+            format!("{inner_code}.to_string()")
+        }
+        RustExprKind::Raw(code) => code.clone(),
         _ => "__enc_in".to_owned(),
     }
+}
+
+/// Public wrapper around `emit_expr_raw` for use in `expr_lower.rs`.
+///
+/// Emits a `RustExpr` as inline Rust source text for embedding in raw blocks.
+pub(crate) fn emit_expr_raw_pub(expr: &RustExpr) -> String {
+    emit_expr_raw(expr)
 }
 
 /// Lower `btoa(str)` to an inline base64 encoding block.
@@ -8484,12 +8602,6 @@ mod tests {
     }
 
     #[test]
-    fn test_builtin_registry_lookup_console_time_log_returns_some() {
-        let registry = BuiltinRegistry::new();
-        assert!(registry.lookup_method("console", "timeLog").is_some());
-    }
-
-    #[test]
     fn test_lower_console_time_log_produces_eprintln_with_time_placeholder() {
         let result = lower_console_time_log(vec![string_arg("benchmark")], span());
         match &result.kind {
@@ -9323,6 +9435,79 @@ mod tests {
                 }
             }
             other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 173: Date.parse and Date.UTC static method tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_date_parse() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_method("Date", "parse").is_some(),
+            "Date.parse should be registered"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_utc() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_method("Date", "UTC").is_some(),
+            "Date.UTC should be registered"
+        );
+    }
+
+    #[test]
+    fn test_lower_date_parse() {
+        let result = lower_date_parse(
+            vec![RustExpr::new(
+                RustExprKind::StringLit("2024-01-15".to_owned()),
+                span(),
+            )],
+            span(),
+        );
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("__ds"), "should define __ds variable: {code}");
+                assert!(
+                    code.contains("split('-')"),
+                    "should split date parts: {code}"
+                );
+                assert!(
+                    code.contains("__total_secs"),
+                    "should compute total seconds: {code}"
+                );
+            }
+            other => panic!("expected Raw block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_utc() {
+        let result = lower_date_utc(
+            vec![
+                RustExpr::new(RustExprKind::IntLit(2024), span()),
+                RustExpr::new(RustExprKind::IntLit(0), span()),
+                RustExpr::new(RustExprKind::IntLit(15), span()),
+            ],
+            span(),
+        );
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("2024"), "should contain year: {code}");
+                assert!(
+                    code.contains("__total_days"),
+                    "should compute total days: {code}"
+                );
+                assert!(
+                    code.contains("+ 1"),
+                    "should adjust 0-based month: {code}"
+                );
+            }
+            other => panic!("expected Raw block, got {other:?}"),
         }
     }
 

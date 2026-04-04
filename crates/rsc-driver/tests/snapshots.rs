@@ -6601,3 +6601,107 @@ function main() {
         "decodeURI should emit URI-aware percent-decoding block:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 173: Date constructor patterns and static methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_new_date_no_args() {
+    let source = "\
+function main() {
+  const d: Date = new Date();
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("SystemTime::now()"),
+        "new Date() should emit SystemTime::now():\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_millis() {
+    let source = "\
+function main() {
+  const d: Date = new Date(1705276800000);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("Duration::from_millis"),
+        "new Date(millis) should emit UNIX_EPOCH + Duration::from_millis:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_string() {
+    let source = r#"
+function main() {
+  const d: Date = new Date("2024-01-15");
+  console.log(d.getTime());
+}
+"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("split('-')") && actual.contains("UNIX_EPOCH"),
+        "new Date(string) should parse ISO date and construct SystemTime:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_components() {
+    let source = "\
+function main() {
+  const d: Date = new Date(2024, 0, 15);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__yr") && actual.contains("__mo") && actual.contains("UNIX_EPOCH"),
+        "new Date(y,m,d) should emit civil-to-days construction:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_parse() {
+    let source = r#"
+function main() {
+  const ms: i64 = Date.parse("2024-01-15");
+  console.log(ms);
+}
+"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("split('-')") && actual.contains("__total_secs"),
+        "Date.parse should emit ISO parsing block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_utc() {
+    let source = "\
+function main() {
+  const ms: i64 = Date.UTC(2024, 0, 15);
+  console.log(ms);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__yr") && actual.contains("__total_days"),
+        "Date.UTC should emit civil-to-days millis computation:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_date_millis_zero() {
+    let source = "\
+function main() {
+  const d: Date = new Date(0);
+  console.log(d.getTime());
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("Duration::from_millis"),
+        "new Date(0) should emit epoch construction:\n{actual}"
+    );
+}
