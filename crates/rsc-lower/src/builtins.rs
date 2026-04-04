@@ -508,6 +508,14 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // Task 176: Global structuredClone and queueMicrotask
     registry.register_function("structuredClone", lower_structured_clone);
     registry.register_function("queueMicrotask", lower_queue_microtask);
+
+    // Task 175: Encoding/decoding global functions
+    registry.register_function("btoa", lower_btoa);
+    registry.register_function("atob", lower_atob);
+    registry.register_function("encodeURIComponent", lower_encode_uri_component);
+    registry.register_function("decodeURIComponent", lower_decode_uri_component);
+    registry.register_function("encodeURI", lower_encode_uri);
+    registry.register_function("decodeURI", lower_decode_uri);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -5846,6 +5854,278 @@ pub(crate) fn is_date_type(ty: &RustType) -> bool {
     matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime")
 }
 
+// ---------------------------------------------------------------------------
+// Task 175: Encoding/decoding global functions
+// ---------------------------------------------------------------------------
+
+/// Emit a simple expression as a Rust code string for use in raw expression blocks.
+fn emit_expr_raw(expr: &RustExpr) -> String {
+    match &expr.kind {
+        RustExprKind::Ident(name) => name.clone(),
+        RustExprKind::StringLit(s) => format!(r#""{s}""#),
+        RustExprKind::IntLit(n) => n.to_string(),
+        RustExprKind::FieldAccess { object, field } => {
+            format!("{}.{}", emit_expr_raw(object), field)
+        }
+        _ => "__enc_in".to_owned(),
+    }
+}
+
+/// Lower `btoa(str)` to an inline base64 encoding block.
+///
+/// Emits a self-contained Rust block that base64-encodes the input string using
+/// the standard alphabet. No external crate dependencies.
+///
+/// JavaScript: `btoa("hello")` -> `"aGVsbG8="`
+fn lower_btoa(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __b64_in: &str = &({arg_code});
+    let __b64_bytes = __b64_in.as_bytes();
+    const __B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut __b64_out = String::with_capacity((__b64_bytes.len() + 2) / 3 * 4);
+    let mut __b64_i = 0usize;
+    while __b64_i + 2 < __b64_bytes.len() {{
+        let b0 = __b64_bytes[__b64_i] as usize;
+        let b1 = __b64_bytes[__b64_i + 1] as usize;
+        let b2 = __b64_bytes[__b64_i + 2] as usize;
+        __b64_out.push(__B64_CHARS[b0 >> 2] as char);
+        __b64_out.push(__B64_CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        __b64_out.push(__B64_CHARS[((b1 & 15) << 2) | (b2 >> 6)] as char);
+        __b64_out.push(__B64_CHARS[b2 & 63] as char);
+        __b64_i += 3;
+    }}
+    let __b64_rem = __b64_bytes.len() - __b64_i;
+    if __b64_rem == 1 {{
+        let b0 = __b64_bytes[__b64_i] as usize;
+        __b64_out.push(__B64_CHARS[b0 >> 2] as char);
+        __b64_out.push(__B64_CHARS[(b0 & 3) << 4] as char);
+        __b64_out.push('=');
+        __b64_out.push('=');
+    }} else if __b64_rem == 2 {{
+        let b0 = __b64_bytes[__b64_i] as usize;
+        let b1 = __b64_bytes[__b64_i + 1] as usize;
+        __b64_out.push(__B64_CHARS[b0 >> 2] as char);
+        __b64_out.push(__B64_CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        __b64_out.push(__B64_CHARS[(b1 & 15) << 2] as char);
+        __b64_out.push('=');
+    }}
+    __b64_out
+}}"#
+        )),
+        span,
+    )
+}
+
+/// Lower `atob(str)` to an inline base64 decoding block.
+///
+/// Emits a self-contained Rust block that base64-decodes the input string.
+/// No external crate dependencies. Returns an empty string on invalid input.
+///
+/// JavaScript: `atob("aGVsbG8=")` -> `"hello"`
+fn lower_atob(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __b64d_in: &str = &({arg_code});
+    let __b64d_bytes = __b64d_in.as_bytes();
+    let b64d_val = |c: u8| -> u8 {{
+        match c {{
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => 0,
+        }}
+    }};
+    let mut __b64d_out: Vec<u8> = Vec::with_capacity(__b64d_bytes.len() / 4 * 3);
+    let mut __b64d_i = 0usize;
+    while __b64d_i + 3 < __b64d_bytes.len() {{
+        let v0 = b64d_val(__b64d_bytes[__b64d_i]) as u32;
+        let v1 = b64d_val(__b64d_bytes[__b64d_i + 1]) as u32;
+        let v2 = b64d_val(__b64d_bytes[__b64d_i + 2]) as u32;
+        let v3 = b64d_val(__b64d_bytes[__b64d_i + 3]) as u32;
+        __b64d_out.push(((v0 << 2) | (v1 >> 4)) as u8);
+        if __b64d_bytes[__b64d_i + 2] != b'=' {{
+            __b64d_out.push(((v1 << 4) | (v2 >> 2)) as u8);
+        }}
+        if __b64d_bytes[__b64d_i + 3] != b'=' {{
+            __b64d_out.push(((v2 << 6) | v3) as u8);
+        }}
+        __b64d_i += 4;
+    }}
+    String::from_utf8(__b64d_out).unwrap_or_default()
+}}"#
+        )),
+        span,
+    )
+}
+
+/// Lower `encodeURIComponent(str)` to an inline percent-encoding block.
+///
+/// Preserves `A-Z a-z 0-9 - _ . ! ~ * ' ( )` unchanged; percent-encodes everything else.
+/// Matches the JavaScript `encodeURIComponent` specification.
+///
+/// JavaScript: `encodeURIComponent("hello world")` -> `"hello%20world"`
+fn lower_encode_uri_component(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __enc_in: &str = &({arg_code});
+    let mut __enc_out = String::with_capacity(__enc_in.len());
+    for __enc_b in __enc_in.bytes() {{
+        match __enc_b {{
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {{
+                __enc_out.push(__enc_b as char);
+            }}
+            _ => {{
+                __enc_out.push_str(&format!("%{{:02X}}", __enc_b));
+            }}
+        }}
+    }}
+    __enc_out
+}}"#
+        )),
+        span,
+    )
+}
+
+/// Lower `decodeURIComponent(str)` to an inline percent-decoding block.
+///
+/// Decodes `%XX` sequences back to their UTF-8 byte values.
+/// Matches the JavaScript `decodeURIComponent` specification.
+fn lower_decode_uri_component(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __dec_in: &str = &({arg_code});
+    let mut __dec_bytes: Vec<u8> = Vec::with_capacity(__dec_in.len());
+    let mut __dec_chars = __dec_in.chars().peekable();
+    while let Some(__dec_c) = __dec_chars.next() {{
+        if __dec_c == '%' {{
+            let h1 = __dec_chars.next().unwrap_or('0');
+            let h2 = __dec_chars.next().unwrap_or('0');
+            let __dec_hex = format!("{{}}{{}}", h1, h2);
+            let __dec_byte = u8::from_str_radix(&__dec_hex, 16).unwrap_or(0);
+            __dec_bytes.push(__dec_byte);
+        }} else {{
+            let mut __dec_buf = [0u8; 4];
+            for &b in __dec_c.encode_utf8(&mut __dec_buf).as_bytes() {{
+                __dec_bytes.push(b);
+            }}
+        }}
+    }}
+    String::from_utf8(__dec_bytes).unwrap_or_default()
+}}"#
+        )),
+        span,
+    )
+}
+
+/// Lower `encodeURI(str)` to an inline percent-encoding block.
+///
+/// Preserves URI structural characters (`:/?#[]@!$&'()*+,;=`) in addition to
+/// unreserved characters. Matches the JavaScript `encodeURI` specification.
+fn lower_encode_uri(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __euri_in: &str = &({arg_code});
+    let mut __euri_out = String::with_capacity(__euri_in.len());
+    for __euri_b in __euri_in.bytes() {{
+        match __euri_b {{
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~'
+            | b':' | b'/' | b'?' | b'#' | b'[' | b']' | b'@'
+            | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*'
+            | b'+' | b',' | b';' | b'=' => {{
+                __euri_out.push(__euri_b as char);
+            }}
+            _ => {{
+                __euri_out.push_str(&format!("%{{:02X}}", __euri_b));
+            }}
+        }}
+    }}
+    __euri_out
+}}"#
+        )),
+        span,
+    )
+}
+
+/// Lower `decodeURI(str)` to an inline percent-decoding block.
+///
+/// Decodes `%XX` sequences but preserves sequences that represent URI structural
+/// characters (`:/?#[]@!$&'()*+,;=`). Matches the JavaScript `decodeURI` spec.
+fn lower_decode_uri(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+    let arg_code = emit_expr_raw(&arg);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            r#"{{
+    let __duri_in: &str = &({arg_code});
+    let mut __duri_bytes: Vec<u8> = Vec::with_capacity(__duri_in.len());
+    const __DURI_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
+    let mut __duri_chars = __duri_in.chars().peekable();
+    while let Some(__duri_c) = __duri_chars.next() {{
+        if __duri_c == '%' {{
+            let h1 = __duri_chars.next().unwrap_or('0');
+            let h2 = __duri_chars.next().unwrap_or('0');
+            let __duri_hex = format!("{{}}{{}}", h1, h2);
+            let __duri_byte = u8::from_str_radix(&__duri_hex, 16).unwrap_or(0);
+            if __DURI_RESERVED.contains(&__duri_byte) {{
+                __duri_bytes.push(b'%');
+                for b in __duri_hex.bytes() {{
+                    __duri_bytes.push(b);
+                }}
+            }} else {{
+                __duri_bytes.push(__duri_byte);
+            }}
+        }} else {{
+            let mut __duri_buf = [0u8; 4];
+            for &b in __duri_c.encode_utf8(&mut __duri_buf).as_bytes() {{
+                __duri_bytes.push(b);
+            }}
+        }}
+    }}
+    String::from_utf8(__duri_bytes).unwrap_or_default()
+}}"#
+        )),
+        span,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9866,6 +10146,183 @@ mod tests {
                 }
             }
             other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 175: Encoding/decoding global functions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_function_btoa_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("btoa").is_some(),
+            "btoa should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_atob_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("atob").is_some(),
+            "atob should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_encode_uri_component_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("encodeURIComponent").is_some(),
+            "encodeURIComponent should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_decode_uri_component_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("decodeURIComponent").is_some(),
+            "decodeURIComponent should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_encode_uri_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("encodeURI").is_some(),
+            "encodeURI should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_function_decode_uri_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(
+            registry.lookup_function("decodeURI").is_some(),
+            "decodeURI should be registered as a builtin free function"
+        );
+    }
+
+    #[test]
+    fn test_lower_btoa_produces_raw_with_base64_chars() {
+        let result = lower_btoa(vec![string_arg("hello")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__B64_CHARS"),
+                    "btoa should use __B64_CHARS lookup table"
+                );
+                assert!(code.contains("__b64_out"), "btoa should emit __b64_out");
+                assert!(code.contains("\"hello\""), "btoa should embed the input");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_atob_produces_raw_with_b64d_val() {
+        let result = lower_atob(vec![string_arg("aGVsbG8=")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("b64d_val"),
+                    "atob should use b64d_val decoder"
+                );
+                assert!(code.contains("__b64d_out"), "atob should emit __b64d_out");
+                assert!(code.contains("aGVsbG8="), "atob should embed the input");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_encode_uri_component_produces_raw_with_percent_format() {
+        let result = lower_encode_uri_component(vec![string_arg("hello world")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("%{:02X}"),
+                    "encodeURIComponent should use percent-hex format"
+                );
+                assert!(
+                    code.contains("__enc_out"),
+                    "encodeURIComponent should emit __enc_out"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_decode_uri_component_produces_raw_with_from_str_radix() {
+        let result = lower_decode_uri_component(vec![string_arg("hello%20world")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("from_str_radix"),
+                    "decodeURIComponent should use from_str_radix"
+                );
+                assert!(
+                    code.contains("__dec_bytes"),
+                    "decodeURIComponent should emit __dec_bytes"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_encode_uri_preserves_structural_chars() {
+        let result = lower_encode_uri(vec![string_arg("https://example.com/path?q=1")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("%{:02X}"),
+                    "encodeURI should use percent-hex format"
+                );
+                assert!(
+                    code.contains("b':'"),
+                    "encodeURI should preserve structural chars"
+                );
+                assert!(code.contains("b'/'"), "encodeURI should preserve slash");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_decode_uri_produces_raw_with_reserved_check() {
+        let result = lower_decode_uri(vec![string_arg("hello%20world")], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__DURI_RESERVED"),
+                    "decodeURI should check reserved chars"
+                );
+                assert!(
+                    code.contains("from_str_radix"),
+                    "decodeURI should use from_str_radix"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_btoa_no_args_uses_empty_string() {
+        let result = lower_btoa(vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__b64_out"),
+                    "btoa with no args should still emit output var"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
         }
     }
 }

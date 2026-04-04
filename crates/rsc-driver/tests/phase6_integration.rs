@@ -3673,3 +3673,115 @@ function main() {
         "e.stack should start with 'Error:', got:\n{output}"
     );
 }
+
+// ===========================================================================
+//
+// Task 175: Encoding/decoding global functions
+//
+// ===========================================================================
+
+#[test]
+#[ignore]
+fn test_p175_btoa_hello_e2e() {
+    let source = r#"function main() {
+  const encoded: string = btoa("hello");
+  console.log(encoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "aGVsbG8=",
+        "btoa(\"hello\") should produce \"aGVsbG8=\""
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_atob_hello_e2e() {
+    let source = r#"function main() {
+  const decoded: string = atob("aGVsbG8=");
+  console.log(decoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "hello",
+        "atob(\"aGVsbG8=\") should produce \"hello\""
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_encode_uri_component_space_e2e() {
+    let source = r#"function main() {
+  const encoded: string = encodeURIComponent("hello world");
+  console.log(encoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "hello%20world",
+        "encodeURIComponent(\"hello world\") should produce \"hello%20world\""
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_decode_uri_component_space_e2e() {
+    let source = r#"function main() {
+  const decoded: string = decodeURIComponent("hello%20world");
+  console.log(decoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "hello world",
+        "decodeURIComponent(\"hello%20world\") should produce \"hello world\""
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_encode_uri_preserves_structural_chars_e2e() {
+    let source = r#"function main() {
+  const encoded: string = encodeURI("https://example.com/path?q=1");
+  console.log(encoded);
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.trim().contains("https://example.com/path?q=1"),
+        "encodeURI should preserve structural characters, got: {output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_decode_uri_space_e2e() {
+    let source = r#"function main() {
+  const decoded: string = decodeURI("hello%20world");
+  console.log(decoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "hello world",
+        "decodeURI(\"hello%20world\") should produce \"hello world\""
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p175_btoa_atob_roundtrip_e2e() {
+    let source = r#"function main() {
+  const original: string = "RustScript encoding test!";
+  const encoded: string = btoa(original);
+  const decoded: string = atob(encoded);
+  console.log(decoded);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "RustScript encoding test!",
+        "btoa/atob roundtrip should preserve original string"
+    );
+}

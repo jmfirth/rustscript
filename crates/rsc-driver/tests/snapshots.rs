@@ -6452,3 +6452,91 @@ function main() {
         "console.timeLog should include <time> in output:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 175: Encoding/decoding global functions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_btoa_generates_base64_block() {
+    let source = "\
+function main() {
+  const encoded: string = btoa(\"hello\");
+  console.log(encoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__B64_CHARS") || actual.contains("__b64_out"),
+        "btoa should emit base64 encoding block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_atob_generates_base64_decode_block() {
+    let source = "\
+function main() {
+  const decoded: string = atob(\"aGVsbG8=\");
+  console.log(decoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("b64d_val") || actual.contains("__b64d_out"),
+        "atob should emit base64 decoding block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_encode_uri_component_generates_percent_block() {
+    let source = "\
+function main() {
+  const encoded: string = encodeURIComponent(\"hello world\");
+  console.log(encoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__enc_out") || actual.contains("%{:02X}"),
+        "encodeURIComponent should emit percent-encoding block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_decode_uri_component_generates_decode_block() {
+    let source = "\
+function main() {
+  const decoded: string = decodeURIComponent(\"hello%20world\");
+  console.log(decoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__dec_bytes") || actual.contains("from_str_radix"),
+        "decodeURIComponent should emit percent-decoding block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_encode_uri_generates_uri_aware_block() {
+    let source = "\
+function main() {
+  const encoded: string = encodeURI(\"https://example.com/path?q=hello world\");
+  console.log(encoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__euri_out") || actual.contains("%{:02X}"),
+        "encodeURI should emit URI-aware percent-encoding block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_decode_uri_generates_reserved_aware_block() {
+    let source = "\
+function main() {
+  const decoded: string = decodeURI(\"https://example.com/path%20name\");
+  console.log(decoded);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__DURI_RESERVED") || actual.contains("__duri_bytes"),
+        "decodeURI should emit URI-aware percent-decoding block:\n{actual}"
+    );
+}
