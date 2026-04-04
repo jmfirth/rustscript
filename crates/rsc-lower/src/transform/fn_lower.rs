@@ -1141,7 +1141,8 @@ pub(super) fn emit_expr_to_string(expr: &ast::Expr, transform: &Transform) -> St
                 | ast::BinaryOp::BitXor
                 | ast::BinaryOp::Shl
                 | ast::BinaryOp::Shr
-                | ast::BinaryOp::In => "+",
+                | ast::BinaryOp::In
+                | ast::BinaryOp::InstanceOf => "+",
             };
             format!("{left} {op} {right}")
         }
