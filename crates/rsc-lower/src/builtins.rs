@@ -5662,25 +5662,13 @@ fn lower_date_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
             }} else {{ \
                 (0, 0, 0, 0) \
             }}; \
-            let __m_adj = __mo - 3; \
-            let (__era_y, __doy) = if __m_adj > 0 {{ \
-                let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                let mut __d = 0i64; \
-                for __i in 0..(__m_adj as usize - 1) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                __d += __dy - 1; \
-                (__yr, __d) \
-            }} else {{ \
-                let __m2 = __mo + 9; \
-                let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                let mut __d = 0i64; \
-                for __i in 0..(__m2 as usize) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                __d += __dy - 1; \
-                (__yr - 1, __d) \
-            }}; \
-            let __era = (if __era_y >= 0 {{ __era_y }} else {{ __era_y - 399 }}) / 400; \
-            let __yoe = (__era_y - __era * 400) as u64; \
-            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy as u64; \
-            let __total_days = __era as i64 * 146097 + __doe as i64 + 719468; \
+            let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+            let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+            let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+            let __yoe = (__y - __era * 400) as u64; \
+            let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+            let __total_days = __era * 146097 + __doe as i64 - 719468; \
             let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
             __total_secs * 1000 + __ms \
             }}"
@@ -5734,25 +5722,13 @@ fn lower_date_utc(args: Vec<RustExpr>, span: Span) -> RustExpr {
             let __mi: i64 = {mi_code} as i64; \
             let __sc: i64 = {sc_code} as i64; \
             let __ms: i64 = {ms_code} as i64; \
-            let __m_adj = __mo - 3; \
-            let (__era_y, __doy) = if __m_adj > 0 {{ \
-                let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                let mut __d = 0i64; \
-                for __i in 0..(__m_adj as usize - 1) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                __d += __dy - 1; \
-                (__yr, __d) \
-            }} else {{ \
-                let __m2 = __mo + 9; \
-                let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                let mut __d = 0i64; \
-                for __i in 0..(__m2 as usize) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                __d += __dy - 1; \
-                (__yr - 1, __d) \
-            }}; \
-            let __era = (if __era_y >= 0 {{ __era_y }} else {{ __era_y - 399 }}) / 400; \
-            let __yoe = (__era_y - __era * 400) as u64; \
-            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy as u64; \
-            let __total_days = __era as i64 * 146097 + __doe as i64 + 719468; \
+            let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+            let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+            let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+            let __yoe = (__y - __era * 400) as u64; \
+            let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+            let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+            let __total_days = __era * 146097 + __doe as i64 - 719468; \
             let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
             __total_secs * 1000 + __ms \
             }}"
@@ -6516,7 +6492,7 @@ fn lower_number_to_string(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -
 ///
 /// Used for type-aware dispatch of Date instance methods like `.getTime()`.
 pub(crate) fn is_date_type(ty: &RustType) -> bool {
-    matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime")
+    matches!(ty, RustType::Named(n) if n == "Date" || n == "SystemTime" || n == "std::time::SystemTime")
 }
 
 // ---------------------------------------------------------------------------
@@ -6533,6 +6509,14 @@ fn emit_expr_raw(expr: &RustExpr) -> String {
         RustExprKind::FieldAccess { object, field } => {
             format!("{}.{}", emit_expr_raw(object), field)
         }
+        RustExprKind::ToString(inner) => {
+            // String literals get wrapped in .to_string() during lowering.
+            // For raw block embedding, emit the inner string literal directly
+            // (since we typically take &str anyway, the .to_string() is redundant).
+            let inner_code = emit_expr_raw(inner);
+            format!("{inner_code}.to_string()")
+        }
+        RustExprKind::Raw(code) => code.clone(),
         _ => "__enc_in".to_owned(),
     }
 }

@@ -16,7 +16,14 @@ pub fn type_to_rust_type(ty: &Type) -> RustType {
     match ty {
         Type::Primitive(prim) => primitive_to_rust_type(*prim),
         Type::String => RustType::String,
-        Type::Named(name) => RustType::Named(name.clone()),
+        Type::Named(name) => {
+            // Map TypeScript `Date` to `std::time::SystemTime` for Rust emission.
+            if name == "Date" {
+                RustType::Named("std::time::SystemTime".to_owned())
+            } else {
+                RustType::Named(name.clone())
+            }
+        }
         Type::TypeVar(name) => RustType::TypeParam(name.clone()),
         Type::Generic(name, args) => {
             let base = RustType::Named(name.clone());

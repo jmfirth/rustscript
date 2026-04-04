@@ -2456,25 +2456,13 @@ impl Transform {
                                     }} else {{ \
                                         (0, 0, 0, 0) \
                                     }}; \
-                                    let __m_adj = __mo - 3; \
-                                    let (__era_y, __doy) = if __m_adj > 0 {{ \
-                                        let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                                        let mut __d = 0i64; \
-                                        for __i in 0..(__m_adj as usize - 1) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                                        __d += __dy - 1; \
-                                        (__yr, __d) \
-                                    }} else {{ \
-                                        let __m2 = __mo + 9; \
-                                        let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                                        let mut __d = 0i64; \
-                                        for __i in 0..(__m2 as usize) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                                        __d += __dy - 1; \
-                                        (__yr - 1, __d) \
-                                    }}; \
-                                    let __era = (if __era_y >= 0 {{ __era_y }} else {{ __era_y - 399 }}) / 400; \
-                                    let __yoe = (__era_y - __era * 400) as u64; \
-                                    let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy as u64; \
-                                    let __total_days = __era as i64 * 146097 + __doe as i64 + 719468; \
+                                    let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+                                    let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+                                    let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+                                    let __yoe = (__y - __era * 400) as u64; \
+                                    let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+                                    let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+                                    let __total_days = __era * 146097 + __doe as i64 - 719468; \
                                     let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
                                     let __total_ms = __total_secs * 1000 + __ms; \
                                     std::time::UNIX_EPOCH + std::time::Duration::from_millis(__total_ms as u64) \
@@ -2529,25 +2517,13 @@ impl Transform {
                                 let __mi: i64 = {mi} as i64; \
                                 let __sc: i64 = {sc} as i64; \
                                 let __ms: i64 = {ms} as i64; \
-                                let __m_adj = __mo - 3; \
-                                let (__era_y, __doy) = if __m_adj > 0 {{ \
-                                    let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                                    let mut __d = 0i64; \
-                                    for __i in 0..(__m_adj as usize - 1) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                                    __d += __dy - 1; \
-                                    (__yr, __d) \
-                                }} else {{ \
-                                    let __m2 = __mo + 9; \
-                                    let __dm: [i64; 12] = [31, 30, 31, 30, 31, 31, 28, 31, 30, 31, 30, 31]; \
-                                    let mut __d = 0i64; \
-                                    for __i in 0..(__m2 as usize) {{ if __i < 12 {{ __d += __dm[__i]; }} }} \
-                                    __d += __dy - 1; \
-                                    (__yr - 1, __d) \
-                                }}; \
-                                let __era = (if __era_y >= 0 {{ __era_y }} else {{ __era_y - 399 }}) / 400; \
-                                let __yoe = (__era_y - __era * 400) as u64; \
-                                let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy as u64; \
-                                let __total_days = __era as i64 * 146097 + __doe as i64 + 719468; \
+                                let __y = __yr - (if __mo <= 2 {{ 1 }} else {{ 0 }}); \
+                                let __em = if __mo > 2 {{ __mo - 3 }} else {{ __mo + 9 }}; \
+                                let __era = (if __y >= 0 {{ __y }} else {{ __y - 399 }}) / 400; \
+                                let __yoe = (__y - __era * 400) as u64; \
+                                let __doy = (153 * __em as u64 + 2) / 5 + __dy as u64 - 1; \
+                                let __doe = __yoe * 365 + __yoe / 4 - __yoe / 100 + __doy; \
+                                let __total_days = __era * 146097 + __doe as i64 - 719468; \
                                 let __total_secs = __total_days * 86400 + __hr * 3600 + __mi * 60 + __sc; \
                                 let __total_ms = __total_secs * 1000 + __ms; \
                                 std::time::UNIX_EPOCH + std::time::Duration::from_millis(__total_ms as u64) \
