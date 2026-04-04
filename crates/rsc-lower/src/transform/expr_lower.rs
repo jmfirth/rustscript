@@ -72,6 +72,13 @@ impl Transform {
                     );
                 }
 
+                // Special handling for `instanceof` operator:
+                // RustScript is statically typed — if the code compiles, the type
+                // is correct. Lower `x instanceof Foo` to `true`.
+                if bin.op == ast::BinaryOp::InstanceOf {
+                    return RustExpr::new(RustExprKind::BoolLit(true), expr.span);
+                }
+
                 let left = self.lower_expr(&bin.left, ctx, use_map, stmt_index);
                 let right = self.lower_expr(&bin.right, ctx, use_map, stmt_index);
                 let op = lower_binary_op(bin.op);
@@ -2315,6 +2322,72 @@ impl Transform {
                 .map(|a| self.lower_expr(a, ctx, use_map, stmt_index))
                 .collect();
             return lower_error_constructor(type_name, args, span);
+        }
+
+        // `new Promise((resolve, reject) => { body })` →
+        // ```rust
+        // {
+        //     let (tx, rx) = tokio::sync::oneshot::channel();
+        //     let resolve = move |val| { let _ = tx.send(val); };
+        //     { executor_body }
+        //     rx
+        // }
+        // ```
+        if type_name == "Promise" {
+            if let Some(executor) = new_expr.args.first() {
+                if let ast::ExprKind::Closure(closure) = &executor.kind {
+                    let resolve_name = closure
+                        .params
+                        .first()
+                        .map_or("resolve", |p| p.name.name.as_str());
+                    let reject_name = closure.params.get(1).map(|p| p.name.name.as_str());
+
+                    let mut stmts = vec![
+                        RustStmt::RawRust(
+                            "let (tx, rx) = tokio::sync::oneshot::channel();".to_owned(),
+                        ),
+                        RustStmt::RawRust(format!(
+                            "let {resolve_name} = move |val| {{ let _ = tx.send(val); }};"
+                        )),
+                    ];
+
+                    if let Some(reject) = reject_name {
+                        stmts.push(RustStmt::RawRust(format!(
+                            "let {reject} = move |_err| {{}};"
+                        )));
+                    }
+
+                    // Lower the executor body
+                    let empty_reassigned = std::collections::HashSet::new();
+                    match &closure.body {
+                        ast::ClosureBody::Block(block) => {
+                            let lowered_block = self.lower_block(
+                                block,
+                                ctx,
+                                use_map,
+                                stmt_index,
+                                &empty_reassigned,
+                            );
+                            stmts.extend(lowered_block.stmts);
+                        }
+                        ast::ClosureBody::Expr(expr) => {
+                            let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                            stmts.push(RustStmt::Semi(lowered));
+                        }
+                    }
+
+                    // Trailing expression: `rx` (the receiver)
+                    let rx_expr = RustExpr::synthetic(RustExprKind::Raw("rx".to_owned()));
+
+                    return RustExpr::new(
+                        RustExprKind::BlockExpr(rsc_syntax::rust_ir::RustBlock {
+                            stmts,
+                            expr: Some(Box::new(rx_expr)),
+                        }),
+                        span,
+                    );
+                }
+            }
         }
 
         let rust_type_name =

@@ -5958,6 +5958,27 @@ function main() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// instanceof operator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_instanceof_basic_compiles() {
+    let source = r#"
+function main() {
+  const x: i32 = 42;
+  const result: bool = x instanceof i32;
+  console.log(result);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("true"),
+        "expected instanceof to lower to `true`, got:\n{actual}"
+    );
+}
+
 #[test]
 #[ignore]
 fn test_code_point_at_compile_and_run() {
@@ -6032,6 +6053,46 @@ fn test_snapshot_queue_microtask() {
     assert!(
         actual.contains("micro"),
         "queueMicrotask body should be inlined.\nGenerated:\n{actual}"
+    );
+}
+
+#[test]
+fn test_instanceof_snapshot_emits_true() {
+    let source = r#"
+function check(val: string): bool {
+  return val instanceof string;
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("true"),
+        "expected instanceof to produce `true`, got:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// new Promise(executor) constructor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_promise_constructor_snapshot_emits_channel() {
+    let source = r#"
+function main() {
+  const p = new Promise((resolve) => {
+    resolve(42);
+  });
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("oneshot::channel()"),
+        "expected Promise constructor to emit oneshot channel, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("let resolve"),
+        "expected resolve binding, got:\n{actual}"
     );
 }
 

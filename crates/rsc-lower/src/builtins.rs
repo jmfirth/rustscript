@@ -8363,6 +8363,12 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_registry_lookup_console_time_log_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "timeLog").is_some());
+    }
+
+    #[test]
     fn test_builtin_registry_lookup_console_count_returns_some() {
         let registry = BuiltinRegistry::new();
         assert!(registry.lookup_method("console", "count").is_some());

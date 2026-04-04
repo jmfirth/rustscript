@@ -706,6 +706,10 @@ fn lower_binary_op(op: ast::BinaryOp) -> RustBinaryOp {
         ast::BinaryOp::Pow => unreachable!("Pow is handled specially in expr_lower"),
         // In is handled specially in expr_lower as a method call, not via this mapping.
         ast::BinaryOp::In => unreachable!("In is handled specially in expr_lower"),
+        // InstanceOf is handled specially in expr_lower as a bool literal.
+        ast::BinaryOp::InstanceOf => {
+            unreachable!("InstanceOf is handled specially in expr_lower")
+        }
     }
 }
 

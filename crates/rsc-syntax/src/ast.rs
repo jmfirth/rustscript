@@ -1515,6 +1515,8 @@ pub enum BinaryOp {
     Shr,
     /// `in` operator: `"key" in map` → `map.contains_key("key")`.
     In,
+    /// `instanceof` operator: `x instanceof Foo` → `true` (static type check).
+    InstanceOf,
 }
 
 impl std::fmt::Display for BinaryOp {
@@ -1540,6 +1542,7 @@ impl std::fmt::Display for BinaryOp {
             Self::Shl => "<<",
             Self::Shr => ">>",
             Self::In => "in",
+            Self::InstanceOf => "instanceof",
         };
         f.write_str(s)
     }

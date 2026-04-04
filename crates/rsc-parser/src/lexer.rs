@@ -854,6 +854,7 @@ impl<'a> Lexer<'a> {
             "delete" => TokenKind::Delete,
             "void" => TokenKind::Void,
             "in" => TokenKind::In,
+            "instanceof" => TokenKind::InstanceOf,
             "declare" => TokenKind::Declare,
             "enum" => TokenKind::Enum,
             "debugger" => TokenKind::Debugger,

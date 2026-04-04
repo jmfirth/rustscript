@@ -16,8 +16,8 @@ use rsc_syntax::ast::{
     IndexSignature, InlineRustBlock, InterfaceDef, InterfaceField, InterfaceMethod, Item, ItemKind,
     LogicalAssignExpr, LogicalAssignOp, MappedModifier, MethodCallExpr, Module, NewExpr,
     NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl, ReturnStmt,
-    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchPattern, SwitchStmt,
-    TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
+    ReturnTypeAnnotation, Stmt, StringLiteral, StructLitExpr, SwitchCase, SwitchPattern,
+    SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt,
     TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl,
     VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
@@ -323,6 +323,7 @@ impl<'src> Parser<'src> {
             TokenKind::Delete => "`delete`",
             TokenKind::Void => "`void`",
             TokenKind::In => "`in`",
+            TokenKind::InstanceOf => "`instanceof`",
             TokenKind::Declare => "`declare`",
             TokenKind::Debugger => "`debugger`",
             TokenKind::PlusPlus => "`++`",
@@ -3013,11 +3014,7 @@ impl<'src> Parser<'src> {
                 // and colon, then parse the type. This supports TypeScript-style
                 // function types like `(x: i32) => i32`.
                 if matches!(self.peek(), TokenKind::Ident(_))
-                    && self
-                        .tokens
-                        .get(self.pos + 1)
-                        .map(|t| &t.kind)
-                        == Some(&TokenKind::Colon)
+                    && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Colon)
                 {
                     self.advance(); // consume parameter name
                     self.advance(); // consume `:`
@@ -4000,14 +3997,12 @@ impl<'src> Parser<'src> {
                         Some(SwitchPattern::EnumMember(first, v))
                     } else {
                         self.diagnostics.push(
-                            Diagnostic::error(
-                                "expected identifier after `.` in case pattern",
-                            )
-                            .with_label(
-                                variant_token.span,
-                                self.file_id,
-                                "expected identifier",
-                            ),
+                            Diagnostic::error("expected identifier after `.` in case pattern")
+                                .with_label(
+                                    variant_token.span,
+                                    self.file_id,
+                                    "expected identifier",
+                                ),
                         );
                         None
                     }
@@ -4676,7 +4671,7 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
-    /// Parse comparison: `shift ( ("<" | ">" | "<=" | ">=" | "in") shift )*`.
+    /// Parse comparison: `shift ( ("<" | ">" | "<=" | ">=" | "in" | "instanceof") shift )*`.
     fn parse_comparison(&mut self) -> Option<Expr> {
         let mut left = self.parse_shift()?;
 
@@ -4687,6 +4682,7 @@ impl<'src> Parser<'src> {
                 TokenKind::LtEq => BinaryOp::Le,
                 TokenKind::GtEq => BinaryOp::Ge,
                 TokenKind::In => BinaryOp::In,
+                TokenKind::InstanceOf => BinaryOp::InstanceOf,
                 _ => break,
             };
             self.advance();
@@ -7879,8 +7875,7 @@ mod tests {
     // Test: Constrained + unconstrained generic params
     #[test]
     fn test_constrained_and_unconstrained_generic_params() {
-        let source =
-            "function process<T extends Clone, U>(a: T, b: U): T { return a; }";
+        let source = "function process<T extends Clone, U>(a: T, b: U): T { return a; }";
         let module = parse_ok(source);
         let f = first_fn(&module);
         let tp = f.type_params.as_ref().expect("expected type params");
@@ -8182,8 +8177,14 @@ function test(dir: Direction): Direction {
         match &f.body.stmts[0] {
             Stmt::Switch(switch) => {
                 assert_eq!(switch.cases.len(), 2);
-                assert_eq!(switch.cases[0].pattern, SwitchPattern::StringLit("north".to_owned()));
-                assert_eq!(switch.cases[1].pattern, SwitchPattern::StringLit("south".to_owned()));
+                assert_eq!(
+                    switch.cases[0].pattern,
+                    SwitchPattern::StringLit("north".to_owned())
+                );
+                assert_eq!(
+                    switch.cases[1].pattern,
+                    SwitchPattern::StringLit("south".to_owned())
+                );
                 assert_eq!(switch.cases[0].body.len(), 1);
                 assert_eq!(switch.cases[1].body.len(), 1);
             }
@@ -8962,7 +8963,10 @@ function fail() throws string {
         // Type annotation should be User
         assert!(matches!(&closure.params[0].type_ann.kind, TypeKind::Named(n) if n.name == "User"));
         // Destructure fields present
-        let fields = closure.params[0].destructure_fields.as_ref().expect("expected destructure fields");
+        let fields = closure.params[0]
+            .destructure_fields
+            .as_ref()
+            .expect("expected destructure fields");
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].field_name.name, "name");
         assert!(fields[0].local_name.is_none());
@@ -8989,7 +8993,10 @@ function fail() throws string {
             other => panic!("expected Closure, got {other:?}"),
         };
         assert_eq!(closure.params.len(), 1);
-        let fields = closure.params[0].destructure_fields.as_ref().expect("expected destructure fields");
+        let fields = closure.params[0]
+            .destructure_fields
+            .as_ref()
+            .expect("expected destructure fields");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].field_name.name, "name");
         assert_eq!(fields[1].field_name.name, "age");
@@ -14388,7 +14395,11 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
             assert_eq!(switch.cases.len(), 1);
             assert_eq!(switch.cases[0].pattern, SwitchPattern::StringLit("loop".to_string()));
             // The case body should have a for-classic + break
-            assert_eq!(switch.cases[0].body.len(), 2, "expected for + break in case body");
+            assert_eq!(
+                switch.cases[0].body.len(),
+                2,
+                "expected for + break in case body"
+            );
             assert!(
                 matches!(switch.cases[0].body[0], Stmt::ForClassic(_)),
                 "expected ForClassic as first case stmt"
