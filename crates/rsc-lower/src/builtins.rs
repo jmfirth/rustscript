@@ -505,6 +505,16 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_date_method("getMilliseconds", lower_date_get_milliseconds);
     registry.register_date_method("getTimezoneOffset", lower_date_get_timezone_offset);
 
+    // Task 171: Date setter methods — reconstruct SystemTime with modified components
+    registry.register_date_method("setTime", lower_date_set_time);
+    registry.register_date_method("setFullYear", lower_date_set_full_year);
+    registry.register_date_method("setMonth", lower_date_set_month);
+    registry.register_date_method("setDate", lower_date_set_date);
+    registry.register_date_method("setHours", lower_date_set_hours);
+    registry.register_date_method("setMinutes", lower_date_set_minutes);
+    registry.register_date_method("setSeconds", lower_date_set_seconds);
+    registry.register_date_method("setMilliseconds", lower_date_set_milliseconds);
+
     // Task 172: Date formatting methods
     registry.register_date_method("toDateString", lower_date_to_date_string);
     registry.register_date_method("toTimeString", lower_date_to_time_string);
@@ -5996,6 +6006,199 @@ fn lower_date_get_timezone_offset(
 }
 
 // ---------------------------------------------------------------------------
+// Task 171: Date setter lowering functions
+// ---------------------------------------------------------------------------
+
+/// Lower `.setTime(ms)` — reconstruct `SystemTime` from epoch milliseconds.
+///
+/// Emits: `std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64)`
+fn lower_date_set_time(_receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "std::time::UNIX_EPOCH + std::time::Duration::from_millis({arg} as u64)"
+        )),
+        span,
+    )
+}
+
+/// Shared helper: decompose a `SystemTime` receiver into calendar components,
+/// replace one component, and reconstruct via the civil-to-days algorithm.
+///
+/// `component` is which variable to override (`__year`, `__month`, `__day`,
+/// `__hours`, `__minutes`, `__seconds`, `__millis`).
+/// `replacement` is the Rust expression string to assign to that variable.
+fn date_setter_raw(receiver_code: &str, component: &str, replacement: &str) -> String {
+    // Decomposition: extract all calendar components from SystemTime
+    let decompose = format!(
+        "let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+        let __total_secs = __dur.as_secs() as i64; \
+        let __millis_part = __dur.subsec_millis() as i64; \
+        let __day_secs = __total_secs % 86400; \
+        let __civil_days = (__total_secs - __day_secs) / 86400; \
+        let mut __hours = __day_secs / 3600; \
+        let mut __minutes = (__day_secs % 3600) / 60; \
+        let mut __seconds = __day_secs % 60; \
+        let mut __millis = __millis_part; \
+        let __z = __civil_days + 719468; \
+        let __era = (if __z >= 0 {{ __z }} else {{ __z - 146096 }}) / 146097; \
+        let __doe = (__z - __era * 146097) as u64; \
+        let __yoe = (__doe - __doe / 1460 + __doe / 36524 - __doe / 146096) / 365; \
+        let mut __year = __yoe as i64 + __era * 400; \
+        let __doy = __doe - (365 * __yoe + __yoe / 4 - __yoe / 100); \
+        let __mp = (5 * __doy + 2) / 153; \
+        let mut __day = (__doy - (153 * __mp + 2) / 5 + 1) as i64; \
+        let mut __month = (if __mp < 10 {{ __mp + 3 }} else {{ __mp - 9 }}) as i64; \
+        if __month <= 2 {{ __year += 1; }}"
+    );
+
+    // Reconstruction: civil_to_days inverse algorithm
+    let reconstruct = "\
+        let __rm = if __month <= 2 { __month + 9 } else { __month - 3 }; \
+        let __ry = if __month <= 2 { __year - 1 } else { __year }; \
+        let __rera = (if __ry >= 0 { __ry } else { __ry - 399 }) / 400; \
+        let __ryoe = (__ry - __rera * 400) as u64; \
+        let __rdoy = (153 * __rm as u64 + 2) / 5 + __day as u64 - 1; \
+        let __rdoe = __ryoe * 365 + __ryoe / 4 - __ryoe / 100 + __rdoy; \
+        let __rdays = __rera * 146097 + __rdoe as i64 - 719468; \
+        let __new_secs = __rdays * 86400 + __hours * 3600 + __minutes * 60 + __seconds; \
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis((__new_secs * 1000 + __millis) as u64)";
+
+    // Override the target component
+    let override_line = [component, " = ", replacement, ";"].concat();
+
+    // Use string concatenation (not format!) to avoid brace-escaping issues
+    // in the `reconstruct` block which contains Rust if-else braces.
+    [
+        "{ ",
+        &decompose,
+        " ",
+        &override_line,
+        " ",
+        reconstruct,
+        " }",
+    ]
+    .concat()
+}
+
+/// Lower `.setFullYear(year)` — reconstruct `SystemTime` with a new year.
+fn lower_date_set_full_year(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "1970".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__year",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setMonth(month)` — reconstruct `SystemTime` with a new month.
+///
+/// JavaScript months are 0-based (0=Jan, 11=Dec), so we add 1 for the
+/// 1-based internal representation.
+fn lower_date_set_month(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__month",
+            &format!("{arg} as i64 + 1"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setDate(day)` — reconstruct `SystemTime` with a new day-of-month.
+fn lower_date_set_date(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "1".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__day",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setHours(hours)` — reconstruct `SystemTime` with new hours.
+fn lower_date_set_hours(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__hours",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setMinutes(minutes)` — reconstruct `SystemTime` with new minutes.
+fn lower_date_set_minutes(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__minutes",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setSeconds(seconds)` — reconstruct `SystemTime` with new seconds.
+fn lower_date_set_seconds(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__seconds",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+/// Lower `.setMilliseconds(ms)` — reconstruct `SystemTime` with new milliseconds.
+fn lower_date_set_milliseconds(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let arg = args
+        .first()
+        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    RustExpr::new(
+        RustExprKind::Raw(date_setter_raw(
+            &receiver_code,
+            "__millis",
+            &format!("{arg} as i64"),
+        )),
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Task 172: Date formatting methods
 // ---------------------------------------------------------------------------
 
@@ -10213,7 +10416,7 @@ mod tests {
     fn test_lower_date_to_locale_string_delegates() {
         let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
         let result = lower_date_to_locale_string(receiver, vec![], span());
-        // MVP: delegates to toString → format!("{:?}", receiver)
+        // MVP: delegates to toString -> format!("{:?}", receiver)
         match &result.kind {
             RustExprKind::Macro { name, .. } => {
                 assert_eq!(name, "format");
@@ -10246,6 +10449,190 @@ mod tests {
                 assert_eq!(method, "as_millis");
             }
             other => panic!("expected MethodCall(as_millis), got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 171: Date setter registry + lowering tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_time() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setTime").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_full_year() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setFullYear").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_month() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setMonth").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_date() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setDate").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_hours() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setHours").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_minutes() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setMinutes").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_seconds() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setSeconds").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_set_milliseconds() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("setMilliseconds").is_some());
+    }
+
+    #[test]
+    fn test_lower_date_set_time() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_time(receiver, vec![int_arg(1_000_000)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("UNIX_EPOCH"),
+                    "setTime should reference UNIX_EPOCH: {code}"
+                );
+                assert!(
+                    code.contains("Duration::from_millis"),
+                    "setTime should use Duration::from_millis: {code}"
+                );
+                assert!(
+                    code.contains("1000000"),
+                    "setTime should embed the argument: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_full_year() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_full_year(receiver, vec![int_arg(2025)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__year = 2025"),
+                    "setFullYear should override __year: {code}"
+                );
+                assert!(
+                    code.contains("UNIX_EPOCH"),
+                    "setFullYear should reconstruct from UNIX_EPOCH: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_month() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_month(receiver, vec![int_arg(5)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__month = 5 as i64 + 1"),
+                    "setMonth should add 1 for 0-based JS months: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_date() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_date(receiver, vec![int_arg(15)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__day = 15"),
+                    "setDate should override __day: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_hours() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_hours(receiver, vec![int_arg(12)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__hours = 12"),
+                    "setHours should override __hours: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_minutes() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_minutes(receiver, vec![int_arg(30)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__minutes = 30"),
+                    "setMinutes should override __minutes: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_seconds() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_seconds(receiver, vec![int_arg(45)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__seconds = 45"),
+                    "setSeconds should override __seconds: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_set_milliseconds() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_set_milliseconds(receiver, vec![int_arg(500)], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__millis = 500"),
+                    "setMilliseconds should override __millis: {code}"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
         }
     }
 
