@@ -1715,8 +1715,15 @@ function main() {
     i = i + 1;
   }
 }"#;
-    // Known gap: destructuring in while body with array index — type inference for indexed access
-    let _result = compile_source(source, "conformance_test.rts");
+    assert!(
+        compiles_ok(source),
+        "destructuring with indexed array access should compile"
+    );
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("let Pair { a, b, .. }"),
+        "should destructure with Pair type name: {rust}"
+    );
 }
 
 #[test]

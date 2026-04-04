@@ -7345,3 +7345,44 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("labeled_break_from_string_switch", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// Destructuring with indexed array access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_destructure_indexed_array() {
+    let source = "\
+type Pair = { a: i32, b: i32 }
+
+function main() {
+  const pairs: Array<Pair> = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+  let i: i32 = 0;
+  while (i < pairs.length) {
+    const { a, b } = pairs[i];
+    console.log(a + b);
+    i = i + 1;
+  }
+}";
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pair {
+    pub a: i32,
+    pub b: i32,
+}
+
+fn main() {
+    let pairs: Vec<Pair> = vec![Pair { a: 1, b: 2 }, Pair { a: 3, b: 4 }];
+    let mut i: i32 = 0;
+    while i as i64 < pairs.len() as i64 {
+        let Pair { a, b, .. } = pairs[i as usize];
+        println!(\"{}\", a + b);
+        i += 1;
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("destructure_indexed_array", &actual, expected);
+}

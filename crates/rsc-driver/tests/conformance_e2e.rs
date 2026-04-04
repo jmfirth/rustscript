@@ -508,3 +508,27 @@ function main() {
     let stdout = compile_and_run(source);
     assert_eq!(stdout.trim(), "100\n101");
 }
+
+// ---------------------------------------------------------------------------
+// Destructuring with indexed array access
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_conformance_e2e_destructure_indexed_array() {
+    let source = "\
+type Pair = { a: i32, b: i32 }
+
+function main() {
+  const pairs: Array<Pair> = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+  let i: i32 = 0;
+  while (i < pairs.length) {
+    const { a, b } = pairs[i];
+    console.log(a + b);
+    i = i + 1;
+  }
+}";
+
+    let stdout = compile_and_run(source);
+    assert_eq!(stdout.trim(), "3\n7");
+}

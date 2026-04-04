@@ -1099,6 +1099,15 @@ impl Transform {
             ast::ExprKind::Ident(ident) => ctx
                 .lookup_variable(&ident.name)
                 .and_then(|info| extract_named_type(&info.ty)),
+            // Index access: `pairs[i]` — resolve the element type of the collection.
+            ast::ExprKind::Index(idx) => {
+                if let ast::ExprKind::Ident(ident) = &idx.object.kind {
+                    ctx.lookup_variable(&ident.name)
+                        .and_then(|info| extract_named_type(&info.ty))
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         let Some(type_name) = type_name else {
