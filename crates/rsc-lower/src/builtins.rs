@@ -449,6 +449,7 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // other types if registered as string methods.
     registry.register_number_method("toFixed", lower_number_to_fixed);
     registry.register_number_method("toPrecision", lower_number_to_precision);
+    registry.register_number_method("toExponential", lower_number_to_exponential);
     registry.register_number_method("toString", lower_number_to_string);
 }
 
@@ -3885,8 +3886,10 @@ pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option
     Some(RustExpr::synthetic(RustExprKind::Ident(rust_const.into())))
 }
 
-/// Check whether an expression uses `Number.MAX_SAFE_INTEGER` or
-/// `Number.MIN_SAFE_INTEGER` properties.
+/// Check whether an expression uses `Number.MAX_SAFE_INTEGER`,
+/// `Number.MIN_SAFE_INTEGER`, `Number.EPSILON`, `Number.MAX_VALUE`,
+/// `Number.MIN_VALUE`, `Number.NaN`, `Number.NEGATIVE_INFINITY`, or
+/// `Number.POSITIVE_INFINITY` properties.
 ///
 /// Called from the `FieldAccess` lowering in `expr_lower.rs` to intercept
 /// these constants before they are lowered as normal field access expressions.
@@ -3900,6 +3903,22 @@ pub(crate) fn lower_number_constant(object_name: &str, field_name: &str) -> Opti
         ))),
         "MIN_SAFE_INTEGER" => Some(RustExpr::synthetic(RustExprKind::IntLit(
             -9_007_199_254_740_991,
+        ))),
+        "EPSILON" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::EPSILON".into(),
+        ))),
+        "MAX_VALUE" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::MAX".into(),
+        ))),
+        "MIN_VALUE" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::MIN_POSITIVE".into(),
+        ))),
+        "NaN" => Some(RustExpr::synthetic(RustExprKind::Ident("f64::NAN".into()))),
+        "NEGATIVE_INFINITY" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::NEG_INFINITY".into(),
+        ))),
+        "POSITIVE_INFINITY" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::INFINITY".into(),
         ))),
         _ => None,
     }
@@ -5001,6 +5020,35 @@ fn lower_number_to_fixed(receiver: RustExpr, args: Vec<RustExpr>, span: Span) ->
             name: "format".into(),
             args: vec![
                 RustExpr::synthetic(RustExprKind::StringLit("{:.prec$}".into())),
+                receiver,
+                RustExpr::synthetic(RustExprKind::Ident(format!(
+                    "prec = {}",
+                    emit_inline(&cast_digits)
+                ))),
+            ],
+        },
+        span,
+    )
+}
+
+/// Lower `.toExponential(digits)` on a number to `format!("{:.prec$e}", num, prec = digits as usize)`.
+///
+/// Emits: `format!("{:.prec$e}", receiver, prec = digits as usize)`
+/// If no argument is provided, defaults to 6 decimal places.
+fn lower_number_to_exponential(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let digits = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(6)));
+    let cast_digits = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(digits),
+        RustType::Named("usize".into()),
+    ));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "format".into(),
+            args: vec![
+                RustExpr::synthetic(RustExprKind::StringLit("{:.prec$e}".into())),
                 receiver,
                 RustExpr::synthetic(RustExprKind::Ident(format!(
                     "prec = {}",
@@ -8264,12 +8312,120 @@ mod tests {
 
     #[test]
     fn test_lower_number_constant_unknown_returns_none() {
-        assert!(lower_number_constant("Number", "EPSILON").is_none());
+        assert!(lower_number_constant("Number", "UNKNOWN_CONSTANT").is_none());
     }
 
     #[test]
     fn test_lower_number_constant_non_number_returns_none() {
         assert!(lower_number_constant("Math", "MAX_SAFE_INTEGER").is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Task 174: Number constants
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_lower_number_constant_epsilon() {
+        let result = lower_number_constant("Number", "EPSILON");
+        assert!(result.is_some(), "EPSILON should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::EPSILON"),
+            "EPSILON should lower to f64::EPSILON"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_max_value() {
+        let result = lower_number_constant("Number", "MAX_VALUE");
+        assert!(result.is_some(), "MAX_VALUE should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::MAX"),
+            "MAX_VALUE should lower to f64::MAX"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_min_value() {
+        let result = lower_number_constant("Number", "MIN_VALUE");
+        assert!(result.is_some(), "MIN_VALUE should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::MIN_POSITIVE"),
+            "MIN_VALUE should lower to f64::MIN_POSITIVE"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_nan() {
+        let result = lower_number_constant("Number", "NaN");
+        assert!(result.is_some(), "NaN should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::NAN"),
+            "NaN should lower to f64::NAN"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_negative_infinity() {
+        let result = lower_number_constant("Number", "NEGATIVE_INFINITY");
+        assert!(result.is_some(), "NEGATIVE_INFINITY should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::NEG_INFINITY"),
+            "NEGATIVE_INFINITY should lower to f64::NEG_INFINITY"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_positive_infinity() {
+        let result = lower_number_constant("Number", "POSITIVE_INFINITY");
+        assert!(result.is_some(), "POSITIVE_INFINITY should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::INFINITY"),
+            "POSITIVE_INFINITY should lower to f64::INFINITY"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Task 174: toExponential
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_number_to_exponential() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("toExponential").is_some());
+    }
+
+    #[test]
+    fn test_lower_number_to_exponential_produces_format_macro() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_exponential(receiver, vec![int_arg(2)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$e}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_exponential_no_arg_defaults_to_6() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_exponential(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$e}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
     }
 
     #[test]

@@ -2743,6 +2743,60 @@ function main() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 174: Number constants and toExponential — e2e
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_number_epsilon_is_positive() {
+    let source = r#"
+function main() {
+  const e: f64 = Number.EPSILON;
+  if (e > 0.0) {
+    console.log("positive");
+  } else {
+    console.log("non-positive");
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("positive"),
+        "Number.EPSILON should be positive, got:\n{output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_e2e_number_max_safe_integer_value() {
+    let source = r#"
+function main() {
+  const n: i64 = Number.MAX_SAFE_INTEGER;
+  console.log(n);
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("9007199254740991"),
+        "Number.MAX_SAFE_INTEGER should be 9007199254740991, got:\n{output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_e2e_number_to_exponential() {
+    let source = r#"
+function main() {
+  const x: f64 = 3.14;
+  console.log(x.toExponential(2));
+}
+"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains('e'),
+        "toExponential output should contain 'e', got:\n{output}"
+    );
+}
+
 #[test]
 fn test_template_literal_type_in_function_param() {
     let source = r#"type EventName = `on${string}`

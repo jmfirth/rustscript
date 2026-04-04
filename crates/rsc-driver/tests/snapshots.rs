@@ -4996,6 +4996,117 @@ function main() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 174: Number constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_number_epsilon() {
+    let source = r#"
+function main() {
+  const e: f64 = Number.EPSILON;
+  console.log(e);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::EPSILON"),
+        "expected f64::EPSILON in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_max_value() {
+    let source = r#"
+function main() {
+  const m: f64 = Number.MAX_VALUE;
+  console.log(m);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::MAX"),
+        "expected f64::MAX in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_min_value() {
+    let source = r#"
+function main() {
+  const m: f64 = Number.MIN_VALUE;
+  console.log(m);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::MIN_POSITIVE"),
+        "expected f64::MIN_POSITIVE in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_nan_constant() {
+    let source = r#"
+function main() {
+  const n: f64 = Number.NaN;
+  console.log(n);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::NAN"),
+        "expected f64::NAN in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_negative_infinity() {
+    let source = r#"
+function main() {
+  const n: f64 = Number.NEGATIVE_INFINITY;
+  console.log(n);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::NEG_INFINITY"),
+        "expected f64::NEG_INFINITY in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_positive_infinity() {
+    let source = r#"
+function main() {
+  const n: f64 = Number.POSITIVE_INFINITY;
+  console.log(n);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::INFINITY"),
+        "expected f64::INFINITY in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_to_exponential() {
+    let source = r#"
+function main() {
+  const x: f64 = 3.14;
+  const s = x.toExponential(2);
+  console.log(s);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("format!(") && actual.contains("{:.prec$e}"),
+        "expected format! with {{:.prec$e}} in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Object static methods
 // ---------------------------------------------------------------------------
 
