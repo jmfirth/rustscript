@@ -397,6 +397,7 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("console", "assert", lower_console_assert, true);
     registry.register_method("console", "time", lower_console_time, true);
     registry.register_method("console", "timeEnd", lower_console_time_end, true);
+    registry.register_method("console", "timeLog", lower_console_time_log, true);
     registry.register_method("console", "count", lower_console_count, true);
     registry.register_method("console", "countReset", lower_console_count_reset, true);
     registry.register_method("console", "group", lower_console_group, true);
@@ -3607,6 +3608,28 @@ fn lower_console_time_end(args: Vec<RustExpr>, span: Span) -> RustExpr {
         .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
     let macro_args = vec![
         RustExpr::synthetic(RustExprKind::StringLit("{}: timer ended".into())),
+        strip_to_string(label),
+    ];
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "eprintln".into(),
+            args: macro_args,
+        },
+        span,
+    )
+}
+
+/// Lower `console.timeLog(label)` to `eprintln!("{}: <time>", label)`.
+///
+/// True timing requires runtime state tracking. This simplified version
+/// prints the label to stderr to indicate a timer checkpoint was logged.
+fn lower_console_time_log(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let label = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit("default".into())));
+    let macro_args = vec![
+        RustExpr::synthetic(RustExprKind::StringLit("{}: <time>".into())),
         strip_to_string(label),
     ];
     RustExpr::new(
@@ -8166,6 +8189,26 @@ mod tests {
                 assert_eq!(name, "eprintln");
                 assert!(
                     matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("timer ended"))
+                );
+            }
+            other => panic!("expected Macro(eprintln), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_console_time_log_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("console", "timeLog").is_some());
+    }
+
+    #[test]
+    fn test_lower_console_time_log_produces_eprintln_with_time_placeholder() {
+        let result = lower_console_time_log(vec![string_arg("benchmark")], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "eprintln");
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::StringLit(s) if s.contains("<time>"))
                 );
             }
             other => panic!("expected Macro(eprintln), got {other:?}"),

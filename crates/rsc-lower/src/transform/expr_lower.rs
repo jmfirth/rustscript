@@ -224,7 +224,9 @@ impl Transform {
 
                 // Error property access on catch variables:
                 // `e.message` → `e.clone()` (the caught error IS the message string)
-                // `e.name` → `"Error"` (errors are strings, name is always "Error")
+                // `e.name`    → `"Error"` (errors are strings, name is always "Error")
+                // `e.stack`   → `format!("Error: {}\n    at <rustscript>", e)` (simplified)
+                // `e.cause`   → `"".to_string()` (ES2022; no cause tracking at runtime)
                 if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
                     && ctx.is_catch_variable(&obj_ident.name)
                 {
@@ -236,6 +238,33 @@ impl Transform {
                     if field_name == "name" {
                         return RustExpr::new(
                             RustExprKind::StringLit("Error".to_owned()),
+                            expr.span,
+                        );
+                    }
+                    if field_name == "stack" {
+                        // Rust has no JS-style stack traces; provide a simplified stack
+                        // string containing the error message.
+                        let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                        return RustExpr::new(
+                            RustExprKind::Macro {
+                                name: "format".to_owned(),
+                                args: vec![
+                                    RustExpr::synthetic(RustExprKind::StringLit(
+                                        "Error: {}\\n    at <rustscript>".to_owned(),
+                                    )),
+                                    object,
+                                ],
+                            },
+                            expr.span,
+                        );
+                    }
+                    if field_name == "cause" {
+                        // ES2022 error cause: no cause tracking at runtime; return empty string.
+                        return RustExpr::new(
+                            RustExprKind::ToString(Box::new(RustExpr::new(
+                                RustExprKind::StringLit(String::new()),
+                                expr.span,
+                            ))),
                             expr.span,
                         );
                     }
@@ -1536,6 +1565,16 @@ impl Transform {
             return self.lower_super_method_call(mc, span, ctx, use_map, stmt_index);
         }
 
+        // Error method calls on catch variables:
+        // `e.toString()` → `e.clone()` (the caught error is already a string)
+        if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
+            && ctx.is_catch_variable(&obj_ident.name)
+            && mc.method.name == "toString"
+        {
+            let object = self.lower_expr(&mc.object, ctx, use_map, stmt_index);
+            return RustExpr::new(RustExprKind::Clone(Box::new(object)), span);
+        }
+
         // Try to match as a builtin: extract object name from Ident
         if let ast::ExprKind::Ident(obj_ident) = &mc.object.kind
             && let Some(lowering_fn) = self
@@ -2641,11 +2680,18 @@ pub(super) fn is_hashmap_type(ty: &RustType) -> bool {
 
 /// Check whether a type name is a JavaScript `Error` class or subclass.
 ///
-/// Recognizes `Error`, `TypeError`, `RangeError`, `ReferenceError`, and `SyntaxError`.
+/// Recognizes `Error`, `TypeError`, `RangeError`, `ReferenceError`, `SyntaxError`,
+/// `EvalError`, and `URIError`.
 pub(super) fn is_error_class(name: &str) -> bool {
     matches!(
         name,
-        "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "ReferenceError"
+            | "SyntaxError"
+            | "EvalError"
+            | "URIError"
     )
 }
 
