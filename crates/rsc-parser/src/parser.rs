@@ -14386,7 +14386,7 @@ function sub(a: i32, b: i32): i32 { return a - b; }";
         let stmt = first_stmt(f);
         if let Stmt::Switch(switch) = stmt {
             assert_eq!(switch.cases.len(), 1);
-            assert_eq!(switch.cases[0].pattern, "loop");
+            assert_eq!(switch.cases[0].pattern, SwitchPattern::StringLit("loop".to_string()));
             // The case body should have a for-classic + break
             assert_eq!(switch.cases[0].body.len(), 2, "expected for + break in case body");
             assert!(

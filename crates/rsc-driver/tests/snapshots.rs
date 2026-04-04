@@ -5643,3 +5643,171 @@ function main() {
         "expected Config::new with one supplied and port default, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 178: String gap methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_code_point_at_snapshot() {
+    let source = "\
+function main() {
+  const s = \"hello\";
+  const cp = s.codePointAt(0);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".chars()"),
+        "expected .chars() in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains(".nth("),
+        "expected .nth( in output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains(".map("),
+        "expected .map( in output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_match_all_snapshot() {
+    let source = "\
+function main() {
+  const re = /\\d+/g;
+  const s = \"abc 123 def 456\";
+  const matches = s.matchAll(re);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("find_iter"),
+        "expected find_iter in matchAll output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("collect"),
+        "expected collect in matchAll output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_normalize_snapshot() {
+    let source = "\
+function main() {
+  const s = \"caf\u{00e9}\";
+  const n = s.normalize(\"NFC\");
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".clone()"),
+        "expected .clone() in normalize output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_locale_compare_snapshot() {
+    let source = "\
+function main() {
+  const a = \"abc\";
+  const b = \"abd\";
+  const r = a.localeCompare(b);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("cmp("),
+        "expected cmp( in localeCompare output, got:\n{actual}"
+    );
+    assert!(
+        actual.contains("Ordering"),
+        "expected Ordering in localeCompare output, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_string_raw_snapshot() {
+    let source = r#"
+function main() {
+  const result = String.raw("Hello", "World");
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("format!"),
+        "expected format! in String.raw output, got:\n{actual}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_code_point_at_compile_and_run() {
+    let source = "\
+function main() {
+  const s = \"hello\";
+  const cp = s.codePointAt(0);
+  if let Some(v) = cp {
+    console.log(v);
+  }
+}";
+    let output = test_utils::compile_and_run(source);
+    assert_eq!(output.trim(), "104", "expected code point of 'h' = 104");
+}
+
+#[test]
+#[ignore]
+fn test_locale_compare_compile_and_run() {
+    let source = "\
+function main() {
+  const a = \"abc\";
+  const b = \"abd\";
+  const r = a.localeCompare(b);
+  console.log(r);
+}";
+    let output = test_utils::compile_and_run(source);
+    assert_eq!(output.trim(), "-1", "expected localeCompare(\"abc\", \"abd\") = -1");
+}
+
+// ---------------------------------------------------------------------------
+// Task 176: structuredClone and queueMicrotask
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_structured_clone_vec() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [1, 2, 3];
+  const copy = structuredClone(arr);
+  console.log(copy);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![1, 2, 3];
+    let copy = arr.clone();
+    println!(\"{}\", copy);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("176_structured_clone_vec", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_queue_microtask() {
+    let source = r#"async function main() {
+  queueMicrotask(() => {
+    console.log("micro");
+  });
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("tokio::spawn"),
+        "queueMicrotask should lower to tokio::spawn.\nGenerated:\n{actual}"
+    );
+    assert!(
+        actual.contains("async move"),
+        "queueMicrotask should produce async move block.\nGenerated:\n{actual}"
+    );
+    assert!(
+        actual.contains("micro"),
+        "queueMicrotask body should be inlined.\nGenerated:\n{actual}"
+    );
+}

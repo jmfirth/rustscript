@@ -1124,3 +1124,46 @@ function main() {
     assert_eq!(lines[0], "42");
     assert_eq!(lines[1], "0");
 }
+
+// ---------------------------------------------------------------------------
+// Task 177: Object.hasOwn and Object.is — compile_and_run
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_object_has_own_returns_true_for_existing_key() {
+    let source = r#"
+function main() {
+  let m: Map<string, i32> = new Map();
+  m.set("hello", 1);
+  const has = Object.hasOwn(m, "hello");
+  const missing = Object.hasOwn(m, "world");
+  console.log(has);
+  console.log(missing);
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "true");
+    assert_eq!(lines[1], "false");
+}
+
+#[test]
+#[ignore]
+fn test_e2e_object_is_returns_true_for_equal_values() {
+    let source = r#"
+function main() {
+  const a: i64 = 42;
+  const b: i64 = 42;
+  const c: i64 = 99;
+  console.log(Object.is(a, b));
+  console.log(Object.is(a, c));
+}
+"#;
+
+    let stdout = compile_and_run(source);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines[0], "true");
+    assert_eq!(lines[1], "false");
+}

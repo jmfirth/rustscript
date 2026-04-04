@@ -95,6 +95,9 @@ pub fn infer_literal_type(expr: &ast::Expr) -> Option<Type> {
         ast::ExprKind::BoolLit(_) => Some(Type::Primitive(PrimitiveType::Bool)),
         ast::ExprKind::NullLit => Some(Type::Option(Box::new(Type::Error))),
         ast::ExprKind::New(new_expr) => Some(Type::Named(new_expr.type_name.name.clone())),
+        // Regex literals infer as the `Regex` named type so that field access
+        // and method call lowering can dispatch type-aware transformations.
+        ast::ExprKind::RegexLit { .. } => Some(Type::Named("Regex".to_owned())),
         _ => None,
     }
 }

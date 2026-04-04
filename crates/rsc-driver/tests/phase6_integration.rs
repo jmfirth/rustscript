@@ -3455,3 +3455,79 @@ function main() {
         "bare asserts should NOT emit `-> bool`.\nActual:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 176: structuredClone → .clone() and queueMicrotask → tokio::spawn
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_p176_structured_clone_snapshot() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [1, 2, 3];
+  const copy = structuredClone(arr);
+}";
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains(".clone()"),
+        "structuredClone should lower to .clone().\nGenerated:\n{rust}"
+    );
+    assert!(
+        !rust.contains("structuredClone"),
+        "structuredClone should be erased from output.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p176_structured_clone_e2e() {
+    let source = r#"function main() {
+  const arr: Array<i32> = [1, 2, 3];
+  const copy = structuredClone(arr);
+  console.log(copy[0]);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "1",
+        "structuredClone should produce a cloned vec with the same values"
+    );
+}
+
+#[test]
+fn test_p176_queue_microtask_snapshot() {
+    let source = r#"async function main() {
+  queueMicrotask(() => {
+    console.log("micro");
+  });
+}"#;
+    let rust = compile_to_rust(source);
+    assert!(
+        rust.contains("tokio::spawn"),
+        "queueMicrotask should lower to tokio::spawn.\nGenerated:\n{rust}"
+    );
+    assert!(
+        rust.contains("async move"),
+        "queueMicrotask should produce async move block.\nGenerated:\n{rust}"
+    );
+    assert!(
+        !rust.contains("queueMicrotask"),
+        "queueMicrotask call should be erased from output.\nGenerated:\n{rust}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p176_queue_microtask_e2e() {
+    let source = r#"async function main() {
+  queueMicrotask(() => {
+    console.log("micro");
+  });
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "micro",
+        "queueMicrotask callback should execute and print"
+    );
+}

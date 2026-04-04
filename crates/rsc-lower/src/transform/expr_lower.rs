@@ -262,6 +262,59 @@ impl Transform {
                     );
                 }
 
+                // RegExp property access — intercept before generic field access.
+                //
+                // `regex.source`     → `regex.as_str().to_string()`
+                // `regex.flags`      → `""` (Rust regex stores flags inline in pattern)
+                // `regex.global`     → `true` (Rust regex is always global via iterators)
+                // `regex.ignoreCase` → `false` (conservative; flags are embedded in pattern)
+                // `regex.lastIndex`  → `0` (Rust regex has no stateful lastIndex)
+                if let ast::ExprKind::Ident(obj_ident) = &fa.object.kind
+                    && let Some(var_info) = ctx.lookup_variable(&obj_ident.name)
+                    && matches!(&var_info.ty, RustType::Named(n) if n == "Regex")
+                {
+                    match field_name {
+                        "source" => {
+                            let object =
+                                self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                            let as_str = RustExpr::new(
+                                RustExprKind::MethodCall {
+                                    receiver: Box::new(object),
+                                    method: "as_str".into(),
+                                    type_args: vec![],
+                                    args: vec![],
+                                },
+                                expr.span,
+                            );
+                            return RustExpr::new(
+                                RustExprKind::MethodCall {
+                                    receiver: Box::new(as_str),
+                                    method: "to_string".into(),
+                                    type_args: vec![],
+                                    args: vec![],
+                                },
+                                expr.span,
+                            );
+                        }
+                        "flags" => {
+                            return RustExpr::new(
+                                RustExprKind::StringLit(String::new()),
+                                expr.span,
+                            );
+                        }
+                        "global" => {
+                            return RustExpr::new(RustExprKind::BoolLit(true), expr.span);
+                        }
+                        "ignoreCase" => {
+                            return RustExpr::new(RustExprKind::BoolLit(false), expr.span);
+                        }
+                        "lastIndex" => {
+                            return RustExpr::new(RustExprKind::IntLit(0), expr.span);
+                        }
+                        _ => {}
+                    }
+                }
+
                 let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                 RustExpr::new(
                     RustExprKind::FieldAccess {

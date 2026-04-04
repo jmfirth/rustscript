@@ -363,6 +363,28 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("Math", "sin", lower_math_sin, false);
     registry.register_method("Math", "cos", lower_math_cos, false);
     registry.register_method("Math", "tan", lower_math_tan, false);
+    // Task 169: 21 missing Math methods
+    registry.register_method("Math", "acos", lower_math_acos, false);
+    registry.register_method("Math", "acosh", lower_math_acosh, false);
+    registry.register_method("Math", "asin", lower_math_asin, false);
+    registry.register_method("Math", "asinh", lower_math_asinh, false);
+    registry.register_method("Math", "atan", lower_math_atan, false);
+    registry.register_method("Math", "atan2", lower_math_atan2, false);
+    registry.register_method("Math", "atanh", lower_math_atanh, false);
+    registry.register_method("Math", "cbrt", lower_math_cbrt, false);
+    registry.register_method("Math", "cosh", lower_math_cosh, false);
+    registry.register_method("Math", "exp", lower_math_exp, false);
+    registry.register_method("Math", "expm1", lower_math_expm1, false);
+    registry.register_method("Math", "fround", lower_math_fround, false);
+    registry.register_method("Math", "hypot", lower_math_hypot, false);
+    registry.register_method("Math", "log10", lower_math_log10, false);
+    registry.register_method("Math", "log1p", lower_math_log1p, false);
+    registry.register_method("Math", "log2", lower_math_log2, false);
+    registry.register_method("Math", "sign", lower_math_sign, false);
+    registry.register_method("Math", "sinh", lower_math_sinh, false);
+    registry.register_method("Math", "tanh", lower_math_tanh, false);
+    registry.register_method("Math", "trunc", lower_math_trunc, false);
+    registry.register_method("Math", "clz32", lower_math_clz32, false);
 
     // Phase 5: console extensions
     registry.register_method("console", "error", lower_console_error, true);
@@ -407,6 +429,27 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_method("Object", "fromEntries", lower_object_from_entries, false);
     registry.register_method("Object", "freeze", lower_object_freeze, false);
     registry.register_method("Object", "create", lower_object_create, false);
+    registry.register_method("Object", "hasOwn", lower_object_has_own, false);
+    registry.register_method("Object", "is", lower_object_is, false);
+    registry.register_method("Object", "isFrozen", lower_object_is_frozen, false);
+    registry.register_method(
+        "Object",
+        "getOwnPropertyNames",
+        lower_object_get_own_property_names,
+        false,
+    );
+    registry.register_method(
+        "Object",
+        "getPrototypeOf",
+        lower_object_get_prototype_of,
+        false,
+    );
+    registry.register_method(
+        "Object",
+        "defineProperty",
+        lower_object_define_property,
+        false,
+    );
 
     // Phase 5: JSON methods
     registry.register_method("JSON", "stringify", lower_json_stringify, false);
@@ -425,6 +468,15 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
         lower_string_from_code_point,
         false,
     );
+
+    // Task 178: Additional String instance methods
+    registry.register_string_method("codePointAt", lower_code_point_at);
+    registry.register_string_method("matchAll", lower_match_all);
+    registry.register_string_method("normalize", lower_normalize);
+    registry.register_string_method("localeCompare", lower_locale_compare);
+
+    // Task 178: String.raw static method
+    registry.register_method("String", "raw", lower_string_raw, false);
 
     // Promise utility methods (bare, non-awaited usage)
     registry.register_method("Promise", "resolve", lower_promise_resolve, false);
@@ -449,7 +501,12 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     // other types if registered as string methods.
     registry.register_number_method("toFixed", lower_number_to_fixed);
     registry.register_number_method("toPrecision", lower_number_to_precision);
+    registry.register_number_method("toExponential", lower_number_to_exponential);
     registry.register_number_method("toString", lower_number_to_string);
+
+    // Task 176: Global structuredClone and queueMicrotask
+    registry.register_function("structuredClone", lower_structured_clone);
+    registry.register_function("queueMicrotask", lower_queue_microtask);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -732,6 +789,71 @@ fn lower_clear_interval(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
             method: "abort".into(),
             type_args: vec![],
             args: vec![],
+        },
+        arg_span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Task 176: structuredClone and queueMicrotask
+// ---------------------------------------------------------------------------
+
+/// Lower `structuredClone(obj)` to `obj.clone()`.
+///
+/// JavaScript's `structuredClone` performs a deep clone of its argument.
+/// Rust's `Clone` trait provides the same semantics when `#[derive(Clone)]`
+/// is present, which the lowering pass adds to all user-defined types.
+fn lower_structured_clone(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let obj = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_obj".into())));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(obj),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        arg_span,
+    )
+}
+
+/// Lower `queueMicrotask(fn)` to `tokio::spawn(async move { fn() })`.
+///
+/// JavaScript's `queueMicrotask` schedules a callback to run as soon as
+/// the current task completes, without any additional delay. The closest
+/// Rust equivalent is spawning an async task that runs the callback
+/// immediately inside an async block — analogous to `setTimeout(fn, 0)`
+/// but without the sleep.
+fn lower_queue_microtask(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let callback = args.into_iter().next().unwrap_or_else(|| {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![],
+                expr: None,
+            }),
+        })
+    });
+
+    let body_stmts = callback_body_stmts(callback);
+
+    let async_block = RustExpr::synthetic(RustExprKind::AsyncBlock {
+        is_move: true,
+        body: RustBlock {
+            stmts: body_stmts,
+            expr: None,
+        },
+    });
+
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
         },
         arg_span,
     )
@@ -1552,6 +1674,159 @@ fn lower_string_search(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> R
             method: "unwrap_or".into(),
             type_args: vec![],
             args: vec![neg_one],
+        },
+        span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Task 178: String gap methods
+// ---------------------------------------------------------------------------
+
+/// Lower `str.codePointAt(index)` to `str.chars().nth(index as usize).map(|c| c as i64)`.
+///
+/// Returns the Unicode code point (as `Option<i64>`) at the given character
+/// position. Mirrors `charCodeAt` but named for the code-point API.
+fn lower_code_point_at(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let index = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(0)));
+    let chars_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "chars".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    let cast_index = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(index),
+        RustType::Named("usize".into()),
+    ));
+    let nth_call = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(chars_call),
+            method: "nth".into(),
+            type_args: vec![],
+            args: vec![cast_index],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(nth_call),
+            method: "map".into(),
+            type_args: vec![],
+            args: vec![RustExpr::synthetic(RustExprKind::Closure {
+                is_async: false,
+                is_move: false,
+                params: vec![RustClosureParam {
+                    name: "c".into(),
+                    ty: None,
+                }],
+                return_type: None,
+                body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(RustExprKind::Cast(
+                    Box::new(RustExpr::synthetic(RustExprKind::Ident("c".into()))),
+                    RustType::I64,
+                )))),
+            })],
+        },
+        span,
+    )
+}
+
+/// Lower `str.matchAll(regex)` to `regex.find_iter(&str).map(|m| m.as_str().to_string()).collect::<Vec<String>>()`.
+///
+/// Identical Rust lowering to `match` — `find_iter` always collects all matches.
+fn lower_match_all(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    lower_string_match(receiver, args, span)
+}
+
+/// Lower `str.normalize(form)` to `str.clone()`.
+///
+/// MVP: full Unicode normalization requires ICU. Rust `String` is already
+/// valid UTF-8. Pass through unchanged; the `form` argument is ignored.
+fn lower_normalize(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(receiver),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `str.localeCompare(other)` to a simplified `cmp`-based comparison.
+///
+/// Returns -1, 0, or 1 matching JS semantics. Not locale-aware — uses
+/// bytewise Unicode ordering. Emits a block expression with a `match` on
+/// `std::cmp::Ordering` because `Ordering` cannot be directly cast to `i32`.
+fn lower_locale_compare(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let other = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::StringLit(String::new())));
+
+    // Bind both sides to locals then emit a raw match on the ordering.
+    // Generated Rust:
+    //   { let __lhs = <receiver>; let __rhs = <other>;
+    //     match __lhs.as_str().cmp(__rhs.as_str()) {
+    //       std::cmp::Ordering::Less => -1_i32,
+    //       std::cmp::Ordering::Equal => 0_i32,
+    //       std::cmp::Ordering::Greater => 1_i32,
+    //     }
+    //   }
+    let block = RustBlock {
+        stmts: vec![
+            RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "__lhs".into(),
+                ty: None,
+                init: receiver,
+                span: None,
+            }),
+            RustStmt::Let(RustLetStmt {
+                mutable: false,
+                name: "__rhs".into(),
+                ty: None,
+                init: other,
+                span: None,
+            }),
+            RustStmt::Expr(RustExpr::new(
+                RustExprKind::Raw(
+                    "match __lhs.as_str().cmp(__rhs.as_str()) { \
+                     std::cmp::Ordering::Less => -1_i32, \
+                     std::cmp::Ordering::Equal => 0_i32, \
+                     std::cmp::Ordering::Greater => 1_i32 }".into(),
+                ),
+                span,
+            )),
+        ],
+        expr: None,
+    };
+    RustExpr::new(RustExprKind::BlockExpr(block), span)
+}
+
+/// Lower `String.raw(strings, ...values)` — tagged template literal static helper.
+///
+/// For MVP, lower to `format!` concatenating all provided arguments. This
+/// covers the common case where template parts and interpolated values are
+/// already flattened by the parser into a flat argument list.
+fn lower_string_raw(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    if args.is_empty() {
+        return RustExpr::new(RustExprKind::StringLit(String::new()), span);
+    }
+    let fmt = args.iter().map(|_| "{}").collect::<Vec<_>>().join("");
+    let mut macro_args = vec![RustExpr::synthetic(RustExprKind::StringLit(fmt))];
+    macro_args.extend(args.into_iter().map(strip_to_string));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "format".into(),
+            args: macro_args,
         },
         span,
     )
@@ -2866,6 +3141,314 @@ fn lower_math_tan(args: Vec<RustExpr>, span: Span) -> RustExpr {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Task 169: 21 missing Math methods
+// ---------------------------------------------------------------------------
+
+/// Lower `Math.acos(x)` to `x.acos()`.
+fn lower_math_acos(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "acos".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.acosh(x)` to `x.acosh()`.
+fn lower_math_acosh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "acosh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.asin(x)` to `x.asin()`.
+fn lower_math_asin(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "asin".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.asinh(x)` to `x.asinh()`.
+fn lower_math_asinh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "asinh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.atan(x)` to `x.atan()`.
+fn lower_math_atan(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "atan".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.atan2(y, x)` to `y.atan2(x)`.
+fn lower_math_atan2(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let y = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    let x = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(y),
+            method: "atan2".into(),
+            type_args: vec![],
+            args: vec![x],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.atanh(x)` to `x.atanh()`.
+fn lower_math_atanh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "atanh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.cbrt(x)` to `x.cbrt()`.
+fn lower_math_cbrt(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "cbrt".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.cosh(x)` to `x.cosh()`.
+fn lower_math_cosh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "cosh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.exp(x)` to `x.exp()`.
+fn lower_math_exp(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "exp".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.expm1(x)` to `x.exp_m1()`.
+fn lower_math_expm1(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "exp_m1".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.fround(x)` to `(x as f32) as f64`.
+fn lower_math_fround(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    let as_f32 = RustExpr::new(RustExprKind::Cast(Box::new(arg), RustType::F32), span);
+    RustExpr::new(RustExprKind::Cast(Box::new(as_f32), RustType::F64), span)
+}
+
+/// Lower `Math.hypot(x, y)` to `x.hypot(y)`.
+fn lower_math_hypot(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let x = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    let y = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::FloatLit(0.0)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(x),
+            method: "hypot".into(),
+            type_args: vec![],
+            args: vec![y],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.log10(x)` to `x.log10()`.
+fn lower_math_log10(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "log10".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.log1p(x)` to `x.ln_1p()`.
+fn lower_math_log1p(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "ln_1p".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.log2(x)` to `x.log2()`.
+fn lower_math_log2(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "log2".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.sign(x)` to `x.signum()`.
+fn lower_math_sign(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "signum".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.sinh(x)` to `x.sinh()`.
+fn lower_math_sinh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "sinh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.tanh(x)` to `x.tanh()`.
+fn lower_math_tanh(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "tanh".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.trunc(x)` to `x.trunc()`.
+fn lower_math_trunc(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(arg),
+            method: "trunc".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    )
+}
+
+/// Lower `Math.clz32(x)` to `(x as i32).leading_zeros() as f64`.
+fn lower_math_clz32(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let arg = first_arg_or_zero(args);
+    let as_i32 = RustExpr::new(RustExprKind::Cast(Box::new(arg), RustType::I32), span);
+    let leading_zeros = RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(as_i32),
+            method: "leading_zeros".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        span,
+    );
+    RustExpr::new(
+        RustExprKind::Cast(Box::new(leading_zeros), RustType::F64),
+        span,
+    )
+}
+
 /// Helper: extract the first argument, defaulting to `0.0` (f64 literal).
 fn first_arg_or_zero(args: Vec<RustExpr>) -> RustExpr {
     args.into_iter()
@@ -3632,6 +4215,99 @@ fn lower_object_create(args: Vec<RustExpr>, _span: Span) -> RustExpr {
         .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())))
 }
 
+/// Lower `Object.hasOwn(obj, key)` to `obj.contains_key(&key)`.
+///
+/// For `HashMap`-based objects this checks key membership. RustScript does not
+/// have a prototype chain, so "own" is the only kind of property that exists.
+fn lower_object_has_own(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let obj = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let key = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    // contains_key expects &key
+    let key_ref = RustExpr::synthetic(RustExprKind::Borrow(Box::new(key)));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(obj),
+            method: "contains_key".into(),
+            type_args: vec![],
+            args: vec![key_ref],
+        },
+        span,
+    )
+}
+
+/// Lower `Object.is(a, b)` to `a == b`.
+///
+/// JavaScript's `Object.is` is identical to `===` for all values except NaN
+/// and ±0. In RustScript, NaN comparisons rely on the underlying `f64` `==`,
+/// which follows IEEE 754 (NaN ≠ NaN). This MVP lowers to plain `==`, which
+/// is the correct behavior for all integer and string types used in RustScript.
+fn lower_object_is(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let mut iter = args.into_iter();
+    let a = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    let b = iter
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())));
+    RustExpr::new(
+        RustExprKind::Binary {
+            op: rsc_syntax::rust_ir::RustBinaryOp::Eq,
+            left: Box::new(a),
+            right: Box::new(b),
+        },
+        span,
+    )
+}
+
+/// Lower `Object.isFrozen(obj)` to `true`.
+///
+/// In Rust, `let` bindings are immutable by default. Every RustScript value is
+/// effectively frozen unless declared `let mut`. This call always returns `true`.
+fn lower_object_is_frozen(_args: Vec<RustExpr>, _span: Span) -> RustExpr {
+    // Always frozen in Rust — immutability is the default.
+    RustExpr::synthetic(RustExprKind::BoolLit(true))
+}
+
+/// Lower `Object.getOwnPropertyNames(obj)` to `obj.keys().cloned().collect::<Vec<_>>()`.
+///
+/// RustScript objects are structs or `HashMap`s with no prototype chain, so
+/// every key is an own property. This is semantically identical to
+/// `Object.keys()`.
+fn lower_object_get_own_property_names(args: Vec<RustExpr>, span: Span) -> RustExpr {
+    // Identical to Object.keys for RustScript (no prototype chain).
+    lower_object_keys(args, span)
+}
+
+/// Lower `Object.getPrototypeOf(obj)` to `None`.
+///
+/// Rust structs have no prototype chain. This stub returns `None`, which is the
+/// closest Rust equivalent to JavaScript's `null` prototype.
+fn lower_object_get_prototype_of(_args: Vec<RustExpr>, _span: Span) -> RustExpr {
+    // No prototype chain in Rust — return None.
+    RustExpr::synthetic(RustExprKind::EnumVariant {
+        enum_name: "Option".into(),
+        variant_name: "None".into(),
+    })
+}
+
+/// Lower `Object.defineProperty(obj, prop, descriptor)` — no-op stub.
+///
+/// Rust does not support runtime property definition. This call is lowered to
+/// the first argument (the object), preserving the expression for type-checking
+/// while emitting no side-effects.
+fn lower_object_define_property(args: Vec<RustExpr>, _span: Span) -> RustExpr {
+    // Runtime property definition is not supported in Rust.
+    // Return the object argument unchanged (no-op).
+    args.into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_".into())))
+}
+
 // ---------------------------------------------------------------------------
 // Phase 5: JSON method lowering functions
 // ---------------------------------------------------------------------------
@@ -3900,6 +4576,22 @@ pub(crate) fn lower_number_constant(object_name: &str, field_name: &str) -> Opti
         ))),
         "MIN_SAFE_INTEGER" => Some(RustExpr::synthetic(RustExprKind::IntLit(
             -9_007_199_254_740_991,
+        ))),
+        "EPSILON" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::EPSILON".into(),
+        ))),
+        "MAX_VALUE" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::MAX".into(),
+        ))),
+        "MIN_VALUE" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::MIN_POSITIVE".into(),
+        ))),
+        "NaN" => Some(RustExpr::synthetic(RustExprKind::Ident("f64::NAN".into()))),
+        "NEGATIVE_INFINITY" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::NEG_INFINITY".into(),
+        ))),
+        "POSITIVE_INFINITY" => Some(RustExpr::synthetic(RustExprKind::Ident(
+            "f64::INFINITY".into(),
         ))),
         _ => None,
     }
@@ -5001,6 +5693,35 @@ fn lower_number_to_fixed(receiver: RustExpr, args: Vec<RustExpr>, span: Span) ->
             name: "format".into(),
             args: vec![
                 RustExpr::synthetic(RustExprKind::StringLit("{:.prec$}".into())),
+                receiver,
+                RustExpr::synthetic(RustExprKind::Ident(format!(
+                    "prec = {}",
+                    emit_inline(&cast_digits)
+                ))),
+            ],
+        },
+        span,
+    )
+}
+
+/// Lower `.toExponential(digits)` on a number to `format!("{:.prec$e}", num, prec = digits as usize)`.
+///
+/// Emits: `format!("{:.prec$e}", receiver, prec = digits as usize)`
+/// If no argument is provided, defaults to 6 decimal places.
+fn lower_number_to_exponential(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let digits = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::IntLit(6)));
+    let cast_digits = RustExpr::synthetic(RustExprKind::Cast(
+        Box::new(digits),
+        RustType::Named("usize".into()),
+    ));
+    RustExpr::new(
+        RustExprKind::Macro {
+            name: "format".into(),
+            args: vec![
+                RustExpr::synthetic(RustExprKind::StringLit("{:.prec$e}".into())),
                 receiver,
                 RustExpr::synthetic(RustExprKind::Ident(format!(
                     "prec = {}",
@@ -7026,6 +7747,236 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Task 169: 21 missing Math methods — unit tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_lower_math_acos_produces_acos() {
+        let result = lower_math_acos(vec![float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "acos"),
+            other => panic!("expected MethodCall(acos), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_acosh_produces_acosh() {
+        let result = lower_math_acosh(vec![float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "acosh"),
+            other => panic!("expected MethodCall(acosh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_asin_produces_asin() {
+        let result = lower_math_asin(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "asin"),
+            other => panic!("expected MethodCall(asin), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_asinh_produces_asinh() {
+        let result = lower_math_asinh(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "asinh"),
+            other => panic!("expected MethodCall(asinh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_atan_produces_atan() {
+        let result = lower_math_atan(vec![float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "atan"),
+            other => panic!("expected MethodCall(atan), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_atan2_produces_atan2_with_two_args() {
+        let result = lower_math_atan2(vec![float_arg(1.0), float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "atan2");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected MethodCall(atan2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_atanh_produces_atanh() {
+        let result = lower_math_atanh(vec![float_arg(0.5)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "atanh"),
+            other => panic!("expected MethodCall(atanh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_cbrt_produces_cbrt() {
+        let result = lower_math_cbrt(vec![float_arg(8.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "cbrt"),
+            other => panic!("expected MethodCall(cbrt), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_cosh_produces_cosh() {
+        let result = lower_math_cosh(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "cosh"),
+            other => panic!("expected MethodCall(cosh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_exp_produces_exp() {
+        let result = lower_math_exp(vec![float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "exp"),
+            other => panic!("expected MethodCall(exp), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_expm1_produces_exp_m1() {
+        let result = lower_math_expm1(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "exp_m1"),
+            other => panic!("expected MethodCall(exp_m1), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_fround_produces_double_cast() {
+        let result = lower_math_fround(vec![float_arg(1.5)], span());
+        match &result.kind {
+            RustExprKind::Cast(inner, outer_ty) => {
+                assert!(matches!(outer_ty, RustType::F64));
+                match &inner.kind {
+                    RustExprKind::Cast(_, inner_ty) => {
+                        assert!(matches!(inner_ty, RustType::F32));
+                    }
+                    other => panic!("expected inner Cast to f32, got {other:?}"),
+                }
+            }
+            other => panic!("expected Cast(Cast(x, f32), f64), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_hypot_produces_hypot_with_two_args() {
+        let result = lower_math_hypot(vec![float_arg(3.0), float_arg(4.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "hypot");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected MethodCall(hypot), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_log10_produces_log10() {
+        let result = lower_math_log10(vec![float_arg(100.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "log10"),
+            other => panic!("expected MethodCall(log10), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_log1p_produces_ln_1p() {
+        let result = lower_math_log1p(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "ln_1p"),
+            other => panic!("expected MethodCall(ln_1p), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_log2_produces_log2() {
+        let result = lower_math_log2(vec![float_arg(8.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "log2"),
+            other => panic!("expected MethodCall(log2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_sign_produces_signum() {
+        let result = lower_math_sign(vec![float_arg(-5.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "signum"),
+            other => panic!("expected MethodCall(signum), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_sinh_produces_sinh() {
+        let result = lower_math_sinh(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "sinh"),
+            other => panic!("expected MethodCall(sinh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_tanh_produces_tanh() {
+        let result = lower_math_tanh(vec![float_arg(0.0)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "tanh"),
+            other => panic!("expected MethodCall(tanh), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_trunc_produces_trunc() {
+        let result = lower_math_trunc(vec![float_arg(4.7)], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "trunc"),
+            other => panic!("expected MethodCall(trunc), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_math_clz32_produces_leading_zeros_cast() {
+        let result = lower_math_clz32(vec![float_arg(1.0)], span());
+        match &result.kind {
+            RustExprKind::Cast(inner, outer_ty) => {
+                assert!(matches!(outer_ty, RustType::F64));
+                match &inner.kind {
+                    RustExprKind::MethodCall { method, .. } => {
+                        assert_eq!(method, "leading_zeros");
+                    }
+                    other => panic!("expected inner MethodCall(leading_zeros), got {other:?}"),
+                }
+            }
+            other => panic!("expected Cast(MethodCall(leading_zeros), f64), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_all_21_new_math_methods() {
+        let registry = BuiltinRegistry::new();
+        for method in &[
+            "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt",
+            "cosh", "exp", "expm1", "fround", "hypot", "log10", "log1p", "log2",
+            "sign", "sinh", "tanh", "trunc", "clz32",
+        ] {
+            assert!(
+                registry.lookup_method("Math", method).is_some(),
+                "Math.{method} should be registered"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------
     // Task: Standard library builtins — console extensions
     // ---------------------------------------------------------------
 
@@ -7564,6 +8515,131 @@ mod tests {
         let arg = map_receiver();
         let result = lower_object_create(vec![arg], span());
         // create is a stub — returns the argument as-is
+        match &result.kind {
+            RustExprKind::Ident(name) => assert_eq!(name, "m"),
+            other => panic!("expected Ident(m), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 177: Object static methods (hasOwn, is, isFrozen, etc.)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_object_has_own_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "hasOwn").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_has_own_produces_contains_key_call() {
+        let obj = map_receiver();
+        let key = RustExpr::synthetic(RustExprKind::StringLit("k".into()));
+        let result = lower_object_has_own(vec![obj, key], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, args, .. } => {
+                assert_eq!(method, "contains_key");
+                assert_eq!(args.len(), 1);
+                // Argument should be a borrow of the key
+                assert!(
+                    matches!(&args[0].kind, RustExprKind::Borrow(_)),
+                    "expected Borrow, got {:?}",
+                    &args[0].kind
+                );
+            }
+            other => panic!("expected MethodCall(contains_key), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_is_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "is").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_is_produces_eq_binary_op() {
+        let a = RustExpr::synthetic(RustExprKind::IntLit(1));
+        let b = RustExpr::synthetic(RustExprKind::IntLit(1));
+        let result = lower_object_is(vec![a, b], span());
+        match &result.kind {
+            RustExprKind::Binary { op, .. } => {
+                assert_eq!(*op, RustBinaryOp::Eq);
+            }
+            other => panic!("expected Binary(==), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_is_frozen_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_method("Object", "isFrozen").is_some());
+    }
+
+    #[test]
+    fn test_lower_object_is_frozen_returns_true_literal() {
+        let result = lower_object_is_frozen(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::BoolLit(true) => {}
+            other => panic!("expected BoolLit(true), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_get_own_property_names_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry
+            .lookup_method("Object", "getOwnPropertyNames")
+            .is_some());
+    }
+
+    #[test]
+    fn test_lower_object_get_own_property_names_produces_collect_chain() {
+        let result = lower_object_get_own_property_names(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::MethodCall { method, .. } => assert_eq!(method, "collect"),
+            other => panic!("expected MethodCall(collect), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_get_prototype_of_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry
+            .lookup_method("Object", "getPrototypeOf")
+            .is_some());
+    }
+
+    #[test]
+    fn test_lower_object_get_prototype_of_returns_none_variant() {
+        let result = lower_object_get_prototype_of(vec![map_receiver()], span());
+        match &result.kind {
+            RustExprKind::EnumVariant {
+                enum_name,
+                variant_name,
+            } => {
+                assert_eq!(enum_name, "Option");
+                assert_eq!(variant_name, "None");
+            }
+            other => panic!("expected EnumVariant(Option::None), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_object_define_property_returns_some() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry
+            .lookup_method("Object", "defineProperty")
+            .is_some());
+    }
+
+    #[test]
+    fn test_lower_object_define_property_returns_object_argument() {
+        let obj = map_receiver();
+        let prop = RustExpr::synthetic(RustExprKind::StringLit("x".into()));
+        let desc = RustExpr::synthetic(RustExprKind::Ident("desc".into()));
+        let result = lower_object_define_property(vec![obj, prop, desc], span());
+        // Should return the object argument unchanged (no-op stub)
         match &result.kind {
             RustExprKind::Ident(name) => assert_eq!(name, "m"),
             other => panic!("expected Ident(m), got {other:?}"),
@@ -8264,12 +9340,121 @@ mod tests {
 
     #[test]
     fn test_lower_number_constant_unknown_returns_none() {
-        assert!(lower_number_constant("Number", "EPSILON").is_none());
+        assert!(lower_number_constant("Number", "UNKNOWN_CONSTANT").is_none());
     }
 
     #[test]
     fn test_lower_number_constant_non_number_returns_none() {
         assert!(lower_number_constant("Math", "MAX_SAFE_INTEGER").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 174: Number constants — EPSILON, MAX_VALUE, MIN_VALUE, NaN,
+    // NEGATIVE_INFINITY, POSITIVE_INFINITY
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_lower_number_constant_epsilon() {
+        let result = lower_number_constant("Number", "EPSILON");
+        assert!(result.is_some(), "EPSILON should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::EPSILON"),
+            "EPSILON should lower to f64::EPSILON"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_max_value() {
+        let result = lower_number_constant("Number", "MAX_VALUE");
+        assert!(result.is_some(), "MAX_VALUE should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::MAX"),
+            "MAX_VALUE should lower to f64::MAX"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_min_value() {
+        let result = lower_number_constant("Number", "MIN_VALUE");
+        assert!(result.is_some(), "MIN_VALUE should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::MIN_POSITIVE"),
+            "MIN_VALUE should lower to f64::MIN_POSITIVE"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_nan() {
+        let result = lower_number_constant("Number", "NaN");
+        assert!(result.is_some(), "NaN should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::NAN"),
+            "NaN should lower to f64::NAN"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_negative_infinity() {
+        let result = lower_number_constant("Number", "NEGATIVE_INFINITY");
+        assert!(result.is_some(), "NEGATIVE_INFINITY should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::NEG_INFINITY"),
+            "NEGATIVE_INFINITY should lower to f64::NEG_INFINITY"
+        );
+    }
+
+    #[test]
+    fn test_lower_number_constant_positive_infinity() {
+        let result = lower_number_constant("Number", "POSITIVE_INFINITY");
+        assert!(result.is_some(), "POSITIVE_INFINITY should produce Some");
+        assert!(
+            matches!(&result.unwrap().kind, RustExprKind::Ident(s) if s == "f64::INFINITY"),
+            "POSITIVE_INFINITY should lower to f64::INFINITY"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 174: toExponential
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_number_to_exponential() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_number_method("toExponential").is_some());
+    }
+
+    #[test]
+    fn test_lower_number_to_exponential_produces_format_macro() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_exponential(receiver, vec![int_arg(2)], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$e}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_number_to_exponential_no_arg_defaults_to_6() {
+        let receiver = RustExpr::new(RustExprKind::Ident("num".to_owned()), span());
+        let result = lower_number_to_exponential(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Macro { name, args } => {
+                assert_eq!(name, "format");
+                assert_eq!(args.len(), 3);
+                match &args[0].kind {
+                    RustExprKind::StringLit(fmt) => assert_eq!(fmt, "{:.prec$e}"),
+                    other => panic!("expected StringLit format, got {other:?}"),
+                }
+            }
+            other => panic!("expected Macro(format), got {other:?}"),
+        }
     }
 
     #[test]
