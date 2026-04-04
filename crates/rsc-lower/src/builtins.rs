@@ -494,6 +494,17 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_date_method("toISOString", lower_date_to_iso_string);
     registry.register_date_method("toString", lower_date_to_string);
 
+    // Task 170: Date getter methods — calendar component extraction
+    registry.register_date_method("getFullYear", lower_date_get_full_year);
+    registry.register_date_method("getMonth", lower_date_get_month);
+    registry.register_date_method("getDate", lower_date_get_date);
+    registry.register_date_method("getDay", lower_date_get_day);
+    registry.register_date_method("getHours", lower_date_get_hours);
+    registry.register_date_method("getMinutes", lower_date_get_minutes);
+    registry.register_date_method("getSeconds", lower_date_get_seconds);
+    registry.register_date_method("getMilliseconds", lower_date_get_milliseconds);
+    registry.register_date_method("getTimezoneOffset", lower_date_get_timezone_offset);
+
     // Task 172: Date formatting methods
     registry.register_date_method("toDateString", lower_date_to_date_string);
     registry.register_date_method("toTimeString", lower_date_to_time_string);
@@ -5832,6 +5843,159 @@ fn lower_date_to_string(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) ->
 }
 
 // ---------------------------------------------------------------------------
+// Task 170: Date getter methods — calendar component extraction
+// ---------------------------------------------------------------------------
+
+/// Shared helper: emit the Hinnant civil-from-days calendar computation preamble.
+///
+/// Given a receiver code string, emits the block prefix that computes
+/// `__year`, `__m` (1-based month), `__d` (1-based day), `__dow` (0=Sun..6=Sat),
+/// and time-of-day components.
+fn date_civil_preamble(receiver_code: &str) -> String {
+    format!(
+        "{{ \
+        let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+        let __total_secs = __dur.as_secs() as i64; \
+        let __days = __total_secs / 86400; \
+        let __time_of_day = (__total_secs % 86400) as u64; \
+        let __z = __days + 719468; \
+        let __era = (if __z >= 0 {{ __z }} else {{ __z - 146096 }}) / 146097; \
+        let __doe = (__z - __era * 146097) as u64; \
+        let __yoe = (__doe - __doe / 1460 + __doe / 36524 - __doe / 146096) / 365; \
+        let __y = __yoe as i64 + __era * 400; \
+        let __doy = __doe - (365 * __yoe + __yoe / 4 - __yoe / 100); \
+        let __mp = (5 * __doy + 2) / 153; \
+        let __d = __doy - (153 * __mp + 2) / 5 + 1; \
+        let __m = if __mp < 10 {{ __mp + 3 }} else {{ __mp - 9 }}; \
+        let __year = if __m <= 2 {{ __y + 1 }} else {{ __y }}; \
+        let __dow = ((__days % 7 + 4) % 7 + 7) % 7; "
+    )
+}
+
+/// Lower `.getFullYear()` on a `Date` instance to the 4-digit year (e.g. 2026).
+///
+/// Uses the Hinnant civil_from_days algorithm to extract the year from a `SystemTime`.
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_full_year(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let preamble = date_civil_preamble(&receiver_code);
+    RustExpr::new(
+        RustExprKind::Raw(format!("{preamble}__year as i64 }}")),
+        span,
+    )
+}
+
+/// Lower `.getMonth()` on a `Date` instance to 0-based month (0=Jan, 11=Dec).
+///
+/// Uses the Hinnant civil_from_days algorithm.
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_month(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let preamble = date_civil_preamble(&receiver_code);
+    RustExpr::new(
+        RustExprKind::Raw(format!("{preamble}(__m as i64) - 1 }}")),
+        span,
+    )
+}
+
+/// Lower `.getDate()` on a `Date` instance to day of month (1-31).
+///
+/// Uses the Hinnant civil_from_days algorithm.
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_date(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let preamble = date_civil_preamble(&receiver_code);
+    RustExpr::new(RustExprKind::Raw(format!("{preamble}__d as i64 }}")), span)
+}
+
+/// Lower `.getDay()` on a `Date` instance to day of week (0=Sun, 6=Sat).
+///
+/// Unix epoch (1970-01-01) was a Thursday (day 4). We compute
+/// `(days_since_epoch % 7 + 4) % 7` to get 0=Sun..6=Sat.
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_day(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    let preamble = date_civil_preamble(&receiver_code);
+    RustExpr::new(
+        RustExprKind::Raw(format!("{preamble}__dow as i64 }}")),
+        span,
+    )
+}
+
+/// Lower `.getHours()` on a `Date` instance to hours (0-23).
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_hours(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+            let __secs = __dur.as_secs(); \
+            let __time_of_day = __secs % 86400; \
+            (__time_of_day / 3600) as i64 }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `.getMinutes()` on a `Date` instance to minutes (0-59).
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_minutes(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+            let __secs = __dur.as_secs(); \
+            let __time_of_day = __secs % 86400; \
+            ((__time_of_day % 3600) / 60) as i64 }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `.getSeconds()` on a `Date` instance to seconds (0-59).
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_seconds(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+            let __secs = __dur.as_secs(); \
+            (__secs % 60) as i64 }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `.getMilliseconds()` on a `Date` instance to milliseconds (0-999).
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_milliseconds(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
+    let receiver_code = emit_receiver(&receiver);
+    RustExpr::new(
+        RustExprKind::Raw(format!(
+            "{{ \
+            let __dur = {receiver_code}.duration_since(std::time::UNIX_EPOCH).unwrap(); \
+            __dur.subsec_millis() as i64 }}"
+        )),
+        span,
+    )
+}
+
+/// Lower `.getTimezoneOffset()` on a `Date` instance to 0 (UTC).
+///
+/// RustScript operates in UTC only; the offset is always 0 minutes.
+#[allow(clippy::needless_pass_by_value)]
+fn lower_date_get_timezone_offset(
+    _receiver: RustExpr,
+    _args: Vec<RustExpr>,
+    span: Span,
+) -> RustExpr {
+    RustExpr::new(RustExprKind::Raw("0i64".to_owned()), span)
+}
+
+// ---------------------------------------------------------------------------
 // Task 172: Date formatting methods
 // ---------------------------------------------------------------------------
 
@@ -9673,6 +9837,182 @@ mod tests {
                 }
             }
             other => panic!("expected Macro(format), got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Task 170: Date getter methods
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_full_year() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getFullYear").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_month() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getMonth").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_date() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getDate").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_day() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getDay").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_hours() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getHours").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_minutes() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getMinutes").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_seconds() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getSeconds").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_milliseconds() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getMilliseconds").is_some());
+    }
+
+    #[test]
+    fn test_builtin_registry_lookup_date_get_timezone_offset() {
+        let registry = BuiltinRegistry::new();
+        assert!(registry.lookup_date_method("getTimezoneOffset").is_some());
+    }
+
+    #[test]
+    fn test_lower_date_get_full_year_emits_hinnant_algorithm() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_full_year(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("UNIX_EPOCH"), "should reference UNIX_EPOCH");
+                assert!(code.contains("719468"), "should use Hinnant epoch offset");
+                assert!(code.contains("__year"), "should compute __year");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_month_emits_zero_based() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_month(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(
+                    code.contains("__m as i64) - 1"),
+                    "should return 0-based month"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_date_emits_day_of_month() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_date(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("__d as i64"), "should return day of month");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_day_emits_day_of_week() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_day(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("__dow"), "should compute day of week");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_hours_emits_time_extraction() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_hours(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("3600"), "should divide by 3600 for hours");
+                assert!(
+                    code.contains("86400"),
+                    "should mod by 86400 for time of day"
+                );
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_minutes_emits_time_extraction() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_minutes(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("3600"), "should use 3600");
+                assert!(code.contains("60"), "should divide by 60 for minutes");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_seconds_emits_mod_60() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_seconds(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("% 60"), "should mod by 60 for seconds");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_milliseconds_emits_subsec() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_milliseconds(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert!(code.contains("subsec_millis"), "should use subsec_millis()");
+            }
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lower_date_get_timezone_offset_returns_zero() {
+        let receiver = RustExpr::new(RustExprKind::Ident("d".to_owned()), span());
+        let result = lower_date_get_timezone_offset(receiver, vec![], span());
+        match &result.kind {
+            RustExprKind::Raw(code) => {
+                assert_eq!(code, "0i64", "UTC offset should be 0");
+            }
+            other => panic!("expected Raw(0i64), got {other:?}"),
         }
     }
 

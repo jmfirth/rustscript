@@ -3786,6 +3786,46 @@ fn test_p175_btoa_atob_roundtrip_e2e() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 170: Date getter methods — compile & run e2e
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p170_date_get_hours_returns_valid_range_e2e() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const hours: i64 = d.getHours();
+  const valid: bool = hours >= 0 && hours <= 23;
+  console.log(valid);
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "true",
+        "getHours() should return a value between 0 and 23"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p170_date_get_milliseconds_returns_valid_range_e2e() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const ms: i64 = d.getMilliseconds();
+  const valid: bool = ms >= 0 && ms <= 999;
+  console.log(valid);
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "true",
+        "getMilliseconds() should return a value between 0 and 999"
+    );
+}
+
 // ===========================================================================
 //
 // Task 173: Date constructor patterns and static methods (e2e)
