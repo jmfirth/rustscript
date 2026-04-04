@@ -4584,8 +4584,10 @@ pub(crate) fn lower_math_constant(object_name: &str, field_name: &str) -> Option
     Some(RustExpr::synthetic(RustExprKind::Ident(rust_const.into())))
 }
 
-/// Check whether an expression uses `Number.MAX_SAFE_INTEGER` or
-/// `Number.MIN_SAFE_INTEGER` properties.
+/// Check whether an expression uses `Number.MAX_SAFE_INTEGER`,
+/// `Number.MIN_SAFE_INTEGER`, `Number.EPSILON`, `Number.MAX_VALUE`,
+/// `Number.MIN_VALUE`, `Number.NaN`, `Number.NEGATIVE_INFINITY`, or
+/// `Number.POSITIVE_INFINITY` properties.
 ///
 /// Called from the `FieldAccess` lowering in `expr_lower.rs` to intercept
 /// these constants before they are lowered as normal field access expressions.

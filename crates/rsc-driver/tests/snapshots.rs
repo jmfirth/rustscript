@@ -5001,11 +5001,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_epsilon() {
-    let source = "\
+    let source = r#"
 function main() {
   const e: f64 = Number.EPSILON;
   console.log(e);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
@@ -5016,11 +5016,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_max_value() {
-    let source = "\
+    let source = r#"
 function main() {
   const m: f64 = Number.MAX_VALUE;
   console.log(m);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
@@ -5031,11 +5031,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_min_value() {
-    let source = "\
+    let source = r#"
 function main() {
   const m: f64 = Number.MIN_VALUE;
   console.log(m);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
@@ -5046,11 +5046,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_nan_constant() {
-    let source = "\
+    let source = r#"
 function main() {
   const n: f64 = Number.NaN;
   console.log(n);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
@@ -5061,11 +5061,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_negative_infinity() {
-    let source = "\
+    let source = r#"
 function main() {
   const n: f64 = Number.NEGATIVE_INFINITY;
   console.log(n);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
@@ -5076,11 +5076,11 @@ function main() {
 
 #[test]
 fn test_snapshot_number_positive_infinity() {
-    let source = "\
+    let source = r#"
 function main() {
   const n: f64 = Number.POSITIVE_INFINITY;
   console.log(n);
-}";
+}"#;
 
     let actual = compile_to_rust(source);
     assert!(
