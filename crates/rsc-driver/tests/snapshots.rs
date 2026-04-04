@@ -5643,3 +5643,51 @@ function main() {
         "expected Config::new with one supplied and port default, got:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 176: structuredClone and queueMicrotask
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_structured_clone_vec() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = [1, 2, 3];
+  const copy = structuredClone(arr);
+  console.log(copy);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![1, 2, 3];
+    let copy = arr.clone();
+    println!(\"{}\", copy);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("176_structured_clone_vec", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_queue_microtask() {
+    let source = r#"async function main() {
+  queueMicrotask(() => {
+    console.log("micro");
+  });
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("tokio::spawn"),
+        "queueMicrotask should lower to tokio::spawn.\nGenerated:\n{actual}"
+    );
+    assert!(
+        actual.contains("async move"),
+        "queueMicrotask should produce async move block.\nGenerated:\n{actual}"
+    );
+    assert!(
+        actual.contains("micro"),
+        "queueMicrotask body should be inlined.\nGenerated:\n{actual}"
+    );
+}

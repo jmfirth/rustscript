@@ -450,6 +450,10 @@ fn register_defaults(registry: &mut BuiltinRegistry) {
     registry.register_number_method("toFixed", lower_number_to_fixed);
     registry.register_number_method("toPrecision", lower_number_to_precision);
     registry.register_number_method("toString", lower_number_to_string);
+
+    // Task 176: Global structuredClone and queueMicrotask
+    registry.register_function("structuredClone", lower_structured_clone);
+    registry.register_function("queueMicrotask", lower_queue_microtask);
 }
 
 /// Lower `console.log(args...)` to `println!("{} {} ...", arg1, arg2, ...)`.
@@ -732,6 +736,71 @@ fn lower_clear_interval(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
             method: "abort".into(),
             type_args: vec![],
             args: vec![],
+        },
+        arg_span,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Task 176: structuredClone and queueMicrotask
+// ---------------------------------------------------------------------------
+
+/// Lower `structuredClone(obj)` to `obj.clone()`.
+///
+/// JavaScript's `structuredClone` performs a deep clone of its argument.
+/// Rust's `Clone` trait provides the same semantics when `#[derive(Clone)]`
+/// is present, which the lowering pass adds to all user-defined types.
+fn lower_structured_clone(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let obj = args
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::Ident("_obj".into())));
+    RustExpr::new(
+        RustExprKind::MethodCall {
+            receiver: Box::new(obj),
+            method: "clone".into(),
+            type_args: vec![],
+            args: vec![],
+        },
+        arg_span,
+    )
+}
+
+/// Lower `queueMicrotask(fn)` to `tokio::spawn(async move { fn() })`.
+///
+/// JavaScript's `queueMicrotask` schedules a callback to run as soon as
+/// the current task completes, without any additional delay. The closest
+/// Rust equivalent is spawning an async task that runs the callback
+/// immediately inside an async block — analogous to `setTimeout(fn, 0)`
+/// but without the sleep.
+fn lower_queue_microtask(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
+    let callback = args.into_iter().next().unwrap_or_else(|| {
+        RustExpr::synthetic(RustExprKind::Closure {
+            is_async: false,
+            is_move: false,
+            params: vec![],
+            return_type: None,
+            body: RustClosureBody::Block(RustBlock {
+                stmts: vec![],
+                expr: None,
+            }),
+        })
+    });
+
+    let body_stmts = callback_body_stmts(callback);
+
+    let async_block = RustExpr::synthetic(RustExprKind::AsyncBlock {
+        is_move: true,
+        body: RustBlock {
+            stmts: body_stmts,
+            expr: None,
+        },
+    });
+
+    RustExpr::new(
+        RustExprKind::Call {
+            func: "tokio::spawn".into(),
+            args: vec![async_block],
         },
         arg_span,
     )
