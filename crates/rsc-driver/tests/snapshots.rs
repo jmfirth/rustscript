@@ -6005,7 +6005,11 @@ function main() {
   console.log(r);
 }";
     let output = test_utils::compile_and_run(source);
-    assert_eq!(output.trim(), "-1", "expected localeCompare(\"abc\", \"abd\") = -1");
+    assert_eq!(
+        output.trim(),
+        "-1",
+        "expected localeCompare(\"abc\", \"abd\") = -1"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -6599,5 +6603,144 @@ function main() {
     assert!(
         actual.contains("__DURI_RESERVED") || actual.contains("__duri_bytes"),
         "decodeURI should emit URI-aware percent-decoding block:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 170: Date getter methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_date_get_full_year_generates_hinnant_block() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const year: i64 = d.getFullYear();
+  console.log(year);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("719468") && actual.contains("__year"),
+        "getFullYear should emit Hinnant civil algorithm block:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_month_generates_zero_based_month() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const month: i64 = d.getMonth();
+  console.log(month);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__m as i64) - 1"),
+        "getMonth should emit 0-based month computation:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_date_generates_day_of_month() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const day: i64 = d.getDate();
+  console.log(day);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__d as i64"),
+        "getDate should emit day-of-month computation:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_day_generates_day_of_week() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const dow: i64 = d.getDay();
+  console.log(dow);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__dow"),
+        "getDay should emit day-of-week computation:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_hours_generates_time_extraction() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const hours: i64 = d.getHours();
+  console.log(hours);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("86400") && actual.contains("3600"),
+        "getHours should emit time-of-day extraction:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_minutes_generates_time_extraction() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const minutes: i64 = d.getMinutes();
+  console.log(minutes);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("3600") && actual.contains("60"),
+        "getMinutes should emit minute extraction:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_seconds_generates_mod_60() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const secs: i64 = d.getSeconds();
+  console.log(secs);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("% 60"),
+        "getSeconds should emit seconds mod 60:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_milliseconds_generates_subsec() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const ms: i64 = d.getMilliseconds();
+  console.log(ms);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("subsec_millis"),
+        "getMilliseconds should emit subsec_millis:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_get_timezone_offset_generates_zero() {
+    let source = "\
+function main() {
+  const d = new Date();
+  const offset: i64 = d.getTimezoneOffset();
+  console.log(offset);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("0i64"),
+        "getTimezoneOffset should emit 0i64:\n{actual}"
     );
 }
