@@ -5021,10 +5021,92 @@ impl<'src> Parser<'src> {
     /// Handles function calls, method calls, and field access. Field access
     /// is distinguished from method calls by the absence of `(` after the
     /// field name.
+    /// Speculatively try to parse type arguments `<T, U, ...>` after a function identifier.
+    ///
+    /// Saves the parser position and tries to parse a `<`-delimited type argument
+    /// list. If parsing succeeds and the next token is `(` (indicating a call),
+    /// returns the parsed type arguments. Otherwise, restores the position and
+    /// returns `None`. This disambiguates `foo<A, B>(args)` (generic call) from
+    /// `foo < expr` (comparison).
+    fn try_parse_call_type_args(&mut self) -> Option<Vec<TypeAnnotation>> {
+        if !self.check(&TokenKind::Lt) {
+            return None;
+        }
+
+        // Save state for backtracking
+        let saved_pos = self.pos;
+        let saved_diags_len = self.diagnostics.len();
+
+        self.advance(); // consume `<`
+
+        let mut type_args = Vec::new();
+        // Parse comma-separated type annotations until `>`
+        loop {
+            if self.check(&TokenKind::Gt) {
+                break;
+            }
+            if let Some(ty) = self.parse_type_annotation() {
+                type_args.push(ty);
+            } else {
+                // Failed to parse a type — restore and bail
+                self.pos = saved_pos;
+                self.diagnostics.truncate(saved_diags_len);
+                return None;
+            }
+            if self.check(&TokenKind::Comma) {
+                self.advance(); // consume `,`
+            } else {
+                break;
+            }
+        }
+
+        // Expect `>` followed by `(`
+        if !self.check(&TokenKind::Gt) || type_args.is_empty() {
+            self.pos = saved_pos;
+            self.diagnostics.truncate(saved_diags_len);
+            return None;
+        }
+        self.advance(); // consume `>`
+
+        // Must be followed by `(` to be a generic call
+        if !self.check(&TokenKind::LParen) {
+            self.pos = saved_pos;
+            self.diagnostics.truncate(saved_diags_len);
+            return None;
+        }
+
+        Some(type_args)
+    }
+
     fn parse_call(&mut self) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
 
         loop {
+            // Check for generic call: `ident<T, U>(args)` — must come before
+            // the normal `(` check to handle `foo<A, B>(...)` correctly.
+            if let ExprKind::Ident(ref _callee) = expr.kind
+                && self.check(&TokenKind::Lt)
+                && let Some(type_args) = self.try_parse_call_type_args()
+            {
+                // We consumed `<Type, ...>` and confirmed `(` follows
+                let ExprKind::Ident(callee) = expr.kind else {
+                    unreachable!()
+                };
+                self.advance(); // consume `(`
+                let args = self.parse_arg_list();
+                let close = self.expect(&TokenKind::RParen)?;
+                let span = callee.span.merge(close.span);
+                expr = Expr {
+                    kind: ExprKind::Call(CallExpr {
+                        callee,
+                        type_args,
+                        args,
+                    }),
+                    span,
+                };
+                continue;
+            }
+
             if self.check(&TokenKind::LParen) {
                 // Function call — the expression must be an identifier
                 if let ExprKind::Ident(callee) = expr.kind {
@@ -5033,7 +5115,11 @@ impl<'src> Parser<'src> {
                     let close = self.expect(&TokenKind::RParen)?;
                     let span = callee.span.merge(close.span);
                     expr = Expr {
-                        kind: ExprKind::Call(CallExpr { callee, args }),
+                        kind: ExprKind::Call(CallExpr {
+                            callee,
+                            type_args: vec![],
+                            args,
+                        }),
                         span,
                     };
                 } else if matches!(expr.kind, ExprKind::Super) {

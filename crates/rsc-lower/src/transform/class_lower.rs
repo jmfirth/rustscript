@@ -144,6 +144,8 @@ impl Transform {
                             default_values,
                             has_rest_param: false,
                             param_count,
+                            return_type: None,
+                            generic_param_names: vec![],
                         },
                     );
                 }

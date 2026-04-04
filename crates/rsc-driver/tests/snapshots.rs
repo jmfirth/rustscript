@@ -7345,3 +7345,69 @@ fn main() {
     let actual = compile_to_rust(source);
     assert_snapshot("labeled_break_from_string_switch", &actual, expected);
 }
+
+// ---------------------------------------------------------------------------
+// DEBUG: Multi-generic tuple return (temporary)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Multi-generic tuple return (conformance gap 7)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_multi_generic_tuple_inferred() {
+    let source = "\
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+function main() {
+  const p = pair(\"hello\", 42);
+  console.log(p[0]);
+  console.log(p[1]);
+}";
+
+    let expected = "\
+fn pair<A, B>(a: A, b: B) -> (A, B) {
+    return (a, b);
+}
+
+fn main() {
+    let p = pair(\"hello\".to_string(), 42);
+    println!(\"{}\", p.0);
+    println!(\"{}\", p.1);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("multi_generic_tuple_inferred", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_multi_generic_tuple_explicit_type_args() {
+    let source = "\
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+function main() {
+  const p = pair<string, i32>(\"hello\", 42);
+  console.log(p[0]);
+  console.log(p[1]);
+}";
+
+    let expected = "\
+fn pair<A, B>(a: A, b: B) -> (A, B) {
+    return (a, b);
+}
+
+fn main() {
+    let p = pair::<String, i32>(\"hello\".to_string(), 42);
+    println!(\"{}\", p.0);
+    println!(\"{}\", p.1);
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("multi_generic_tuple_explicit_type_args", &actual, expected);
+}

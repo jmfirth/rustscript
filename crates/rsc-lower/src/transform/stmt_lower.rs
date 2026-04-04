@@ -56,6 +56,21 @@ fn clone_if_reference(expr: &RustExpr, ctx: &LoweringContext) -> RustExpr {
 }
 
 impl Transform {
+    /// Infer the return type of a function call expression from the callee's signature.
+    ///
+    /// If the init expression is a function call (`foo(...)`) and the callee has a
+    /// registered return type, returns that type. This enables the lowering context to
+    /// know e.g. that a variable bound to `pair(a, b)` has a tuple type, so `p[0]`
+    /// can be lowered as `p.0` instead of array indexing.
+    fn infer_call_return_type(&self, init: &ast::Expr) -> Option<RustType> {
+        if let ast::ExprKind::Call(call) = &init.kind {
+            if let Some(sig) = self.fn_signatures.get(&call.callee.name) {
+                return sig.return_type.clone();
+            }
+        }
+        None
+    }
+
     /// Lower a block of statements.
     #[allow(clippy::only_used_in_recursion)]
     pub(super) fn lower_block(
@@ -217,8 +232,12 @@ impl Transform {
                 &mut diags,
             );
             rsc_typeck::bridge::type_to_rust_type(&ty_inner)
+        } else if let Some(lit_ty) = rsc_typeck::resolve::infer_literal_rust_type(&decl.init) {
+            lit_ty
+        } else if let Some(call_ret_ty) = self.infer_call_return_type(&decl.init) {
+            call_ret_ty
         } else {
-            rsc_typeck::resolve::infer_literal_rust_type(&decl.init).unwrap_or(RustType::I64)
+            RustType::I64
         };
         // Track whether the type was actually inferred from the init expression.
         // If no annotation and the init is not a literal, we should let Rust infer.

@@ -1174,9 +1174,28 @@ impl Transform {
             }
         }
 
+        // Lower explicit type arguments (e.g., `pair<string, i32>(...)` → `::<String, i32>`)
+        let type_args: Vec<RustType> = call
+            .type_args
+            .iter()
+            .map(|ann| {
+                let mut ta_diags = Vec::new();
+                let ty_inner = rsc_typeck::resolve::resolve_type_annotation_with_registry(
+                    ann,
+                    &self.type_registry,
+                    &mut ta_diags,
+                );
+                for d in ta_diags {
+                    ctx.emit_diagnostic(d);
+                }
+                rsc_typeck::bridge::type_to_rust_type(&ty_inner)
+            })
+            .collect();
+
         let call_expr = RustExpr::new(
             RustExprKind::Call {
                 func: call.callee.name.clone(),
+                type_args,
                 args,
             },
             span,
@@ -2282,6 +2301,7 @@ impl Transform {
         RustExpr::new(
             RustExprKind::Call {
                 func: func_name,
+                type_args: vec![],
                 args: vec![strings_arg, values_arg],
             },
             span,

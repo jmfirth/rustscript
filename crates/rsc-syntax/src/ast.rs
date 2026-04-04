@@ -1570,11 +1570,15 @@ pub enum UnaryOp {
 
 /// A function call expression.
 ///
-/// Corresponds to `callee(args...)`. Lowers to a Rust function call.
+/// Corresponds to `callee(args...)` or `callee<T, U>(args...)`.
+/// Lowers to a Rust function call, with optional turbofish type arguments.
 #[derive(Debug, Clone)]
 pub struct CallExpr {
     /// The function being called.
     pub callee: Ident,
+    /// Explicit type arguments (e.g., `<string, i32>` in `pair<string, i32>(...)`).
+    /// Empty when type arguments are inferred.
+    pub type_args: Vec<TypeAnnotation>,
     /// The argument list.
     pub args: Vec<Expr>,
 }
@@ -2015,6 +2019,7 @@ mod tests {
             Expr {
                 kind: ExprKind::Call(CallExpr {
                     callee: ident("foo", 70, 73),
+                    type_args: vec![],
                     args: vec![],
                 }),
                 span: span(70, 75),

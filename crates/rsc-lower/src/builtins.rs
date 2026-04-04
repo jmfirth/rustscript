@@ -626,6 +626,7 @@ fn lower_spawn(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
     RustExpr::new(
         RustExprKind::Call {
             func: "tokio::spawn".into(),
+            type_args: vec![],
             args: vec![async_block],
         },
         arg_span,
@@ -652,6 +653,7 @@ fn build_sleep_await(delay_expr: RustExpr, span: Span) -> RustExpr {
     let sleep_call = RustExpr::new(
         RustExprKind::Call {
             func: "tokio::time::sleep".into(),
+            type_args: vec![],
             args: vec![duration],
         },
         span,
@@ -681,6 +683,7 @@ fn callback_body_stmts(callback: RustExpr) -> Vec<RustStmt> {
         RustExprKind::Ident(name) => {
             vec![RustStmt::Semi(RustExpr::synthetic(RustExprKind::Call {
                 func: name,
+                type_args: vec![],
                 args: vec![],
             }))]
         }
@@ -731,6 +734,7 @@ fn lower_set_timeout(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
     RustExpr::new(
         RustExprKind::Call {
             func: "tokio::spawn".into(),
+            type_args: vec![],
             args: vec![async_block],
         },
         arg_span,
@@ -793,6 +797,7 @@ fn lower_set_interval(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
     RustExpr::new(
         RustExprKind::Call {
             func: "tokio::spawn".into(),
+            type_args: vec![],
             args: vec![async_block],
         },
         arg_span,
@@ -896,6 +901,7 @@ fn lower_queue_microtask(args: Vec<RustExpr>, arg_span: Span) -> RustExpr {
     RustExpr::new(
         RustExprKind::Call {
             func: "tokio::spawn".into(),
+            type_args: vec![],
             args: vec![async_block],
         },
         arg_span,
@@ -3103,6 +3109,7 @@ fn lower_math_random(_args: Vec<RustExpr>, span: Span) -> RustExpr {
     RustExpr::new(
         RustExprKind::Call {
             func: "rand::random::<f64>".into(),
+            type_args: vec![],
             args: vec![],
         },
         span,
@@ -4388,6 +4395,7 @@ fn lower_json_stringify(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let call = RustExpr::new(
         RustExprKind::Call {
             func: "serde_json::to_string".into(),
+            type_args: vec![],
             args: vec![borrow_arg],
         },
         span,
@@ -4413,6 +4421,7 @@ fn lower_json_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let call = RustExpr::new(
         RustExprKind::Call {
             func: "serde_json::from_str".into(),
+            type_args: vec![],
             args: vec![borrow_arg],
         },
         span,
@@ -4513,6 +4522,7 @@ fn lower_from_char_code_impl(args: Vec<RustExpr>, span: Span) -> RustExpr {
         let from_u32 = RustExpr::new(
             RustExprKind::Call {
                 func: "char::from_u32".into(),
+                type_args: vec![],
                 args: vec![cast],
             },
             span,
@@ -4581,6 +4591,7 @@ fn lower_from_char_code_impl(args: Vec<RustExpr>, span: Span) -> RustExpr {
                     body: RustClosureBody::Expr(Box::new(RustExpr::synthetic(
                         RustExprKind::Call {
                             func: "char::from_u32".into(),
+                            type_args: vec![],
                             args: vec![RustExpr::synthetic(RustExprKind::Cast(
                                 Box::new(RustExpr::synthetic(RustExprKind::Ident("c".into()))),
                                 RustType::U32,
@@ -7451,6 +7462,7 @@ mod tests {
     fn test_lower_spawn_produces_tokio_spawn_async_move_block() {
         let work_call = RustExpr::synthetic(RustExprKind::Call {
             func: "work".into(),
+            type_args: vec![],
             args: vec![],
         });
         let closure = RustExpr::synthetic(RustExprKind::Closure {
@@ -7466,7 +7478,7 @@ mod tests {
 
         let result = lower_spawn(vec![closure], span());
         match &result.kind {
-            RustExprKind::Call { func, args } => {
+            RustExprKind::Call { func, args, .. } => {
                 assert_eq!(func, "tokio::spawn");
                 assert_eq!(args.len(), 1);
                 match &args[0].kind {
@@ -7530,6 +7542,7 @@ mod tests {
     fn test_lower_set_timeout_produces_tokio_spawn_with_sleep() {
         let callback_body = RustExpr::synthetic(RustExprKind::Call {
             func: "work".into(),
+            type_args: vec![],
             args: vec![],
         });
         let callback = RustExpr::synthetic(RustExprKind::Closure {
@@ -7546,7 +7559,7 @@ mod tests {
 
         let result = lower_set_timeout(vec![callback, delay], span());
         match &result.kind {
-            RustExprKind::Call { func, args } => {
+            RustExprKind::Call { func, args, .. } => {
                 assert_eq!(func, "tokio::spawn");
                 assert_eq!(args.len(), 1);
                 match &args[0].kind {
@@ -7594,6 +7607,7 @@ mod tests {
     fn test_lower_set_interval_produces_tokio_spawn_with_loop() {
         let callback_body = RustExpr::synthetic(RustExprKind::Call {
             func: "tick".into(),
+            type_args: vec![],
             args: vec![],
         });
         let callback = RustExpr::synthetic(RustExprKind::Closure {
@@ -7610,7 +7624,7 @@ mod tests {
 
         let result = lower_set_interval(vec![callback, delay], span());
         match &result.kind {
-            RustExprKind::Call { func, args } => {
+            RustExprKind::Call { func, args, .. } => {
                 assert_eq!(func, "tokio::spawn");
                 assert_eq!(args.len(), 1);
                 match &args[0].kind {
@@ -8652,7 +8666,7 @@ mod tests {
     fn test_lower_math_random_produces_rand_call() {
         let result = lower_math_random(vec![], span());
         match &result.kind {
-            RustExprKind::Call { func, args } => {
+            RustExprKind::Call { func, args, .. } => {
                 assert_eq!(func, "rand::random::<f64>");
                 assert!(args.is_empty());
             }

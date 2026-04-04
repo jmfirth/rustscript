@@ -62,6 +62,12 @@ struct FnSignature {
     has_rest_param: bool,
     /// Total parameter count (including the rest param if any).
     param_count: usize,
+    /// Resolved return type (for inferring variable types at call sites).
+    /// `None` for void/unit-returning functions.
+    return_type: Option<RustType>,
+    /// Names of generic type parameters (e.g., `["A", "B"]`).
+    /// Used to detect when a return type contains unresolved type params.
+    generic_param_names: Vec<String>,
 }
 
 /// Map from function name to its throws signature.
@@ -1454,6 +1460,7 @@ mod tests {
                                 left: Box::new(Expr {
                                     kind: ExprKind::Call(CallExpr {
                                         callee: ident("fib", 30, 33),
+                                        type_args: vec![],
                                         args: vec![Expr {
                                             kind: ExprKind::Binary(BinaryExpr {
                                                 op: BinaryOp::Sub,
@@ -1468,6 +1475,7 @@ mod tests {
                                 right: Box::new(Expr {
                                     kind: ExprKind::Call(CallExpr {
                                         callee: ident("fib", 43, 46),
+                                        type_args: vec![],
                                         args: vec![Expr {
                                             kind: ExprKind::Binary(BinaryExpr {
                                                 op: BinaryOp::Sub,
@@ -1622,6 +1630,7 @@ mod tests {
                     Stmt::Expr(Expr {
                         kind: ExprKind::Call(CallExpr {
                             callee: ident("greet", 30, 35),
+                            type_args: vec![],
                             args: vec![ident_expr("name", 36, 40)],
                         }),
                         span: span(30, 41),
@@ -1653,7 +1662,7 @@ mod tests {
         // stmt 0: greet(name.clone()) — name is in move position and used later
         match &func.body.stmts[0] {
             RustStmt::Semi(expr) => match &expr.kind {
-                RustExprKind::Call { func: f, args } => {
+                RustExprKind::Call { func: f, args, .. } => {
                     assert_eq!(f, "greet");
                     assert_eq!(args.len(), 1);
                     match &args[0].kind {
@@ -3396,6 +3405,7 @@ mod tests {
                     init: Expr {
                         kind: ExprKind::Call(CallExpr {
                             callee: ident("inner", 0, 5),
+                            type_args: vec![],
                             args: vec![],
                         }),
                         span: span(0, 7),
@@ -4840,7 +4850,7 @@ function main() {}"#;
         match &file.items[0] {
             RustItem::Function(f) => match &f.body.stmts[0] {
                 RustStmt::Semi(expr) => match &expr.kind {
-                    RustExprKind::Call { func, args } => {
+                    RustExprKind::Call { func, args, .. } => {
                         assert_eq!(func, "tokio::spawn");
                         assert_eq!(args.len(), 1);
                         match &args[0].kind {
@@ -4871,7 +4881,7 @@ function main() {}"#;
         match &file.items[0] {
             RustItem::Function(f) => match &f.body.stmts[0] {
                 RustStmt::Semi(expr) => match &expr.kind {
-                    RustExprKind::Call { func, args } => {
+                    RustExprKind::Call { func, args, .. } => {
                         assert_eq!(func, "tokio::spawn");
                         match &args[0].kind {
                             RustExprKind::AsyncBlock { is_move, body } => {
@@ -5411,6 +5421,7 @@ async function main() {
             vec![Stmt::Expr(Expr {
                 kind: ExprKind::Call(CallExpr {
                     callee: ident("unknown_fn", 0, 10),
+                    type_args: vec![],
                     args: vec![string_expr("hello", 11, 18)],
                 }),
                 span: span(0, 19),
@@ -5528,6 +5539,7 @@ async function main() {
             vec![Stmt::Expr(Expr {
                 kind: ExprKind::Call(CallExpr {
                     callee: ident("greet", 0, 5),
+                    type_args: vec![],
                     args: vec![string_expr("hello", 6, 13)],
                 }),
                 span: span(0, 14),
@@ -5586,6 +5598,7 @@ async function main() {
         let inner_call = Expr {
             kind: ExprKind::Call(CallExpr {
                 callee: ident("connect", 0, 7),
+                type_args: vec![],
                 args: vec![],
             }),
             span: span(0, 9),
@@ -5808,6 +5821,7 @@ async function main() {
             vec![Stmt::Expr(Expr {
                 kind: ExprKind::Call(CallExpr {
                     callee: ident("greet", 0, 5),
+                    type_args: vec![],
                     args: vec![string_expr("Alice", 6, 13)],
                 }),
                 span: span(0, 14),

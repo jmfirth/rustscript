@@ -1940,6 +1940,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 0, 5),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 6, 7)],
                     }),
                     span: span(0, 8),
@@ -1947,6 +1948,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 10, 15),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 16, 17)],
                     }),
                     span: span(10, 18),
@@ -1954,6 +1956,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("foo", 20, 23),
+                        type_args: vec![],
                         args: vec![],
                     }),
                     span: span(20, 25),
@@ -1979,6 +1982,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 0, 5),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 6, 7)],
                     }),
                     span: span(0, 8),
@@ -1987,6 +1991,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 20, 25),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 26, 27)],
                     }),
                     span: span(20, 28),
@@ -2007,6 +2012,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 0, 5),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 6, 7)],
                     }),
                     span: span(0, 8),
@@ -2015,6 +2021,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 20, 25),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 26, 27)],
                     }),
                     span: span(20, 28),
@@ -2035,6 +2042,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("foo", 0, 3),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 4, 5)],
                     }),
                     span: span(0, 6),
@@ -2042,6 +2050,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("foo", 10, 13),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 14, 15)],
                     }),
                     span: span(10, 16),
@@ -2065,6 +2074,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("foo", 0, 3),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 4, 5)],
                     }),
                     span: span(0, 6),
@@ -2072,6 +2082,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("foo", 10, 13),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 14, 15)],
                     }),
                     span: span(10, 16),
@@ -2128,6 +2139,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("process", 0, 7),
+                        type_args: vec![],
                         args: vec![ident_expr("v", 8, 9)],
                     }),
                     span: span(0, 10),
@@ -2135,6 +2147,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("process", 20, 27),
+                        type_args: vec![],
                         args: vec![ident_expr("v", 28, 29)],
                     }),
                     span: span(20, 30),
@@ -2172,6 +2185,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("process", 20, 27),
+                        type_args: vec![],
                         args: vec![ident_expr("items", 28, 33)],
                     }),
                     span: span(20, 34),
@@ -2305,6 +2319,7 @@ mod tests {
             stmts: vec![Stmt::Expr(Expr {
                 kind: ExprKind::Call(CallExpr {
                     callee: ident("save", 0, 4),
+                    type_args: vec![],
                     args: vec![ident_expr("name", 5, 9)],
                 }),
                 span: span(0, 10),
@@ -2630,6 +2645,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 0, 5),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 6, 7)],
                     }),
                     span: span(0, 8),
@@ -2637,6 +2653,7 @@ mod tests {
                 Stmt::Expr(Expr {
                     kind: ExprKind::Call(CallExpr {
                         callee: ident("greet", 10, 15),
+                        type_args: vec![],
                         args: vec![ident_expr("x", 16, 17)],
                     }),
                     span: span(10, 18),

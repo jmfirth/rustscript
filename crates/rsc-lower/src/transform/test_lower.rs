@@ -174,7 +174,7 @@ fn rewrite_assert_stmts(stmt: RustStmt) -> RustStmt {
 /// Rewrite an `assert()` call expression into the appropriate Rust macro.
 fn rewrite_assert_expr(expr: RustExpr) -> RustExpr {
     match &expr.kind {
-        RustExprKind::Call { func, args } if func == "assert" && args.len() == 1 => {
+        RustExprKind::Call { func, args, .. } if func == "assert" && args.len() == 1 => {
             let span = expr.span;
             let arg = &args[0];
             match &arg.kind {
@@ -236,7 +236,7 @@ fn rewrite_expect_chain(expr: RustExpr) -> RustExpr {
 
     // Check if receiver is `expect(x)` call with exactly one argument
     let subject = match &receiver.kind {
-        RustExprKind::Call { func, args } if func == "expect" && args.len() == 1 => &args[0],
+        RustExprKind::Call { func, args, .. } if func == "expect" && args.len() == 1 => &args[0],
         _ => return expr,
     };
 
