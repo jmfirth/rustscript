@@ -2400,8 +2400,32 @@ impl Transform {
 
         match rust_type_name.as_str() {
             "Vec" => {
-                // `new Array()` → `vec![]` (empty vec literal)
-                RustExpr::new(RustExprKind::VecLit(args), span)
+                if args.len() == 1 {
+                    // `new Array(n)` — single numeric arg means "create array with n slots".
+                    // In JS, `new Array(10)` creates a sparse array of length 10.
+                    // Best Rust equivalent: `vec![Default::default(); n]`.
+                    let ast_arg = &new_expr.args[0];
+                    let is_numeric = matches!(
+                        &ast_arg.kind,
+                        ast::ExprKind::IntLit(_) | ast::ExprKind::FloatLit(_)
+                    ) || matches!(&ast_arg.kind, ast::ExprKind::Ident(_));
+
+                    if is_numeric {
+                        let arg_code = crate::builtins::emit_expr_raw_pub(&args[0]);
+                        RustExpr::new(
+                            RustExprKind::Raw(format!(
+                                "vec![Default::default(); {arg_code} as usize]"
+                            )),
+                            span,
+                        )
+                    } else {
+                        // Single non-numeric arg: `new Array(item)` → `vec![item]`
+                        RustExpr::new(RustExprKind::VecLit(args), span)
+                    }
+                } else {
+                    // `new Array()` → `vec![]`, `new Array(a, b, c)` → `vec![a, b, c]`
+                    RustExpr::new(RustExprKind::VecLit(args), span)
+                }
             }
             "Date" => {
                 // Task 173: Date constructor patterns
@@ -2557,8 +2581,123 @@ impl Transform {
                     span,
                 )
             }
+            "HashMap" => {
+                if args.len() == 1 {
+                    // `new Map([["a", 1], ["b", 2]])` →
+                    //   vec![("a".to_string(), 1), ("b".to_string(), 2)]
+                    //       .into_iter().collect::<HashMap<_, _>>()
+                    // Re-lower from the AST arg to convert inner arrays to tuples.
+                    let ast_arg = &new_expr.args[0];
+                    let entries_vec = if let ast::ExprKind::ArrayLit(elements) = &ast_arg.kind {
+                        let tuple_entries: Vec<RustExpr> = elements
+                            .iter()
+                            .map(|e| match e {
+                                ast::ArrayElement::Expr(expr) => {
+                                    if let ast::ExprKind::ArrayLit(inner) = &expr.kind {
+                                        let parts: Vec<RustExpr> = inner
+                                            .iter()
+                                            .map(|ie| match ie {
+                                                ast::ArrayElement::Expr(ie)
+                                                | ast::ArrayElement::Spread(ie) => {
+                                                    self.lower_expr(ie, ctx, use_map, stmt_index)
+                                                }
+                                            })
+                                            .collect();
+                                        RustExpr::new(RustExprKind::Tuple(parts), expr.span)
+                                    } else {
+                                        self.lower_expr(expr, ctx, use_map, stmt_index)
+                                    }
+                                }
+                                ast::ArrayElement::Spread(expr) => {
+                                    self.lower_expr(expr, ctx, use_map, stmt_index)
+                                }
+                            })
+                            .collect();
+                        RustExpr::new(RustExprKind::VecLit(tuple_entries), span)
+                    } else {
+                        // Non-array argument: use already-lowered arg
+                        args.into_iter()
+                            .next()
+                            .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::VecLit(vec![])))
+                    };
+                    // Chain: entries_vec.into_iter().collect::<HashMap<_, _>>()
+                    let into_iter = RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(entries_vec),
+                            method: "into_iter".to_owned(),
+                            type_args: vec![],
+                            args: vec![],
+                        },
+                        span,
+                    );
+                    let collect_ty = RustType::Generic(
+                        Box::new(RustType::Named("HashMap".to_owned())),
+                        vec![RustType::Infer, RustType::Infer],
+                    );
+                    RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(into_iter),
+                            method: "collect".to_owned(),
+                            type_args: vec![collect_ty],
+                            args: vec![],
+                        },
+                        span,
+                    )
+                } else {
+                    // `new Map()` → `HashMap::new()`
+                    RustExpr::new(
+                        RustExprKind::StaticCall {
+                            type_name: "HashMap".to_owned(),
+                            method: "new".to_owned(),
+                            args,
+                        },
+                        span,
+                    )
+                }
+            }
+            "HashSet" => {
+                if args.len() == 1 {
+                    // `new Set([1, 2, 3])` →
+                    //   vec![1, 2, 3].into_iter().collect::<HashSet<_>>()
+                    let arg = args
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| RustExpr::synthetic(RustExprKind::VecLit(vec![])));
+                    let into_iter = RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(arg),
+                            method: "into_iter".to_owned(),
+                            type_args: vec![],
+                            args: vec![],
+                        },
+                        span,
+                    );
+                    let collect_ty = RustType::Generic(
+                        Box::new(RustType::Named("HashSet".to_owned())),
+                        vec![RustType::Infer],
+                    );
+                    RustExpr::new(
+                        RustExprKind::MethodCall {
+                            receiver: Box::new(into_iter),
+                            method: "collect".to_owned(),
+                            type_args: vec![collect_ty],
+                            args: vec![],
+                        },
+                        span,
+                    )
+                } else {
+                    // `new Set()` → `HashSet::new()`
+                    RustExpr::new(
+                        RustExprKind::StaticCall {
+                            type_name: "HashSet".to_owned(),
+                            method: "new".to_owned(),
+                            args,
+                        },
+                        span,
+                    )
+                }
+            }
             _ => {
-                // `new Map()` → `HashMap::new()`, `new Set()` → `HashSet::new()`
                 // `new ClassName(args)` → `ClassName::new(args)` (class constructor)
                 //
                 // Fill in default values for omitted constructor arguments.

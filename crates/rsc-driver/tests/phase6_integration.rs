@@ -3942,3 +3942,55 @@ function main() {
         "new Date(ms).getTime() should roundtrip"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Constructor patterns: new Array(n), new Map(entries), new Set(iterable)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_new_array_n_creates_vec_with_length() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = new Array(5);
+  console.log(arr.length);
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "5",
+        "new Array(5) should create a vec with 5 elements"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_new_map_from_entries() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map([["a", 1], ["b", 2]]);
+  console.log(m.size);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "2",
+        "new Map(entries) should create a map with 2 entries"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_new_set_from_iterable() {
+    let source = "\
+function main() {
+  const s: Set<i32> = new Set([1, 2, 3]);
+  console.log(s.size);
+}";
+    let output = compile_and_run(source);
+    assert_eq!(
+        output.trim(),
+        "3",
+        "new Set(iterable) should create a set with 3 elements"
+    );
+}

@@ -7080,3 +7080,126 @@ function main() {
         "new Date(0) should emit epoch construction:\n{actual}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Constructor patterns: new Array(n), new Map(entries), new Set(iterable)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_new_array_n_generates_vec_default() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = new Array(5);
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![Default::default(); 5 as usize];
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("new_array_n", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_new_array_empty() {
+    let source = "\
+function main() {
+  const arr: Array<i32> = new Array();
+}";
+
+    let expected = "\
+fn main() {
+    let arr: Vec<i32> = vec![];
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("new_array_empty", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_new_map_with_entries() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map([["a", 1], ["b", 2]]);
+}"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("into_iter().collect::<HashMap<_, _>>()"),
+        "new Map(entries) should emit .into_iter().collect::<HashMap<_, _>>():\n{actual}"
+    );
+    assert!(
+        actual.contains(r#"("a".to_string(), 1)"#),
+        "new Map entries should lower inner arrays as tuples:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_map_empty_still_works() {
+    let source = "\
+function main() {
+  const m: Map<string, i32> = new Map();
+}";
+
+    let expected = "\
+use std::collections::HashMap;
+
+fn main() {
+    let m: HashMap<String, i32> = HashMap::new();
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("new_map_empty", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_new_set_with_iterable() {
+    let source = "\
+function main() {
+  const s: Set<i32> = new Set([1, 2, 3]);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("vec![1, 2, 3].into_iter().collect::<HashSet<_>>()"),
+        "new Set(iterable) should emit vec![...].into_iter().collect::<HashSet<_>>():\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_new_set_empty_still_works() {
+    let source = "\
+function main() {
+  const s: Set<i32> = new Set();
+}";
+
+    let expected = "\
+use std::collections::HashSet;
+
+fn main() {
+    let s: HashSet<i32> = HashSet::new();
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("new_set_empty", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_new_array_variable_size() {
+    let source = "\
+function main() {
+  const n: i32 = 10;
+  const arr: Array<string> = new Array(n);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("vec![Default::default(); n as usize]"),
+        "new Array(variable) should emit vec![Default::default(); n as usize]:\n{actual}"
+    );
+}
