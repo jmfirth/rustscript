@@ -6005,7 +6005,11 @@ function main() {
   console.log(r);
 }";
     let output = test_utils::compile_and_run(source);
-    assert_eq!(output.trim(), "-1", "expected localeCompare(\"abc\", \"abd\") = -1");
+    assert_eq!(
+        output.trim(),
+        "-1",
+        "expected localeCompare(\"abc\", \"abd\") = -1"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -6599,5 +6603,121 @@ function main() {
     assert!(
         actual.contains("__DURI_RESERVED") || actual.contains("__duri_bytes"),
         "decodeURI should emit URI-aware percent-decoding block:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 171: Date setter methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_date_set_time() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setTime(0);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("UNIX_EPOCH") && actual.contains("Duration::from_millis"),
+        "setTime should emit UNIX_EPOCH + Duration::from_millis:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_full_year() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setFullYear(2025);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__year") && actual.contains("UNIX_EPOCH"),
+        "setFullYear should decompose and reconstruct with __year:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_month() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setMonth(5);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__month") && actual.contains("UNIX_EPOCH"),
+        "setMonth should decompose and reconstruct with __month:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_date() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setDate(15);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__day") && actual.contains("UNIX_EPOCH"),
+        "setDate should decompose and reconstruct with __day:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_hours() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setHours(12);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__hours") && actual.contains("UNIX_EPOCH"),
+        "setHours should decompose and reconstruct with __hours:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_minutes() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setMinutes(30);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__minutes") && actual.contains("UNIX_EPOCH"),
+        "setMinutes should decompose and reconstruct with __minutes:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_seconds() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setSeconds(45);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__seconds") && actual.contains("UNIX_EPOCH"),
+        "setSeconds should decompose and reconstruct with __seconds:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_date_set_milliseconds() {
+    let source = "\
+function main() {
+  let d = new Date();
+  d = d.setMilliseconds(500);
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("__millis") && actual.contains("UNIX_EPOCH"),
+        "setMilliseconds should decompose and reconstruct with __millis:\n{actual}"
     );
 }

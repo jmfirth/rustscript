@@ -1546,7 +1546,10 @@ function main() {
   const expanded = arrs.map((x: Array<i32>): Array<i32> => [...x, 99]);
   console.log(expanded.length);
 }"#;
-    assert!(compiles_ok(source), "spread in closure return should compile");
+    assert!(
+        compiles_ok(source),
+        "spread in closure return should compile"
+    );
 }
 
 #[test]
@@ -1559,7 +1562,10 @@ function main() {
   const names = pairs.map(({ name, age }: Pair): string => name);
   console.log(names.length);
 }"#;
-    assert!(compiles_ok(source), "destructuring in closure params should compile");
+    assert!(
+        compiles_ok(source),
+        "destructuring in closure params should compile"
+    );
 }
 
 #[test]
@@ -1750,7 +1756,10 @@ function main() {
     }
   }
 }"#;
-    assert!(compiles_ok(source), "try/catch inside for-of should compile");
+    assert!(
+        compiles_ok(source),
+        "try/catch inside for-of should compile"
+    );
 }
 
 #[test]
@@ -1761,7 +1770,10 @@ function main() {
     console.log(i);
   }
 }"#;
-    assert!(compiles_ok(source), "classic for with step 3 should compile");
+    assert!(
+        compiles_ok(source),
+        "classic for with step 3 should compile"
+    );
 }
 
 #[test]
@@ -1775,7 +1787,10 @@ function main() {
     }
   }
 }"#;
-    assert!(compiles_ok(source), "nested classic for inside for-of should compile");
+    assert!(
+        compiles_ok(source),
+        "nested classic for inside for-of should compile"
+    );
 }
 
 #[test]
@@ -1793,7 +1808,10 @@ function main() {
   }
   console.log(found);
 }"#;
-    assert!(compiles_ok(source), "labeled break in nested loops should compile");
+    assert!(
+        compiles_ok(source),
+        "labeled break in nested loops should compile"
+    );
 }
 
 #[test]
@@ -1818,7 +1836,10 @@ function main() {
     console.log(sum);
   }
 }"#;
-    assert!(compiles_ok(source), "method chain in loop body should compile");
+    assert!(
+        compiles_ok(source),
+        "method chain in loop body should compile"
+    );
 }
 
 #[test]
@@ -1856,7 +1877,10 @@ function main() {
   console.log(show("hello"));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "union param should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "union param should compile: {rust}"
+    );
 }
 
 #[test]
@@ -1871,7 +1895,10 @@ function main() {
   console.log("done");
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "union return should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "union return should compile: {rust}"
+    );
 }
 
 #[test]
@@ -1889,7 +1916,10 @@ function main() {
   console.log(c.items.length);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "generic field should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "generic field should compile: {rust}"
+    );
 }
 
 #[test]
@@ -1904,7 +1934,10 @@ function main() {
   console.log(first(p));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "tuple param should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "tuple param should compile: {rust}"
+    );
 }
 
 #[test]
@@ -1918,7 +1951,10 @@ function main() {
   const result = apply((x: i32): i32 => x * 2, 21);
   console.log(result);
 }"#;
-    assert!(compiles_ok(source), "function type with named params should compile");
+    assert!(
+        compiles_ok(source),
+        "function type with named params should compile"
+    );
 }
 
 #[test]
@@ -1937,7 +1973,10 @@ function main() {
   console.log(greet(p));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "intersection type should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "intersection type should compile: {rust}"
+    );
 }
 
 #[test]
@@ -1981,7 +2020,10 @@ function main() {
   console.log(sum(nums));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "array param should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "array param should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2028,8 +2070,14 @@ function main() {
 }"#;
     let rust = compile_to_rust(source);
     // MaybeConfig fields should be Option<T>
-    assert!(rust.contains("Option<String>"), "host? should produce Option<String>: {rust}");
-    assert!(rust.contains("Option<i32>"), "port? should produce Option<i32>: {rust}");
+    assert!(
+        rust.contains("Option<String>"),
+        "host? should produce Option<String>: {rust}"
+    );
+    assert!(
+        rust.contains("Option<i32>"),
+        "port? should produce Option<i32>: {rust}"
+    );
 }
 
 #[test]
@@ -2040,7 +2088,10 @@ function main() {
   console.log(nested.length);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "nested generic should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "nested generic should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2054,8 +2105,14 @@ function main() {
 }"#;
     let rust = compile_to_rust(source);
     // host should be String (not Option), port should be Option<i32>
-    assert!(rust.contains("pub host: String"), "host should be String: {rust}");
-    assert!(rust.contains("pub port: Option<i32>"), "port? should produce Option<i32>: {rust}");
+    assert!(
+        rust.contains("pub host: String"),
+        "host should be String: {rust}"
+    );
+    assert!(
+        rust.contains("pub port: Option<i32>"),
+        "port? should produce Option<i32>: {rust}"
+    );
 }
 
 // ===========================================================================
@@ -2088,7 +2145,10 @@ function main() {
     console.log("error");
   }
 }"#;
-    assert!(compiles_ok(source), "if/else inside try/catch should compile");
+    assert!(
+        compiles_ok(source),
+        "if/else inside try/catch should compile"
+    );
 }
 
 #[test]
@@ -2137,7 +2197,10 @@ function main() {
   });
   console.log(result.length);
 }"#;
-    assert!(compiles_ok(source), "return from nested closure should compile");
+    assert!(
+        compiles_ok(source),
+        "return from nested closure should compile"
+    );
 }
 
 #[test]
@@ -2287,7 +2350,10 @@ function main() {
   const c = new Config("localhost", 3000, "s3cr3t");
   console.log(c.host);
 }"#;
-    assert!(compiles_ok(source), "class with multiple field modifiers should compile");
+    assert!(
+        compiles_ok(source),
+        "class with multiple field modifiers should compile"
+    );
 }
 
 #[test]
@@ -2312,7 +2378,10 @@ function main() {
   const d = new Derived("test", 42);
   console.log(d.name);
 }"#;
-    assert!(compiles_ok(source), "constructor with default params should compile");
+    assert!(
+        compiles_ok(source),
+        "constructor with default params should compile"
+    );
 }
 
 #[test]
@@ -2344,7 +2413,10 @@ function main() {
   c.increment();
   console.log(c.getCount());
 }"#;
-    assert!(compiles_ok(source), "static + instance methods on same class should compile");
+    assert!(
+        compiles_ok(source),
+        "static + instance methods on same class should compile"
+    );
 }
 
 #[test]
@@ -2402,7 +2474,10 @@ function main() {
   console.log(doc.toString());
   console.log(doc.size());
 }"#;
-    assert!(compiles_ok(source), "class implementing multiple interfaces should compile");
+    assert!(
+        compiles_ok(source),
+        "class implementing multiple interfaces should compile"
+    );
 }
 
 #[test]
@@ -2432,7 +2507,10 @@ function main() {
   console.log(c.area());
   console.log(c.describe());
 }"#;
-    assert!(compiles_ok(source), "abstract + concrete method mix should compile");
+    assert!(
+        compiles_ok(source),
+        "abstract + concrete method mix should compile"
+    );
 }
 
 #[test]
@@ -2462,7 +2540,10 @@ function main() {
   console.log(d.speak());
   console.log(d.name);
 }"#;
-    assert!(compiles_ok(source), "class inheritance chain should compile");
+    assert!(
+        compiles_ok(source),
+        "class inheritance chain should compile"
+    );
 }
 
 #[test]
@@ -2509,7 +2590,10 @@ function main() {
   b = b.add(10).add(20);
   console.log(b.value);
 }"#;
-    assert!(compiles_ok(source), "method returning self type should compile");
+    assert!(
+        compiles_ok(source),
+        "method returning self type should compile"
+    );
 }
 
 #[test]
@@ -2531,7 +2615,10 @@ function main() {
   const v = new Validator();
   console.log(v.validate("hello"));
 }"#;
-    assert!(compiles_ok(source), "class with private method should compile");
+    assert!(
+        compiles_ok(source),
+        "class with private method should compile"
+    );
 }
 
 // ===========================================================================
@@ -2556,7 +2643,10 @@ function main() {
   console.log(port);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "destructuring should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "destructuring should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2593,7 +2683,10 @@ function describe(c: Color): string {
 function main() {
   console.log(describe(Color.Red));
 }"#;
-    assert!(compiles_ok(source), "enum member access in switch cases should compile");
+    assert!(
+        compiles_ok(source),
+        "enum member access in switch cases should compile"
+    );
 }
 
 #[test]
@@ -2620,7 +2713,10 @@ function main() {
   });
   console.log(total);
 }"#;
-    assert!(compiles_ok(source), "closure capturing mutable variable should compile");
+    assert!(
+        compiles_ok(source),
+        "closure capturing mutable variable should compile"
+    );
 }
 
 #[test]
@@ -2645,7 +2741,10 @@ function main() {
   const s: string = (x as f64).toString();
   console.log(s);
 }"#;
-    assert!(compiles_ok(source), "type assertion + method call should compile");
+    assert!(
+        compiles_ok(source),
+        "type assertion + method call should compile"
+    );
 }
 
 #[test]
@@ -2689,7 +2788,10 @@ function main() {
   console.log(result);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "chained filter/map/reduce should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "chained filter/map/reduce should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2750,7 +2852,10 @@ function main() {
   const p = new Product("Widget", 9.99);
   console.log(p.describe());
 }"#;
-    assert!(compiles_ok(source), "interface with fields and methods should compile");
+    assert!(
+        compiles_ok(source),
+        "interface with fields and methods should compile"
+    );
 }
 
 #[test]
@@ -2771,7 +2876,10 @@ function main() {
   const d = p.doubled();
   console.log(d.length);
 }"#;
-    assert!(compiles_ok(source), "closure inside class method should compile");
+    assert!(
+        compiles_ok(source),
+        "closure inside class method should compile"
+    );
 }
 
 #[test]
@@ -2810,7 +2918,10 @@ function main() {
   console.log("done");
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "empty function body should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "empty function body should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2821,7 +2932,10 @@ function main() {
   console.log(x.length);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "empty array literal should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "empty array literal should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2844,7 +2958,10 @@ function main() {
   console.log(x[0]);
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "single-element tuple should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "single-element tuple should compile: {rust}"
+    );
 }
 
 #[test]
@@ -2857,7 +2974,10 @@ function doSomething() {
 function main() {
   doSomething();
 }"#;
-    assert!(compiles_ok(source), "function with no params/return should compile");
+    assert!(
+        compiles_ok(source),
+        "function with no params/return should compile"
+    );
 }
 
 #[test]
@@ -2888,7 +3008,10 @@ function main() {
     .map((x: i32): i32 => x + 1);
   console.log(result.length);
 }"#;
-    assert!(compiles_ok(source), "long method chain (5 chained calls) should compile");
+    assert!(
+        compiles_ok(source),
+        "long method chain (5 chained calls) should compile"
+    );
 }
 
 #[test]
@@ -2903,7 +3026,10 @@ function main() {
   console.log(zero);
   console.log(negative);
 }"#;
-    assert!(compiles_ok(source), "various numeric literals should compile");
+    assert!(
+        compiles_ok(source),
+        "various numeric literals should compile"
+    );
 }
 
 #[test]
@@ -2916,7 +3042,10 @@ function main() {
   const backslash = "path\\to\\file";
   console.log(tab);
 }"#;
-    assert!(compiles_ok(source), "string escape sequences should compile");
+    assert!(
+        compiles_ok(source),
+        "string escape sequences should compile"
+    );
 }
 
 #[test]
@@ -2934,7 +3063,10 @@ function main() {
   console.log(abs(3));
 }"#;
     let rust = compile_to_rust(source);
-    assert!(!rust.contains("todo!()"), "multiple return paths should compile: {rust}");
+    assert!(
+        !rust.contains("todo!()"),
+        "multiple return paths should compile: {rust}"
+    );
 }
 
 // ===========================================================================
@@ -3145,11 +3277,26 @@ function main() {
 }
 "#;
     let rust = compile_to_rust(source);
-    assert!(rust.contains("match x"), "should produce match on x: {rust}");
-    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
-    assert!(rust.contains("2 =>"), "should have integer pattern 2: {rust}");
-    assert!(rust.contains("3 =>"), "should have integer pattern 3: {rust}");
-    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+    assert!(
+        rust.contains("match x"),
+        "should produce match on x: {rust}"
+    );
+    assert!(
+        rust.contains("1 =>"),
+        "should have integer pattern 1: {rust}"
+    );
+    assert!(
+        rust.contains("2 =>"),
+        "should have integer pattern 2: {rust}"
+    );
+    assert!(
+        rust.contains("3 =>"),
+        "should have integer pattern 3: {rust}"
+    );
+    assert!(
+        rust.contains("_ =>"),
+        "should have wildcard default: {rust}"
+    );
 }
 
 // Switch on enum variant using Color.Red style member access.
@@ -3247,8 +3394,14 @@ function main() {
         rust.contains("match x"),
         "should produce match inside if: {rust}"
     );
-    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
-    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+    assert!(
+        rust.contains("1 =>"),
+        "should have integer pattern 1: {rust}"
+    );
+    assert!(
+        rust.contains("_ =>"),
+        "should have wildcard default: {rust}"
+    );
 }
 
 // Switch nested inside a for loop body.
@@ -3271,7 +3424,16 @@ function main() {
         rust.contains("match x"),
         "should produce match inside for loop: {rust}"
     );
-    assert!(rust.contains("1 =>"), "should have integer pattern 1: {rust}");
-    assert!(rust.contains("2 =>"), "should have integer pattern 2: {rust}");
-    assert!(rust.contains("_ =>"), "should have wildcard default: {rust}");
+    assert!(
+        rust.contains("1 =>"),
+        "should have integer pattern 1: {rust}"
+    );
+    assert!(
+        rust.contains("2 =>"),
+        "should have integer pattern 2: {rust}"
+    );
+    assert!(
+        rust.contains("_ =>"),
+        "should have wildcard default: {rust}"
+    );
 }

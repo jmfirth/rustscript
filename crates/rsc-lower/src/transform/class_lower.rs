@@ -109,18 +109,20 @@ impl Transform {
                         .params
                         .iter()
                         .map(|p| {
-                            let ty =
-                                rsc_typeck::resolve::resolve_type_annotation_with_generics(
-                                    &p.type_ann,
-                                    &self.type_registry,
-                                    &generic_names,
-                                    &mut temp_diags,
-                                );
+                            let ty = rsc_typeck::resolve::resolve_type_annotation_with_generics(
+                                &p.type_ann,
+                                &self.type_registry,
+                                &generic_names,
+                                &mut temp_diags,
+                            );
                             rsc_typeck::bridge::type_to_rust_type(&ty)
                         })
                         .collect();
-                    let optional_params: Vec<bool> =
-                        ctor.params.iter().map(|p| p.default_value.is_some()).collect();
+                    let optional_params: Vec<bool> = ctor
+                        .params
+                        .iter()
+                        .map(|p| p.default_value.is_some())
+                        .collect();
                     let default_values: Vec<Option<RustExpr>> = ctor
                         .params
                         .iter()

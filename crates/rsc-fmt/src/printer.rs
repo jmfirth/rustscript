@@ -11,13 +11,11 @@ use rsc_syntax::ast::{
     FieldAccessExpr, FieldAssignExpr, FieldDef, FieldInit, FnDecl, ForClassicStmt, ForInStmt,
     ForInit, ForOfStmt, IfStmt, ImportDecl, IndexAssignExpr, IndexExpr, InlineRustBlock,
     InterfaceDef, InterfaceField, InterfaceMethod, Item, ItemKind, LogicalAssignExpr,
-    MethodCallExpr, Module,
-    NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr, Param, ReExportDecl,
-    ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase, SwitchPattern, SwitchStmt,
-    TemplateLitExpr,
-    TemplatePart, TestBlock, TestBlockKind, TestBody, TryCatchStmt, TypeAnnotation, TypeDef,
-    TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp, UsingDecl, VarBinding, VarDecl,
-    Visibility, WhileStmt, WildcardReExportDecl,
+    MethodCallExpr, Module, NewExpr, NullishCoalescingExpr, OptionalAccess, OptionalChainExpr,
+    Param, ReExportDecl, ReturnStmt, ReturnTypeAnnotation, StructLitExpr, SwitchCase,
+    SwitchPattern, SwitchStmt, TemplateLitExpr, TemplatePart, TestBlock, TestBlockKind, TestBody,
+    TryCatchStmt, TypeAnnotation, TypeDef, TypeKind, TypeParam, TypeParams, UnaryExpr, UnaryOp,
+    UsingDecl, VarBinding, VarDecl, Visibility, WhileStmt, WildcardReExportDecl,
 };
 
 /// Indentation unit: 2 spaces per level.

@@ -3769,6 +3769,23 @@ fn test_p175_decode_uri_space_e2e() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 171: Date setters — compile_and_run
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p171_date_set_time_creates_epoch() {
+    let source = r#"function main() {
+  let d = new Date();
+  d = d.setTime(0);
+  const ms: i64 = d.getTime();
+  console.log(ms);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output.trim(), "0", "setTime(0) should create epoch (0ms)");
+}
+
 #[test]
 #[ignore]
 fn test_p175_btoa_atob_roundtrip_e2e() {

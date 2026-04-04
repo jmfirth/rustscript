@@ -311,8 +311,7 @@ impl Transform {
                 {
                     match field_name {
                         "source" => {
-                            let object =
-                                self.lower_expr(&fa.object, ctx, use_map, stmt_index);
+                            let object = self.lower_expr(&fa.object, ctx, use_map, stmt_index);
                             let as_str = RustExpr::new(
                                 RustExprKind::MethodCall {
                                     receiver: Box::new(object),
