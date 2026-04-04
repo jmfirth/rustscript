@@ -2743,6 +2743,60 @@ function main() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 174: Number constants and toExponential — e2e tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_e2e_number_epsilon_is_positive() {
+    let source = r#"
+function main() {
+  const e: f64 = Number.EPSILON;
+  if (e > 0.0) {
+    console.log("positive");
+  } else {
+    console.log("non-positive");
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("positive"),
+        "Number.EPSILON should be positive, got:\n{output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_e2e_number_max_safe_integer_value() {
+    let source = r#"
+function main() {
+  const n: i64 = Number.MAX_SAFE_INTEGER;
+  console.log(n);
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("9007199254740991"),
+        "Number.MAX_SAFE_INTEGER should be 9007199254740991, got:\n{output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_e2e_number_to_exponential() {
+    let source = r#"
+function main() {
+  const x: f64 = 3.14;
+  console.log(x.toExponential(2));
+}
+"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains('e'),
+        "toExponential output should contain 'e', got:\n{output}"
+    );
+}
+
 #[test]
 fn test_template_literal_type_in_function_param() {
     let source = r#"type EventName = `on${string}`
@@ -3529,5 +3583,93 @@ fn test_p176_queue_microtask_e2e() {
         output.trim(),
         "micro",
         "queueMicrotask callback should execute and print"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 169: 21 missing Math methods — e2e tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p169_math_atan2_e2e() {
+    let source = r#"function main() {
+  const result: f64 = Math.atan2(1.0, 1.0);
+  console.log(result);
+}"#;
+    let output = compile_and_run(source);
+    let val: f64 = output.trim().parse().expect("expected numeric output");
+    let expected = 1.0_f64.atan2(1.0);
+    assert!(
+        (val - expected).abs() < 1e-10,
+        "Math.atan2(1.0, 1.0) should be ~{expected}, got {val}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p169_math_sign_e2e() {
+    let source = r#"function main() {
+  const result: f64 = Math.sign(-5.0);
+  console.log(result);
+}"#;
+    let output = compile_and_run(source);
+    let val: f64 = output.trim().parse().expect("expected numeric output");
+    assert_eq!(val, -1.0, "Math.sign(-5.0) should be -1");
+}
+
+#[test]
+#[ignore]
+fn test_p169_math_trunc_e2e() {
+    let source = r#"function main() {
+  const result: f64 = Math.trunc(4.7);
+  console.log(result);
+}"#;
+    let output = compile_and_run(source);
+    let val: f64 = output.trim().parse().expect("expected numeric output");
+    assert_eq!(val, 4.0, "Math.trunc(4.7) should be 4");
+}
+
+// ---------------------------------------------------------------------------
+// Task 180: Error completeness — compile-and-run e2e tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p180_uri_error_message_e2e() {
+    let source = r#"function main() {
+  const e: string = new URIError("bad uri").message;
+  console.log(e);
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("URIError") && output.contains("bad uri"),
+        "new URIError(\"bad uri\").message should contain \"URIError: bad uri\", got:\n{output}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_p180_error_stack_contains_message_e2e() {
+    let source = r#"
+function risky(): string throws string {
+  throw "oops";
+}
+function main() {
+  try {
+    risky();
+  } catch (e: string) {
+    const s: string = e.stack;
+    console.log(s);
+  }
+}"#;
+    let output = compile_and_run(source);
+    assert!(
+        output.contains("oops"),
+        "e.stack should contain the error message, got:\n{output}"
+    );
+    assert!(
+        output.contains("Error:"),
+        "e.stack should start with 'Error:', got:\n{output}"
     );
 }

@@ -4996,6 +4996,121 @@ function main() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 174: Number constants — EPSILON, MAX_VALUE, MIN_VALUE, NaN, infinities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_number_epsilon() {
+    let source = "\
+function main() {
+  const e: f64 = Number.EPSILON;
+  console.log(e);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::EPSILON"),
+        "expected f64::EPSILON in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_max_value() {
+    let source = "\
+function main() {
+  const m: f64 = Number.MAX_VALUE;
+  console.log(m);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::MAX"),
+        "expected f64::MAX in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_min_value() {
+    let source = "\
+function main() {
+  const m: f64 = Number.MIN_VALUE;
+  console.log(m);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::MIN_POSITIVE"),
+        "expected f64::MIN_POSITIVE in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_nan_constant() {
+    let source = "\
+function main() {
+  const n: f64 = Number.NaN;
+  console.log(n);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::NAN"),
+        "expected f64::NAN in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_negative_infinity() {
+    let source = "\
+function main() {
+  const n: f64 = Number.NEGATIVE_INFINITY;
+  console.log(n);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::NEG_INFINITY"),
+        "expected f64::NEG_INFINITY in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_number_positive_infinity() {
+    let source = "\
+function main() {
+  const n: f64 = Number.POSITIVE_INFINITY;
+  console.log(n);
+}";
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("f64::INFINITY"),
+        "expected f64::INFINITY in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 174: toExponential
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_to_exponential() {
+    let source = r#"
+function main() {
+  const x: f64 = 3.14;
+  const s = x.toExponential(2);
+  console.log(s);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("format!(") && actual.contains("{:.prec$e}"),
+        "expected format! with {{:.prec$e}} in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Object static methods
 // ---------------------------------------------------------------------------
 
@@ -5068,6 +5183,114 @@ function main() {
     assert!(
         actual.contains(".into_iter().collect::<HashMap<_, _>>()"),
         "Object.fromEntries should generate .into_iter().collect::<HashMap<_, _>>(), got:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 177: Object static methods (hasOwn, is, isFrozen, getOwnPropertyNames, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_object_has_own_generates_contains_key() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const has = Object.hasOwn(m, "key");
+  console.log(has);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".contains_key("),
+        "Object.hasOwn should generate .contains_key(...), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_is_generates_eq_operator() {
+    let source = r#"
+function main() {
+  const a: i64 = 1;
+  const b: i64 = 1;
+  const same = Object.is(a, b);
+  console.log(same);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("=="),
+        "Object.is should generate == operator, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_is_frozen_generates_true() {
+    let source = r#"
+function main() {
+  const x: i64 = 42;
+  const frozen = Object.isFrozen(x);
+  console.log(frozen);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("true"),
+        "Object.isFrozen should generate true literal, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_get_own_property_names_generates_keys_collect() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const names = Object.getOwnPropertyNames(m);
+  console.log(names);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".keys().cloned().collect::<Vec<_>>()"),
+        "Object.getOwnPropertyNames should generate .keys().cloned().collect::<Vec<_>>(), got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_get_prototype_of_generates_none() {
+    let source = r#"
+function main() {
+  const x: i64 = 1;
+  const proto = Object.getPrototypeOf(x);
+  console.log(proto);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("None"),
+        "Object.getPrototypeOf should generate None, got:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_object_define_property_compiles_without_error() {
+    let source = r#"
+function main() {
+  const m: Map<string, i32> = new Map();
+  const desc: string = "writable";
+  Object.defineProperty(m, "key", desc);
+}
+"#;
+
+    let actual = compile_to_rust(source);
+    // defineProperty is a no-op — just emits the object expression
+    assert!(
+        actual.contains("fn main("),
+        "Object.defineProperty should compile without error, got:\n{actual}"
     );
 }
 
@@ -5809,5 +6032,423 @@ fn test_snapshot_queue_microtask() {
     assert!(
         actual.contains("micro"),
         "queueMicrotask body should be inlined.\nGenerated:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 169: 21 missing Math methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_math_acos_generates_acos_method() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.acos(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".acos()"),
+        "expected .acos() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_acosh_generates_acosh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.acosh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".acosh()"),
+        "expected .acosh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_asin_generates_asin_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.5;
+  console.log(Math.asin(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".asin()"),
+        "expected .asin() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_asinh_generates_asinh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.asinh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".asinh()"),
+        "expected .asinh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_atan_generates_atan_method() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.atan(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".atan()"),
+        "expected .atan() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_atan2_generates_atan2_with_two_args() {
+    let source = "\
+function main() {
+  const y: f64 = 1.0;
+  const x: f64 = 1.0;
+  console.log(Math.atan2(y, x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".atan2("),
+        "expected .atan2( in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_atanh_generates_atanh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.5;
+  console.log(Math.atanh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".atanh()"),
+        "expected .atanh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_cbrt_generates_cbrt_method() {
+    let source = "\
+function main() {
+  const x: f64 = 8.0;
+  console.log(Math.cbrt(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".cbrt()"),
+        "expected .cbrt() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_cosh_generates_cosh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Math.cosh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".cosh()"),
+        "expected .cosh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_exp_generates_exp_method() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.exp(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".exp()"),
+        "expected .exp() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_expm1_generates_exp_m1_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Math.expm1(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".exp_m1()"),
+        "expected .exp_m1() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_fround_generates_double_cast() {
+    let source = "\
+function main() {
+  const x: f64 = 1.337;
+  console.log(Math.fround(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("as f32") && actual.contains("as f64"),
+        "expected `as f32` and `as f64` casts in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_hypot_generates_hypot_method() {
+    let source = "\
+function main() {
+  const x: f64 = 3.0;
+  const y: f64 = 4.0;
+  console.log(Math.hypot(x, y));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".hypot("),
+        "expected .hypot( in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_log10_generates_log10_method() {
+    let source = "\
+function main() {
+  const x: f64 = 100.0;
+  console.log(Math.log10(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".log10()"),
+        "expected .log10() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_log1p_generates_ln_1p_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Math.log1p(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".ln_1p()"),
+        "expected .ln_1p() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_log2_generates_log2_method() {
+    let source = "\
+function main() {
+  const x: f64 = 8.0;
+  console.log(Math.log2(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".log2()"),
+        "expected .log2() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_sign_generates_signum_method() {
+    let source = "\
+function main() {
+  const x: f64 = -5.0;
+  console.log(Math.sign(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".signum()"),
+        "expected .signum() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_sinh_generates_sinh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Math.sinh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".sinh()"),
+        "expected .sinh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_tanh_generates_tanh_method() {
+    let source = "\
+function main() {
+  const x: f64 = 0.0;
+  console.log(Math.tanh(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".tanh()"),
+        "expected .tanh() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_trunc_generates_trunc_method() {
+    let source = "\
+function main() {
+  const x: f64 = 4.7;
+  console.log(Math.trunc(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".trunc()"),
+        "expected .trunc() in output:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_math_clz32_generates_leading_zeros_cast() {
+    let source = "\
+function main() {
+  const x: f64 = 1.0;
+  console.log(Math.clz32(x));
+}";
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".leading_zeros()"),
+        "expected .leading_zeros() in output:\n{actual}"
+    );
+    assert!(
+        actual.contains("as i32"),
+        "expected `as i32` cast in output:\n{actual}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 180: Error completeness (stack, cause, EvalError, URIError, toString)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_error_stack_generates_format_macro() {
+    let source = r#"
+function risky(): string throws string {
+  throw "bad input";
+}
+function main() {
+  try {
+    risky();
+  } catch (e: string) {
+    const s: string = e.stack;
+    console.log(s);
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("format!") && actual.contains("at <rustscript>"),
+        "e.stack should emit format! with <rustscript> placeholder:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_error_cause_generates_empty_string() {
+    let source = r#"
+function risky(): string throws string {
+  throw "bad input";
+}
+function main() {
+  try {
+    risky();
+  } catch (e: string) {
+    const c: string = e.cause;
+    console.log(c);
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("to_string()"),
+        "e.cause should emit a to_string() call:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_error_to_string_generates_clone() {
+    let source = r#"
+function risky(): string throws string {
+  throw "bad input";
+}
+function main() {
+  try {
+    risky();
+  } catch (e: string) {
+    const s: string = e.toString();
+    console.log(s);
+  }
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains(".clone()"),
+        "e.toString() should emit .clone() since caught errors are strings:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_eval_error_constructor_generates_prefixed_string() {
+    let source = r#"
+function main() {
+  const e: string = new EvalError("dynamic eval not allowed").message;
+  console.log(e);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("EvalError"),
+        "new EvalError should lower to an EvalError-prefixed string:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_uri_error_constructor_generates_prefixed_string() {
+    let source = r#"
+function main() {
+  const e: string = new URIError("bad uri").message;
+  console.log(e);
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("URIError"),
+        "new URIError should lower to a URIError-prefixed string:\n{actual}"
+    );
+}
+
+#[test]
+fn test_snapshot_console_time_log_generates_eprintln() {
+    let source = r#"
+function main() {
+  console.time("op");
+  console.timeLog("op");
+  console.timeEnd("op");
+}"#;
+    let actual = compile_to_rust(source);
+    assert!(
+        actual.contains("eprintln!"),
+        "console.timeLog should generate eprintln!:\n{actual}"
+    );
+    assert!(
+        actual.contains("<time>"),
+        "console.timeLog should include <time> in output:\n{actual}"
     );
 }
