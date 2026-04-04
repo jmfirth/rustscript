@@ -2943,8 +2943,27 @@ function main() {
   console.log(p[0]);
   console.log(p[1]);
 }"#;
-    // Known gap: multiple generic type params with tuple return — tuple type + multi-generic interaction
-    let _result = compile_source(source, "conformance_test.rts");
+    let result = compile_source(source, "conformance_test.rts");
+    assert!(
+        !result.has_errors,
+        "multi-generic tuple return should compile without errors: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    // Verify the generated Rust has correct turbofish syntax and tuple field access
+    assert!(
+        result.rust_source.contains("pair::<String, i32>"),
+        "should emit turbofish type args: {}",
+        result.rust_source
+    );
+    assert!(
+        result.rust_source.contains("p.0") && result.rust_source.contains("p.1"),
+        "should use tuple field access (p.0, p.1): {}",
+        result.rust_source
+    );
 }
 
 // ===========================================================================

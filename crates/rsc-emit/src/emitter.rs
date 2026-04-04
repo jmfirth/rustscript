@@ -1291,8 +1291,22 @@ impl Emitter {
                 self.write(&op.to_string());
                 self.emit_expr(operand);
             }
-            RustExprKind::Call { func, args } => {
+            RustExprKind::Call {
+                func,
+                type_args,
+                args,
+            } => {
                 self.write(func);
+                if !type_args.is_empty() {
+                    self.write("::<");
+                    for (i, ty) in type_args.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.write(&ty.to_string());
+                    }
+                    self.write(">");
+                }
                 self.write("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
@@ -2420,6 +2434,7 @@ fn main() {
             "main",
             vec![RustStmt::Semi(syn(RustExprKind::Call {
                 func: "foo".to_owned(),
+                type_args: vec![],
                 args: vec![ident("a"), ident("b")],
             }))],
             None,
@@ -2729,6 +2744,7 @@ fn answer() -> i32 {
                                 op: RustBinaryOp::Add,
                                 left: Box::new(syn(RustExprKind::Call {
                                     func: "fibonacci".to_owned(),
+                                    type_args: vec![],
                                     args: vec![syn(RustExprKind::Binary {
                                         op: RustBinaryOp::Sub,
                                         left: Box::new(ident("n")),
@@ -2737,6 +2753,7 @@ fn answer() -> i32 {
                                 })),
                                 right: Box::new(syn(RustExprKind::Call {
                                     func: "fibonacci".to_owned(),
+                                    type_args: vec![],
                                     args: vec![syn(RustExprKind::Binary {
                                         op: RustBinaryOp::Sub,
                                         left: Box::new(ident("n")),
@@ -3878,6 +3895,7 @@ fn main() {
             vec![RustStmt::Semi(syn(RustExprKind::QuestionMark(Box::new(
                 syn(RustExprKind::Call {
                     func: "fetch".to_owned(),
+                    type_args: vec![],
                     args: vec![],
                 }),
             ))))],
@@ -3936,6 +3954,7 @@ fn main() {
             vec![RustStmt::MatchResult(RustMatchResultStmt {
                 expr: syn(RustExprKind::Call {
                     func: "fetch".to_owned(),
+                    type_args: vec![],
                     args: vec![],
                 }),
                 ok_binding: "val".to_owned(),
@@ -4059,6 +4078,7 @@ fn main() {
                     body: RustClosureBody::Block(RustBlock {
                         stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
                             func: "process".to_owned(),
+                            type_args: vec![],
                             args: vec![ident("ctx")],
                         }))],
                         expr: None,
@@ -4732,6 +4752,7 @@ fn main() {
             vec![RustStmt::Semi(syn(RustExprKind::Await(Box::new(syn(
                 RustExprKind::Call {
                     func: "get_data".to_owned(),
+                    type_args: vec![],
                     args: vec![],
                 },
             )))))],
@@ -4758,6 +4779,7 @@ fn main() {
                     stmts: vec![RustStmt::Semi(syn(RustExprKind::Await(Box::new(syn(
                         RustExprKind::Call {
                             func: "process_request".to_owned(),
+                            type_args: vec![],
                             args: vec![],
                         },
                     )))))],
@@ -5215,10 +5237,12 @@ fn main() {
             elements: vec![
                 syn(RustExprKind::Call {
                     func: "get_user".into(),
+                    type_args: vec![],
                     args: vec![],
                 }),
                 syn(RustExprKind::Call {
                     func: "get_posts".into(),
+                    type_args: vec![],
                     args: vec![],
                 }),
             ],
@@ -5240,6 +5264,7 @@ fn main() {
             body: RustBlock {
                 stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
                     func: "work".into(),
+                    type_args: vec![],
                     args: vec![],
                 }))],
                 expr: None,
@@ -5247,6 +5272,7 @@ fn main() {
         });
         let spawn_call = syn(RustExprKind::Call {
             func: "tokio::spawn".into(),
+            type_args: vec![],
             args: vec![async_block],
         });
         let file = simple_fn("test", vec![RustStmt::Semi(spawn_call)], None);
@@ -5269,6 +5295,7 @@ fn main() {
             body: RustBlock {
                 stmts: vec![RustStmt::Semi(syn(RustExprKind::Call {
                     func: "process".into(),
+                    type_args: vec![],
                     args: vec![],
                 }))],
                 expr: None,
@@ -5290,6 +5317,7 @@ fn main() {
             bindings: vec!["a".into(), "b".into()],
             init: syn(RustExprKind::Call {
                 func: "get_pair".into(),
+                type_args: vec![],
                 args: vec![],
             }),
             mutable: false,
@@ -5313,10 +5341,12 @@ fn main() {
                 elements: vec![
                     syn(RustExprKind::Call {
                         func: "fetchUsers".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                     syn(RustExprKind::Call {
                         func: "fetchPosts".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                 ],
@@ -5351,14 +5381,17 @@ fn main() {
                 elements: vec![
                     syn(RustExprKind::Call {
                         func: "safe".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                     syn(RustExprKind::Call {
                         func: "risky".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                     syn(RustExprKind::Call {
                         func: "also_safe".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                 ],
@@ -5397,10 +5430,12 @@ fn main() {
                 elements: vec![
                     syn(RustExprKind::Call {
                         func: "safe1".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                     syn(RustExprKind::Call {
                         func: "safe2".into(),
+                        type_args: vec![],
                         args: vec![],
                     }),
                 ],
@@ -5528,6 +5563,7 @@ fn main() {
             "test",
             vec![RustStmt::Semi(syn(RustExprKind::Call {
                 func: "greet".to_owned(),
+                type_args: vec![],
                 args: vec![syn(RustExprKind::Borrow(Box::new(ident("name"))))],
             }))],
             None,
@@ -5744,10 +5780,12 @@ fn main() {
         let select_expr = syn(RustExprKind::TokioSelect(vec![
             syn(RustExprKind::Call {
                 func: "fetch1".into(),
+                type_args: vec![],
                 args: vec![],
             }),
             syn(RustExprKind::Call {
                 func: "fetch2".into(),
+                type_args: vec![],
                 args: vec![],
             }),
         ]));
@@ -5773,10 +5811,12 @@ fn main() {
         let select_ok_expr = syn(RustExprKind::FuturesSelectOk(vec![
             syn(RustExprKind::Call {
                 func: "try_a".into(),
+                type_args: vec![],
                 args: vec![],
             }),
             syn(RustExprKind::Call {
                 func: "try_b".into(),
+                type_args: vec![],
                 args: vec![],
             }),
         ]));
@@ -5830,10 +5870,12 @@ fn main() {
         let join_expr = syn(RustExprKind::TokioJoinSettled(vec![
             syn(RustExprKind::Call {
                 func: "get_a".into(),
+                type_args: vec![],
                 args: vec![],
             }),
             syn(RustExprKind::Call {
                 func: "get_b".into(),
+                type_args: vec![],
                 args: vec![],
             }),
         ]));

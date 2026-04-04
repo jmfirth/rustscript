@@ -4166,3 +4166,41 @@ function main() {
     let output = compile_and_run(source);
     assert_eq!(output, "a\n");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-generic tuple return (conformance gap 7)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn test_p6_multi_generic_tuple_inferred_run() {
+    let source = r#"
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+function main() {
+  const p = pair("hello", 42);
+  console.log(p[0]);
+  console.log(p[1]);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n42\n");
+}
+
+#[test]
+#[ignore]
+fn test_p6_multi_generic_tuple_explicit_type_args_run() {
+    let source = r#"
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+function main() {
+  const p = pair<string, i32>("hello", 42);
+  console.log(p[0]);
+  console.log(p[1]);
+}"#;
+    let output = compile_and_run(source);
+    assert_eq!(output, "hello\n42\n");
+}

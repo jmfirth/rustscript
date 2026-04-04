@@ -1024,10 +1024,13 @@ pub enum RustExprKind {
         /// The operand.
         operand: Box<RustExpr>,
     },
-    /// A function call (e.g., `foo(a, b)`).
+    /// A function call (e.g., `foo(a, b)` or `foo::<T, U>(a, b)`).
     Call {
         /// The function name.
         func: String,
+        /// Explicit type arguments for turbofish syntax (e.g., `::<String, i32>`).
+        /// Empty when type arguments are inferred.
+        type_args: Vec<RustType>,
         /// The argument list.
         args: Vec<RustExpr>,
     },

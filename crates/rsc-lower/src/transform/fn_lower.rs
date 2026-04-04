@@ -125,6 +125,25 @@ impl Transform {
             Some(modes)
         };
 
+        // Resolve the return type for variable type inference at call sites
+        let generic_names = collect_generic_param_names(f.type_params.as_ref());
+        let return_type = f.return_type.as_ref().and_then(|rt| {
+            rt.type_ann.as_ref().and_then(|ann| {
+                let mut rt_diags = Vec::new();
+                let ty_inner = resolve::resolve_type_annotation_with_generics(
+                    ann,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut rt_diags,
+                );
+                let ty = rsc_typeck::bridge::type_to_rust_type(&ty_inner);
+                for d in rt_diags {
+                    ctx.emit_diagnostic(d);
+                }
+                if ty == RustType::Unit { None } else { Some(ty) }
+            })
+        });
+
         self.fn_signatures.insert(
             f.name.name.clone(),
             FnSignature {
@@ -135,6 +154,8 @@ impl Transform {
                 default_values,
                 has_rest_param,
                 param_count,
+                return_type,
+                generic_param_names: generic_names,
             },
         );
     }
@@ -171,6 +192,8 @@ impl Transform {
                 default_values: vec![None; ext_info.params.len()],
                 has_rest_param: false,
                 param_count: ext_info.params.len(),
+                return_type: None,
+                generic_param_names: vec![],
             };
 
             // Key by "TypeName::method_name" for methods, bare name for free functions.
