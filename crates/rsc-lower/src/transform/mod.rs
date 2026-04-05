@@ -186,6 +186,21 @@ pub(crate) struct Transform {
 ///
 /// Handles the special mapping `@tokio_test` → `#[tokio::test]`.
 /// All other decorators map directly: `@name(args)` → `#[name(args)]`.
+/// Collect all names used as decorators in the module.
+/// These should not generate `use` imports — the decorator lowering
+/// handles path qualification via the attribute.
+fn collect_decorator_names(module: &ast::Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for item in &module.items {
+        for decorator in &item.decorators {
+            if decorator.name != "derive" {
+                names.insert(decorator.name.clone());
+            }
+        }
+    }
+    names
+}
+
 /// Build a map of imported name → crate source path from the module's imports.
 /// e.g., `import { command } from "tauri"` → `{"command": "tauri"}`.
 fn build_import_source_map(module: &ast::Module) -> HashMap<String, String> {
@@ -440,6 +455,9 @@ impl Transform {
         // Build import source map for decorator → attribute resolution.
         let import_sources = build_import_source_map(module);
 
+        // Collect decorator names — these should not generate `use` imports.
+        let decorator_names = collect_decorator_names(module);
+
         for item in &module.items {
             let exported = item.exported;
             let (decorator_attrs, decorator_derives) =
@@ -567,14 +585,24 @@ impl Transform {
                             self.type_only_imports.insert(name.name.clone());
                         }
                     } else {
-                        import_lower::classify_import(
-                            &import.source.value,
-                            &import.names,
-                            false,
-                            import.span,
-                            &mut import_uses,
-                            &mut crate_deps,
-                        );
+                        // Filter out names used only as decorators — they don't
+                        // need `use` imports (the attribute path is fully qualified).
+                        let non_decorator_names: Vec<ast::Ident> = import
+                            .names
+                            .iter()
+                            .filter(|n| !decorator_names.contains(&n.name))
+                            .cloned()
+                            .collect();
+                        if !non_decorator_names.is_empty() {
+                            import_lower::classify_import(
+                                &import.source.value,
+                                &non_decorator_names,
+                                false,
+                                import.span,
+                                &mut import_uses,
+                                &mut crate_deps,
+                            );
+                        }
                         // Track imported names so method calls on types can be
                         // recognized as static calls (`Type.method()` → `Type::method()`).
                         for name in &import.names {
