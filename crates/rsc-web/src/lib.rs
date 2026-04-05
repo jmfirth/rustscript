@@ -864,6 +864,56 @@ fn extract_var_hover_ctx(
             }
             None
         }
+        Stmt::ArrayDestructure(ad) => {
+            for (i, elem) in ad.elements.iter().enumerate() {
+                let ident = match elem {
+                    rsc_syntax::ast::ArrayDestructureElement::Single(id) => id,
+                    rsc_syntax::ast::ArrayDestructureElement::Rest(id) => id,
+                };
+                if ident.name == name {
+                    let binding = match ad.binding {
+                        VarBinding::Const => "const",
+                        VarBinding::Let => "let",
+                        VarBinding::Var => "var",
+                    };
+                    // Try to infer element type from tuple type annotation
+                    if let Some(ann) = &ad.type_ann {
+                        if let rsc_syntax::ast::TypeKind::Tuple(types) = &ann.kind {
+                            if let Some(elem_ty) = types.get(i) {
+                                return Some(format!(
+                                    "```rustscript\n{binding} {name}: {}\n```",
+                                    format_type_ann(elem_ty)
+                                ));
+                            }
+                        }
+                    }
+                    // Try to infer from the init expression (e.g., Promise.all returns tuple)
+                    return Some(format!("```rustscript\n{binding} {name}\n```"));
+                }
+            }
+            None
+        }
+        Stmt::Destructure(ds) => {
+            for field in &ds.fields {
+                let local = field
+                    .local_name
+                    .as_ref()
+                    .unwrap_or(&field.field_name);
+                if local.name == name {
+                    // Look up the type from the init expression's type fields
+                    let init_type = infer_type_from_expr_ctx(&ds.init, ctx);
+                    if let Some(ref type_name) = init_type {
+                        if let Some(fields) = ctx.type_fields.get(type_name.as_str()) {
+                            if let Some((_, ty)) = fields.iter().find(|(n, _)| n == &field.field_name.name) {
+                                return Some(format!("```rustscript\nconst {name}: {ty}\n```"));
+                            }
+                        }
+                    }
+                    return Some(format!("```rustscript\nconst {name}\n```"));
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
