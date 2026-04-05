@@ -182,8 +182,8 @@ fn test_lsp_integration_uri_translation_roundtrip() {
         .expect("should translate to .rs URI");
 
     assert!(
-        rs_uri.as_str().contains(".rsc-build/src/main.rs"),
-        "should point to .rsc-build, got: {rs_uri}"
+        rs_uri.as_str().contains("/project/src/main.rs"),
+        "should point to same directory with .rs extension, got: {rs_uri}"
     );
 
     let back = map

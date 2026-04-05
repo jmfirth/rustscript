@@ -7,8 +7,8 @@
 //! and communicates over stdin/stdout.
 //!
 //! When available, proxies requests to rust-analyzer running on the generated
-//! `.rs` code in `.rsc-build/`, translating positions and names between
-//! `RustScript` and Rust.
+//! `.rs` code (compiled in-place alongside `.rts` files), translating positions
+//! and names between `RustScript` and Rust.
 
 pub mod builtin_hover;
 pub mod completions;
