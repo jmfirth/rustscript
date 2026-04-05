@@ -653,19 +653,15 @@ impl Transform {
         // Detect whether regex crate is needed by scanning the AST for new RegExp().
         let needs_regex = stdlib_deps::module_needs_regex(module);
 
-        // Detect whether serde derive crate is needed by scanning explicit derives
-        // for Serialize or Deserialize. If so, add use declarations.
+        // Detect whether serde derive crate is needed (for Cargo.toml dependency).
+        // Note: we do NOT auto-import serde traits here. Third-party traits require
+        // explicit `import { Serialize } from "serde"` — same as any crate import.
+        // Only Rust prelude traits (Debug, Clone, etc.) are auto-imported.
         let needs_serde = module_needs_serde_derives(module);
-        if needs_serde {
-            let serde_derives = collect_serde_derive_names(module);
-            for name in serde_derives {
-                uses.push(RustUseDecl {
-                    path: format!("serde::{name}"),
-                    public: false,
-                    span: None,
-                });
-            }
-        }
+
+        // Deduplicate use declarations (import + derives can both emit the same path).
+        let mut seen_paths = HashSet::new();
+        uses.retain(|u| seen_paths.insert(u.path.clone()));
 
         let diagnostics = ctx.into_diagnostics();
         (

@@ -605,9 +605,12 @@ type Data = {
 ```
 
 Available derives: any Rust derive macro. Common ones:
-- `Debug, Clone, PartialEq, Eq, Hash, Copy` (auto-detected)
-- `Serialize, Deserialize` (from serde — triggers serde dependency)
-- `Parser` (from clap)
+- `Debug, Clone, PartialEq, Eq, Hash, Copy` — Rust prelude traits, auto-imported (no import needed)
+- `Serialize, Deserialize` — from serde, requires `import { Serialize, Deserialize } from "serde"`
+- `Parser` — from clap, requires `import { Parser } from "clap"`
+
+Third-party derives require an explicit import, just like any other crate symbol.
+Rust standard traits (Debug, Clone, etc.) are auto-imported — no import needed.
 
 ### Known Working Crate Patterns
 
@@ -628,6 +631,8 @@ async function main() {
 
 **serde (serialization):**
 ```typescript
+import { Serialize } from "serde";
+
 type User = { name: string, age: u32 } derives Serialize
 
 function main() {
