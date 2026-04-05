@@ -224,14 +224,14 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 RustdocItemKind::Trait(_) => "trait",
                 RustdocItemKind::Enum(_) => "enum",
             };
-            let is_trait_impl = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl);
+            let is_method = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl || f.has_self || f.parent_type.is_some());
             TranslatedItem {
                 name: item.name.clone(),
                 kind: kind.to_owned(),
                 signature: translator::translate_item_to_hover(item),
                 docs: item.docs.clone(),
                 module: None,
-                is_trait_impl,
+                is_trait_impl: is_method,
             }
         })
         .collect();

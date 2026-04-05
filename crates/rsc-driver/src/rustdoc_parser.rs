@@ -229,6 +229,26 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
         resolve_impl_block(item_value, &mut crate_data, paths);
     }
 
+    // Third pass: tag functions that belong to a trait's method list as trait methods.
+    // These are required/provided methods defined inside `trait Foo { fn bar(); }`.
+    let trait_method_ids: std::collections::HashSet<String> = crate_data
+        .items
+        .values()
+        .filter_map(|item| match &item.kind {
+            RustdocItemKind::Trait(t) => Some(t.method_ids.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
+    for method_id in &trait_method_ids {
+        if let Some(item) = crate_data.items.get_mut(method_id) {
+            if let RustdocItemKind::Function(func) = &mut item.kind {
+                func.is_trait_impl = true;
+            }
+        }
+    }
+
     Some(crate_data)
 }
 
