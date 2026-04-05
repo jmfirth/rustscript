@@ -125,7 +125,9 @@ pub fn translate_enum(name: &str, e: &RustdocEnum) -> String {
         .iter()
         .all(|v| matches!(v.kind, RustdocVariantKind::Plain));
 
-    if all_plain && !e.variants.is_empty() {
+    if e.variants.is_empty() {
+        format!("enum {name}{generics}")
+    } else if all_plain {
         let variant_strs: Vec<String> = e
             .variants
             .iter()
