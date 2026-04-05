@@ -157,8 +157,8 @@ export default function HomePage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-3xl">
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight">
-              Write TypeScript.{' '}
-              <span className="text-[var(--color-accent-secondary)]">Ship Rust.</span>
+              Ship <span className="text-[var(--color-accent-secondary)]">Rust</span>.{' '}
+              Write <span className="text-[var(--color-accent)]">Type</span><span className="text-[var(--color-accent)] font-extrabold">Script</span>.
             </h1>
             <p className="mt-6 text-lg sm:text-xl text-[var(--color-text-secondary)] leading-relaxed">
               A complete development ecosystem for building native applications
