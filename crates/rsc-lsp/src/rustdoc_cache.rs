@@ -88,7 +88,7 @@ impl RustdocCache {
 
 /// Attempt to load rustdoc JSON for a crate from the build directory.
 ///
-/// Looks for the JSON file at `.rsc-build/target/doc/{crate_name}.json`.
+/// Looks for the JSON file at `target/doc/{crate_name}.json` in the project root.
 /// Returns `None` if the file doesn't exist or can't be parsed.
 fn load_crate_docs(crate_name: &str, build_dir: &Path) -> Option<RustdocCrate> {
     let json_path = find_rustdoc_json(crate_name, build_dir)?;

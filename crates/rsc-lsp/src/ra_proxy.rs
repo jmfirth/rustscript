@@ -1,8 +1,8 @@
 //! Rust-analyzer subprocess proxy.
 //!
-//! Manages a rust-analyzer child process that runs on the `.rsc-build/` directory
-//! containing generated Rust code. Communicates via the LSP wire protocol over
-//! stdin/stdout pipes, forwarding requests and receiving responses.
+//! Manages a rust-analyzer child process that runs on the project root directory
+//! containing `Cargo.toml` and generated Rust code. Communicates via the LSP wire
+//! protocol over stdin/stdout pipes, forwarding requests and receiving responses.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -37,7 +37,7 @@ pub struct RustAnalyzerProxy {
 }
 
 impl RustAnalyzerProxy {
-    /// Attempt to start rust-analyzer pointed at the build directory.
+    /// Attempt to start rust-analyzer pointed at the project root.
     ///
     /// Returns `Ok(Some(proxy))` if rust-analyzer starts successfully,
     /// `Ok(None)` if rust-analyzer is not found in PATH, or `Err` for other failures.

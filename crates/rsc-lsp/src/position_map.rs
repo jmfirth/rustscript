@@ -102,38 +102,25 @@ impl PositionMap {
         Some(Range { start, end })
     }
 
-    /// Translate an `.rts` URI to the corresponding `.rs` URI in `.rsc-build/`.
+    /// Translate an `.rts` URI to the corresponding `.rs` URI (same directory).
     ///
-    /// Converts `file:///path/to/file.rts` to `file:///path/to/.rsc-build/src/file.rs`.
+    /// Converts `file:///path/to/file.rts` to `file:///path/to/file.rs`.
+    /// In-place compilation means `.rs` files live alongside their `.rts` sources.
     #[must_use]
     pub fn rts_to_rs_uri(&self, uri: &Url) -> Option<Url> {
         let path = uri.to_file_path().ok()?;
-        let parent = path.parent()?;
-        let stem = path.file_stem()?.to_str()?;
-        let rs_path = parent
-            .join(".rsc-build")
-            .join("src")
-            .join(format!("{stem}.rs"));
+        let rs_path = path.with_extension("rs");
         Url::from_file_path(rs_path).ok()
     }
 
-    /// Translate an `.rs` URI back to the corresponding `.rts` URI.
+    /// Translate an `.rs` URI back to the corresponding `.rts` URI (same directory).
     ///
-    /// Converts `file:///path/to/.rsc-build/src/file.rs` to `file:///path/to/file.rts`.
+    /// Converts `file:///path/to/file.rs` to `file:///path/to/file.rts`.
+    /// In-place compilation means `.rs` files live alongside their `.rts` sources.
     #[must_use]
     pub fn rs_to_rts_uri(&self, uri: &Url) -> Option<Url> {
         let path = uri.to_file_path().ok()?;
-        let path_str = path.to_str()?;
-
-        // Look for `.rsc-build/src/` in the path.
-        let marker = ".rsc-build/src/";
-        let idx = path_str.find(marker)?;
-
-        let project_dir = &path_str[..idx];
-        let rs_filename = &path_str[idx + marker.len()..];
-        let stem = rs_filename.strip_suffix(".rs")?;
-        let rts_path = format!("{project_dir}{stem}.rts");
-
+        let rts_path = path.with_extension("rts");
         Url::from_file_path(rts_path).ok()
     }
 
@@ -265,7 +252,7 @@ mod tests {
         assert_eq!(rts_range.end.line, 2);
     }
 
-    // Test 4: URI translation .rts -> .rs
+    // Test 4: URI translation .rts -> .rs (in-place, same directory)
     #[test]
     fn test_position_map_rts_to_rs_uri() {
         let map = PositionMap::new(vec![], String::new(), String::new());
@@ -275,23 +262,72 @@ mod tests {
         assert!(rs_uri.is_some());
         let rs = rs_uri.unwrap();
         assert!(
-            rs.as_str().contains(".rsc-build/src/main.rs"),
-            "expected .rsc-build/src/main.rs in URI, got: {rs}"
+            rs.as_str().contains("/project/src/main.rs"),
+            "expected /project/src/main.rs in URI, got: {rs}"
         );
     }
 
-    // Test 5: URI translation .rs -> .rts
+    // Test 4b: URI translation .rts -> .rs for non-main files
+    #[test]
+    fn test_position_map_rts_to_rs_uri_utils() {
+        let map = PositionMap::new(vec![], String::new(), String::new());
+
+        let rts_uri = Url::parse("file:///project/src/utils.rts").unwrap();
+        let rs_uri = map.rts_to_rs_uri(&rts_uri);
+        assert!(rs_uri.is_some());
+        let rs = rs_uri.unwrap();
+        assert!(
+            rs.as_str().contains("/project/src/utils.rs"),
+            "expected /project/src/utils.rs in URI, got: {rs}"
+        );
+    }
+
+    // Test 5: URI translation .rs -> .rts (in-place, same directory)
     #[test]
     fn test_position_map_rs_to_rts_uri() {
         let map = PositionMap::new(vec![], String::new(), String::new());
 
-        let rs_uri = Url::parse("file:///project/.rsc-build/src/main.rs").unwrap();
+        let rs_uri = Url::parse("file:///project/src/main.rs").unwrap();
         let rts_uri = map.rs_to_rts_uri(&rs_uri);
         assert!(rts_uri.is_some());
         let rts = rts_uri.unwrap();
         assert!(
-            rts.as_str().contains("/project/main.rts"),
-            "expected /project/main.rts in URI, got: {rts}"
+            rts.as_str().contains("/project/src/main.rts"),
+            "expected /project/src/main.rts in URI, got: {rts}"
+        );
+    }
+
+    // Test 5b: URI translation .rs -> .rts for non-main files
+    #[test]
+    fn test_position_map_rs_to_rts_uri_utils() {
+        let map = PositionMap::new(vec![], String::new(), String::new());
+
+        let rs_uri = Url::parse("file:///project/src/utils.rs").unwrap();
+        let rts_uri = map.rs_to_rts_uri(&rs_uri);
+        assert!(rts_uri.is_some());
+        let rts = rts_uri.unwrap();
+        assert!(
+            rts.as_str().contains("/project/src/utils.rts"),
+            "expected /project/src/utils.rts in URI, got: {rts}"
+        );
+    }
+
+    // Test: URI roundtrip rts -> rs -> rts
+    #[test]
+    fn test_position_map_uri_roundtrip() {
+        let map = PositionMap::new(vec![], String::new(), String::new());
+
+        let original = Url::parse("file:///project/src/main.rts").unwrap();
+        let rs_uri = map
+            .rts_to_rs_uri(&original)
+            .expect("should translate to .rs");
+        let back = map
+            .rs_to_rts_uri(&rs_uri)
+            .expect("should translate back to .rts");
+        assert_eq!(
+            original.as_str(),
+            back.as_str(),
+            "URI should roundtrip: {original} -> {rs_uri} -> {back}"
         );
     }
 

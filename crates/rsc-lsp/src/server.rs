@@ -68,8 +68,8 @@ pub struct RscLanguageServer {
     compile_cache: DashMap<Url, CachedCompileInfo>,
     /// Rust-analyzer proxy (initialized on first successful compilation).
     ra_proxy: RwLock<Option<RustAnalyzerProxy>>,
-    /// Project build directory (`.rsc-build/`).
-    build_dir: RwLock<Option<PathBuf>>,
+    /// Project root directory (where `Cargo.toml` and `target/` live).
+    project_root: RwLock<Option<PathBuf>>,
     /// Cache of parsed rustdoc JSON for external crate hover documentation.
     rustdoc_cache: RwLock<RustdocCache>,
 }
@@ -85,7 +85,7 @@ impl RscLanguageServer {
             position_maps: Arc::new(DashMap::new()),
             compile_cache: DashMap::new(),
             ra_proxy: RwLock::new(None),
-            build_dir: RwLock::new(None),
+            project_root: RwLock::new(None),
             rustdoc_cache: RwLock::new(RustdocCache::new()),
         }
     }
@@ -133,8 +133,10 @@ impl RscLanguageServer {
 
     /// Ensure rust-analyzer is started if it isn't already.
     ///
-    /// Determines the build directory from the document URI, creates it if
-    /// necessary, and starts rust-analyzer pointed at it.
+    /// Determines the project root from the document URI by walking up the
+    /// directory tree looking for `Cargo.toml`, and starts rust-analyzer
+    /// pointed at it. With in-place compilation, `Cargo.toml` and `target/`
+    /// live in the project root alongside `src/`.
     async fn ensure_ra_started(&self, uri: &Url) {
         let ra_guard = self.ra_proxy.read().await;
         if ra_guard.as_ref().is_some_and(RustAnalyzerProxy::is_alive) {
@@ -142,31 +144,31 @@ impl RscLanguageServer {
         }
         drop(ra_guard);
 
-        // Determine build directory from the URI.
-        let build_dir = if let Ok(path) = uri.to_file_path() {
-            if let Some(parent) = path.parent() {
-                parent.join(".rsc-build")
-            } else {
-                return;
-            }
+        // Find project root by walking up from the file looking for Cargo.toml.
+        let project_root = if let Ok(path) = uri.to_file_path() {
+            find_project_root(&path)
         } else {
+            None
+        };
+
+        let Some(project_root) = project_root else {
             return;
         };
 
-        // Only start if the build directory exists.
-        if !build_dir.exists() {
+        // Only start if Cargo.toml exists in the project root.
+        if !project_root.join("Cargo.toml").exists() {
             return;
         }
 
-        match RustAnalyzerProxy::start(&build_dir) {
+        match RustAnalyzerProxy::start(&project_root) {
             Ok(Some(proxy)) => {
                 self.client
                     .log_message(MessageType::INFO, "rust-analyzer proxy started")
                     .await;
                 let mut ra = self.ra_proxy.write().await;
                 *ra = Some(proxy);
-                let mut bd = self.build_dir.write().await;
-                *bd = Some(build_dir);
+                let mut pr = self.project_root.write().await;
+                *pr = Some(project_root);
             }
             Ok(None) => {
                 self.client
@@ -442,10 +444,10 @@ impl LanguageServer for RscLanguageServer {
 
             // Try rustdoc-based hover for imported symbols.
             if let Some((crate_name, symbol_name)) = find_import_at_cursor(&module, offset)
-                && let Some(build_dir) = self.build_dir.read().await.as_ref()
+                && let Some(project_root) = self.project_root.read().await.as_ref()
             {
                 let mut rustdoc = self.rustdoc_cache.write().await;
-                if let Some(crate_data) = rustdoc.get_crate_docs(&crate_name, build_dir)
+                if let Some(crate_data) = rustdoc.get_crate_docs(&crate_name, project_root)
                     && let Some(item) = rustdoc_parser::lookup_item(&crate_data, &symbol_name)
                 {
                     let hover_text = crate::rustdoc_translator::translate_item_to_hover(item);
@@ -1827,6 +1829,27 @@ fn extract_var_types_from_stmts(
             RustStmt::While(w) => extract_var_types_from_stmts(&w.body.stmts, types),
             RustStmt::ForIn(f) => extract_var_types_from_stmts(&f.body.stmts, types),
             _ => {}
+        }
+    }
+}
+
+/// Find the project root by walking up from a file path.
+///
+/// Looks for a directory containing `Cargo.toml` (which in-place compilation
+/// places in the project root alongside `rustscript.json` and `src/`).
+fn find_project_root(file_path: &std::path::Path) -> Option<PathBuf> {
+    let mut current = if file_path.is_file() {
+        file_path.parent()?.to_path_buf()
+    } else {
+        file_path.to_path_buf()
+    };
+
+    loop {
+        if current.join("Cargo.toml").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
         }
     }
 }
