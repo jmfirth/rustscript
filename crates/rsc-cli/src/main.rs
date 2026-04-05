@@ -143,6 +143,12 @@ enum Command {
         #[arg(long, short = 'o', default_value = "types")]
         out: PathBuf,
     },
+    /// Eject: convert this `RustScript` project into a pure Rust project
+    Eject {
+        /// Skip the interactive confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() {
@@ -211,6 +217,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Repl => repl::run_repl(),
         Command::Dev { release } => cmd_dev(release),
         Command::Types { out } => cmd_types(&out),
+        Command::Eject { force } => cmd_eject(force),
     }
 }
 
@@ -448,6 +455,56 @@ fn cmd_types(out: &Path) -> Result<i32> {
     let project = open_project()?;
     emit_types_to_dir(&project.root, out)?;
     Ok(0)
+}
+
+/// Eject the project: convert from `RustScript` to pure Rust.
+///
+/// Prints a warning and prompts for confirmation unless `--force` is passed.
+/// On confirmation, removes `rustscript.json` and un-ignores `.rs` files in `.gitignore`.
+fn cmd_eject(force: bool) -> Result<i32> {
+    let project = open_project()?;
+
+    if !force {
+        eprint!(
+            "\
+\u{26a0} Eject converts this RustScript project into a pure Rust project.
+
+This will:
+  - Remove rustscript.json (the RustScript manifest)
+  - Un-ignore generated .rs files in .gitignore
+  - Your .rts source files will be left in place for reference
+
+This action cannot be undone. The rsc compiler will no longer recognize
+this directory as a RustScript project.
+
+To confirm, type \"eject\": "
+        );
+
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("failed to read confirmation input")?;
+
+        if input.trim() != "eject" {
+            eprintln!("Aborted.");
+            return Ok(EXIT_USER_ERROR);
+        }
+    }
+
+    match project.eject() {
+        Ok(()) => {
+            println!(
+                "Ejected successfully. Your project is now a pure Rust project. \
+                 You can delete the .rts source files when ready."
+            );
+            Ok(0)
+        }
+        Err(DriverError::EjectNotBuilt) => {
+            eprintln!("error: {}", DriverError::EjectNotBuilt);
+            Ok(EXIT_USER_ERROR)
+        }
+        Err(e) => Err(e).context("eject failed"),
+    }
 }
 
 /// Emit TypeScript type definitions from a project into the given output directory.

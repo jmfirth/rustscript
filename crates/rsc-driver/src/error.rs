@@ -55,6 +55,10 @@ pub enum DriverError {
     #[error("failed to parse rsc.toml: {0}")]
     ConfigParseFailed(String),
 
+    /// The project has not been built yet (no generated `.rs` files).
+    #[error("project has not been built yet — run `rsc build` first")]
+    EjectNotBuilt,
+
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),
