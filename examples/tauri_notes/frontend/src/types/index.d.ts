@@ -4,21 +4,10 @@ export interface Note {
   id: number;
   title: string;
   content: string;
-  created_at: string;
   pinned: boolean;
 }
 
-export interface CreateNoteRequest {
-  title: string;
-  content: string;
-}
-
-export interface ApiResponse {
-  success: boolean;
-  message: string;
-}
-
-export interface NoteStats {
+export interface Stats {
   total: number;
   pinned: number;
 }

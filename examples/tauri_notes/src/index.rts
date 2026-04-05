@@ -1,12 +1,14 @@
+import { command } from "tauri";
+import { Builder } from "tauri";
 import { Serialize, Deserialize } from "serde";
 
 /**
  * Tauri Notes — Desktop App Backend
  *
- * RustScript backend for a Tauri desktop app. Types with `derives Serialize,
- * Deserialize` are shared with the React frontend via `rsc types`. This is
- * the killer pattern: one language (TypeScript syntax) on both sides, with
- * Rust performance on the backend and type-safe IPC across the boundary.
+ * RustScript backend for a Tauri desktop app. The `@command` decorator
+ * compiles to `#[tauri::command]`, making functions callable from the
+ * React frontend via Tauri's IPC. Types with `derives Serialize,
+ * Deserialize` are shared with the frontend via `rsc types`.
  */
 
 /** A note in the app */
@@ -14,67 +16,55 @@ type Note = {
   id: u32,
   title: string,
   content: string,
-  created_at: string,
   pinned: bool,
 } derives Serialize, Deserialize
 
-/** Request to create a new note */
-type CreateNoteRequest = {
-  title: string,
-  content: string,
-} derives Deserialize
-
-/** Response with operation status */
-type ApiResponse = {
-  success: bool,
-  message: string,
-} derives Serialize
-
-/** Stats about the notes collection */
-type NoteStats = {
+/** Summary statistics */
+type Stats = {
   total: i64,
   pinned: i64,
 } derives Serialize
 
-// In-memory store (in a real app, this would be a database)
-function getNotes(): Array<Note> {
-  const n1: Note = { id: 1, title: "Welcome to RustScript", content: "Build desktop apps with TypeScript syntax and Rust performance.", created_at: "2026-01-01", pinned: true };
-  const n2: Note = { id: 2, title: "Tauri Integration", content: "RustScript powers your Tauri backend. Same language as your frontend.", created_at: "2026-01-02", pinned: false };
-  const n3: Note = { id: 3, title: "Type Safety", content: "Shared types between frontend and backend via rsc types.", created_at: "2026-01-03", pinned: true };
-  return [n1, n2, n3];
-}
-
 /** Get all notes */
-function get_all_notes(): string {
-  return JSON.stringify(getNotes());
+@command
+function get_notes(): Array<Note> {
+  // In a real app, this would read from a database
+  const notes: Array<Note> = [
+    { id: 1, title: "Welcome", content: "Welcome to RustScript + Tauri!", pinned: true },
+    { id: 2, title: "Getting Started", content: "Edit src/index.rts to add backend commands.", pinned: false },
+  ];
+  return notes;
 }
 
-/** Get pinned notes only */
-function get_pinned_notes(): string {
-  const notes = getNotes();
-  const pinned = notes.filter(n => n.pinned);
-  return JSON.stringify(pinned);
-}
-
-/** Search notes by title */
-function search_notes(query: string): string {
-  const notes = getNotes();
-  const lower = query.toLowerCase();
-  const matches = notes.filter(n => n.title.toLowerCase().includes(lower));
-  return JSON.stringify(matches);
-}
-
-/** Get note statistics */
-function get_stats(): string {
-  const notes = getNotes();
-  const stats: NoteStats = {
+/** Get statistics about notes */
+@command
+function get_stats(): Stats {
+  const notes = get_notes();
+  const stats: Stats = {
     total: notes.length,
     pinned: notes.filter(n => n.pinned).length,
   };
-  return JSON.stringify(stats);
+  return stats;
+}
+
+/** Search notes by title */
+@command
+function search_notes(query: string): Array<Note> {
+  const notes = get_notes();
+  const lower = query.toLowerCase();
+  return notes.filter(n => n.title.toLowerCase().includes(lower));
 }
 
 function main() {
-  console.log("Notes backend ready");
-  console.log(get_all_notes());
+  // In a real Tauri app, this would be:
+  // Builder.default()
+  //   .invoke_handler(generate_handler![get_notes, get_stats, search_notes])
+  //   .run();
+  //
+  // For now, demonstrate the commands work:
+  const notes = get_notes();
+  console.log(JSON.stringify(notes));
+
+  const stats = get_stats();
+  console.log(JSON.stringify(stats));
 }

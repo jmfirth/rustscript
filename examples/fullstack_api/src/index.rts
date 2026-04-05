@@ -1,0 +1,77 @@
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+import { Serialize, Deserialize } from "serde";
+
+/**
+ * Fullstack Task Tracker API
+ *
+ * An axum backend serving typed JSON endpoints. The frontend consumes
+ * these with typed fetch wrappers, sharing types via `rsc types`.
+ * Change a field here, regenerate types, and TypeScript catches the
+ * mismatch at compile time.
+ */
+
+/** A task in the tracker */
+type Task = {
+  id: u32,
+  title: string,
+  status: string,
+  priority: string,
+  assignee: string | null,
+} derives Serialize, Deserialize
+
+/** Summary of task statuses */
+type TaskSummary = {
+  total: i64,
+  open: i64,
+  done: i64,
+  high_priority: i64,
+} derives Serialize
+
+function getTasks(): Array<Task> {
+  const t1: Task = { id: 1, title: "Set up CI pipeline", status: "done", priority: "high", assignee: "alice" };
+  const t2: Task = { id: 2, title: "Write API docs", status: "open", priority: "medium", assignee: "bob" };
+  const t3: Task = { id: 3, title: "Add search feature", status: "open", priority: "high", assignee: null };
+  const t4: Task = { id: 4, title: "Fix login bug", status: "done", priority: "high", assignee: "alice" };
+  const t5: Task = { id: 5, title: "Update dependencies", status: "open", priority: "low", assignee: null };
+  return [t1, t2, t3, t4, t5];
+}
+
+/** GET /api/tasks -- all tasks */
+async function handleTasks(): string {
+  return JSON.stringify(getTasks());
+}
+
+/** GET /api/tasks/open -- open tasks only */
+async function handleOpen(): string {
+  const tasks = getTasks();
+  const open = tasks.filter(t => t.status == "open");
+  return JSON.stringify(open);
+}
+
+/** GET /api/summary -- task summary statistics */
+async function handleSummary(): string {
+  const tasks = getTasks();
+  const summary: TaskSummary = {
+    total: tasks.length,
+    open: tasks.filter(t => t.status == "open").length,
+    done: tasks.filter(t => t.status == "done").length,
+    high_priority: tasks.filter(t => t.priority == "high").length,
+  };
+  return JSON.stringify(summary);
+}
+
+async function main() {
+  const app = new Router()
+    .route("/api/tasks", get(handleTasks))
+    .route("/api/tasks/open", get(handleOpen))
+    .route("/api/summary", get(handleSummary));
+
+  const listener = await TcpListener.bind("0.0.0.0:3001");
+  console.log("Task API listening on http://0.0.0.0:3001");
+  console.log("  GET /api/tasks       -- all tasks");
+  console.log("  GET /api/tasks/open  -- open tasks only");
+  console.log("  GET /api/summary     -- summary statistics");
+  await serve(listener, app);
+}
