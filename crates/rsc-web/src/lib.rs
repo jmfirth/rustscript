@@ -342,6 +342,13 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
         }
     }
 
+    // Search type/interface/class fields for property hover.
+    for item in &module.items {
+        if let Some(sig) = extract_field_hover(item, token) {
+            return sig;
+        }
+    }
+
     // Build a map of function name → return type for call-site inference.
     let fn_return_types = collect_fn_return_types(&module);
 
@@ -420,6 +427,51 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
         ItemKind::Class(c) if c.name.name == name => {
             let sig = format!("```rustscript\nclass {name}\n```");
             Some(with_doc_comment(&c.doc_comment, &sig))
+        }
+        _ => None,
+    }
+}
+
+/// Search type definitions, interfaces, and classes for a field matching the token.
+fn extract_field_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<String> {
+    use rsc_syntax::ast::ItemKind;
+
+    match &item.kind {
+        ItemKind::TypeDef(td) => {
+            for f in &td.fields {
+                if f.name.name == name {
+                    let opt = if f.optional { "?" } else { "" };
+                    return Some(format!(
+                        "```rustscript\n(property) {name}{opt}: {}\n```",
+                        format_type_ann(&f.type_ann)
+                    ));
+                }
+            }
+            None
+        }
+        ItemKind::Interface(iface) => {
+            for f in &iface.fields {
+                if f.name.name == name {
+                    return Some(format!(
+                        "```rustscript\n(property) {name}: {}\n```",
+                        format_type_ann(&f.type_ann)
+                    ));
+                }
+            }
+            None
+        }
+        ItemKind::Class(c) => {
+            for member in &c.members {
+                if let rsc_syntax::ast::ClassMember::Field(f) = member {
+                    if f.name.name == name {
+                        return Some(format!(
+                            "```rustscript\n(property) {name}: {}\n```",
+                            format_type_ann(&f.type_ann)
+                        ));
+                    }
+                }
+            }
+            None
         }
         _ => None,
     }
