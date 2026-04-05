@@ -73,7 +73,7 @@ Pre-release complete. Full TypeScript syntax coverage, complete builtin library,
 | `just start` | Run rsc (pass-through args) |
 | `just ci` | Full CI pipeline |
 | `just doc` | Build and open docs |
-| `just examples` | Validate all 8 example projects |
+| `just examples` | Validate all example projects |
 
 ## Code Standards
 
