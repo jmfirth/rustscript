@@ -272,14 +272,14 @@ function main() {
     label: 'Pattern Matching',
     rts: `type Shape =
   | { kind: "circle", radius: f64 }
-  | { kind: "rectangle", width: f64, height: f64 }
+  | { kind: "rect", width: f64, height: f64 }
   | { kind: "triangle", base: f64, height: f64 }
 
 function area(shape: Shape): f64 {
-  switch (shape.kind) {
+  switch (shape) {
     case "circle":
-      return 3.14159 * shape.radius ** 2.0;
-    case "rectangle":
+      return 3.14159 * shape.radius * shape.radius;
+    case "rect":
       return shape.width * shape.height;
     case "triangle":
       return 0.5 * shape.base * shape.height;
@@ -298,17 +298,14 @@ function opposite(dir: Direction): Direction {
 }
 
 function main() {
-  const shapes: Array<Shape> = [
-    { kind: "circle", radius: 5.0 },
-    { kind: "rectangle", width: 4.0, height: 6.0 },
-    { kind: "triangle", base: 3.0, height: 8.0 },
-  ];
+  const circle: Shape = { kind: "circle", radius: 5.0 };
+  const rect: Shape = { kind: "rect", width: 4.0, height: 6.0 };
+  const tri: Shape = { kind: "triangle", base: 3.0, height: 8.0 };
 
-  for (const shape of shapes) {
-    console.log(\`\${shape.kind}: area = \${area(shape)}\`);
-  }
-
-  console.log(\`Opposite of north: \${opposite("north")}\`);
+  console.log(\`circle: \${area(circle)}\`);
+  console.log(\`rect: \${area(rect)}\`);
+  console.log(\`triangle: \${area(tri)}\`);
+  console.log(\`opposite of north: \${opposite("north")}\`);
 }`,
   },
   {
