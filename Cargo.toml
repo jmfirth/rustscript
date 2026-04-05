@@ -1,16 +1,16 @@
 [workspace]
 members = [
-    "crates/rsc-syntax",
-    "crates/rsc-parser",
-    "crates/rsc-typeck",
-    "crates/rsc-lower",
-    "crates/rsc-emit",
-    "crates/rsc-fmt",
-    "crates/rsc-driver",
-    "crates/rsc-hover",
-    "crates/rsc-lsp",
-    "crates/rsc-cli",
-    "crates/rsc-web",
+    "crates/rustscript-syntax",
+    "crates/rustscript-parser",
+    "crates/rustscript-typeck",
+    "crates/rustscript-lower",
+    "crates/rustscript-emit",
+    "crates/rustscript-fmt",
+    "crates/rustscript-driver",
+    "crates/rustscript-hover",
+    "crates/rustscript-lsp",
+    "crates/rustscript-cli",
+    "crates/rustscript-web",
 ]
 resolver = "2"
 

@@ -1,4 +1,4 @@
-# RustScript (rsc)
+# RustScript
 
 A TypeScript-native authoring language that compiles to idiomatic Rust. Write TypeScript. Ship Rust.
 
@@ -28,17 +28,17 @@ Pre-release complete. Full TypeScript syntax coverage, complete builtin library,
 
 | Crate | Responsibility |
 |-------|---------------|
-| `rsc-syntax` | AST types, Rust IR types, spans, diagnostics |
-| `rsc-parser` | Lexer + recursive descent parser → RustScript AST |
-| `rsc-typeck` | Type resolution, registry, bridge to Rust types |
-| `rsc-lower` | AST → Rust IR (type lowering, ownership, builtins, transforms) |
-| `rsc-emit` | Rust IR → `.rs` text + source maps |
-| `rsc-driver` | Pipeline orchestration, Cargo integration, error translation |
-| `rsc-cli` | Binary entry point, `rsc` commands |
-| `rsc-fmt` | RustScript formatter |
-| `rsc-lsp` | Language server (hover, completions, diagnostics) |
+| `rustscript-syntax` | AST types, Rust IR types, spans, diagnostics |
+| `rustscript-parser` | Lexer + recursive descent parser → RustScript AST |
+| `rustscript-typeck` | Type resolution, registry, bridge to Rust types |
+| `rustscript-lower` | AST → Rust IR (type lowering, ownership, builtins, transforms) |
+| `rustscript-emit` | Rust IR → `.rs` text + source maps |
+| `rustscript-driver` | Pipeline orchestration, Cargo integration, error translation |
+| `rustscript-cli` | Binary entry point, `rustscript` / `rsc` commands |
+| `rustscript-fmt` | RustScript formatter |
+| `rustscript-lsp` | Language server (hover, completions, diagnostics) |
 
-### Key lowering modules (`rsc-lower/src/transform/`)
+### Key lowering modules (`rustscript-lower/src/transform/`)
 
 | Module | Responsibility |
 |--------|---------------|
@@ -70,7 +70,7 @@ Pre-release complete. Full TypeScript syntax coverage, complete builtin library,
 | `just test-all` | Full suite: unit + snapshot + compilation + e2e |
 | `just build` | Debug build |
 | `just release` | Release build |
-| `just start` | Run rsc (pass-through args) |
+| `just start` | Run rustscript (pass-through args) |
 | `just ci` | Full CI pipeline |
 | `just doc` | Build and open docs |
 | `just examples` | Validate all example projects |
@@ -89,12 +89,12 @@ Pre-release complete. Full TypeScript syntax coverage, complete builtin library,
 | Level | What | Where |
 |-------|------|-------|
 | Unit | Internal API correctness | `#[cfg(test)]` in each module |
-| Snapshot | `.rts` → expected `.rs` patterns | `crates/rsc-driver/tests/snapshots.rs` |
-| Stress | 65 real-world multi-feature patterns | `crates/rsc-driver/tests/stress_tests.rs` |
-| Conformance | 190 combinatorial syntax × context tests | `crates/rsc-driver/tests/conformance.rs` |
+| Snapshot | `.rts` → expected `.rs` patterns | `crates/rustscript-driver/tests/snapshots.rs` |
+| Stress | 65 real-world multi-feature patterns | `crates/rustscript-driver/tests/stress_tests.rs` |
+| Conformance | 190 combinatorial syntax × context tests | `crates/rustscript-driver/tests/conformance.rs` |
 | Compilation | Generated `.rs` compiles with rustc | `#[ignore]` tests, run with `--include-ignored` |
-| End-to-end | `.rts` → compile → run → expected output | `crates/rsc-driver/tests/phase6_integration.rs` |
-| Diagnostics | Invalid `.rts` → expected error messages | `crates/rsc-driver/tests/diagnostic_quality.rs` |
+| End-to-end | `.rts` → compile → run → expected output | `crates/rustscript-driver/tests/phase6_integration.rs` |
+| Diagnostics | Invalid `.rts` → expected error messages | `crates/rustscript-driver/tests/diagnostic_quality.rs` |
 
 ## Using cq (Code Query) Tools
 
@@ -122,31 +122,31 @@ The `cq` MCP tools provide semantic code intelligence. Use them instead of broad
 
 ```
 # Find where a type is defined
-cq_def TypeKind --scope crates/rsc-syntax
+cq_def TypeKind --scope crates/rustscript-syntax
 
 # Get a lowering function's signature without reading 2000 lines
-cq_sig lower_fn --scope crates/rsc-lower
+cq_sig lower_fn --scope crates/rustscript-lower
 
 # See what lower_expr depends on
-cq_deps lower_expr --scope crates/rsc-lower/src/transform/expr_lower.rs
+cq_deps lower_expr --scope crates/rustscript-lower/src/transform/expr_lower.rs
 
 # All callers of a builtin method
-cq_callers lower_console_log --scope crates/rsc-lower
+cq_callers lower_console_log --scope crates/rustscript-lower
 
 # File outline to orient quickly
-cq_outline crates/rsc-lower/src/transform/stmt_lower.rs
+cq_outline crates/rustscript-lower/src/transform/stmt_lower.rs
 
 # Directory symbol tree
-cq_tree --scope crates/rsc-lower/src/transform
+cq_tree --scope crates/rustscript-lower/src/transform
 
 # What function contains line 500 of the emitter?
-cq_context crates/rsc-emit/src/emitter.rs:500
+cq_context crates/rustscript-emit/src/emitter.rs:500
 
 # Find all functions starting with "lower_"
-cq_search '(function_item name: (identifier) @name (#match? @name "^lower_"))' --scope crates/rsc-lower
+cq_search '(function_item name: (identifier) @name (#match? @name "^lower_"))' --scope crates/rustscript-lower
 
 # Imports for a file
-cq_imports crates/rsc-lower/src/transform/mod.rs
+cq_imports crates/rustscript-lower/src/transform/mod.rs
 ```
 
 ### Limitations

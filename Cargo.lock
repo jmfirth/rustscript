@@ -1079,133 +1079,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "rsc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ctrlc",
- "notify",
- "rsc-driver",
- "rsc-fmt",
- "rsc-lsp",
- "rsc-syntax",
- "rustyline",
- "tempfile",
-]
-
-[[package]]
-name = "rsc-driver"
-version = "0.1.0"
-dependencies = [
- "regex",
- "rsc-emit",
- "rsc-fmt",
- "rsc-lower",
- "rsc-parser",
- "rsc-syntax",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "rsc-emit"
-version = "0.1.0"
-dependencies = [
- "rsc-syntax",
-]
-
-[[package]]
-name = "rsc-fmt"
-version = "0.1.0"
-dependencies = [
- "rsc-driver",
- "rsc-parser",
- "rsc-syntax",
- "thiserror",
-]
-
-[[package]]
-name = "rsc-hover"
-version = "0.1.0"
-dependencies = [
- "rsc-parser",
- "rsc-syntax",
-]
-
-[[package]]
-name = "rsc-lower"
-version = "0.1.0"
-dependencies = [
- "rsc-emit",
- "rsc-parser",
- "rsc-syntax",
- "rsc-typeck",
- "thiserror",
-]
-
-[[package]]
-name = "rsc-lsp"
-version = "0.1.0"
-dependencies = [
- "dashmap 6.1.0",
- "rsc-driver",
- "rsc-fmt",
- "rsc-hover",
- "rsc-lower",
- "rsc-parser",
- "rsc-syntax",
- "serde_json",
- "thiserror",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
-name = "rsc-parser"
-version = "0.1.0"
-dependencies = [
- "rsc-syntax",
- "thiserror",
-]
-
-[[package]]
-name = "rsc-syntax"
-version = "0.1.0"
-dependencies = [
- "codespan-reporting",
- "thiserror",
-]
-
-[[package]]
-name = "rsc-typeck"
-version = "0.1.0"
-dependencies = [
- "rsc-syntax",
- "thiserror",
-]
-
-[[package]]
-name = "rsc-web"
-version = "0.1.0"
-dependencies = [
- "rsc-driver",
- "rsc-emit",
- "rsc-hover",
- "rsc-lower",
- "rsc-parser",
- "rsc-syntax",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-test",
-]
-
-[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1216,6 +1089,133 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustscript"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctrlc",
+ "notify",
+ "rustscript-driver",
+ "rustscript-fmt",
+ "rustscript-lsp",
+ "rustscript-syntax",
+ "rustyline",
+ "tempfile",
+]
+
+[[package]]
+name = "rustscript-driver"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "rustscript-emit",
+ "rustscript-fmt",
+ "rustscript-lower",
+ "rustscript-parser",
+ "rustscript-syntax",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "rustscript-emit"
+version = "0.1.0"
+dependencies = [
+ "rustscript-syntax",
+]
+
+[[package]]
+name = "rustscript-fmt"
+version = "0.1.0"
+dependencies = [
+ "rustscript-driver",
+ "rustscript-parser",
+ "rustscript-syntax",
+ "thiserror",
+]
+
+[[package]]
+name = "rustscript-hover"
+version = "0.1.0"
+dependencies = [
+ "rustscript-parser",
+ "rustscript-syntax",
+]
+
+[[package]]
+name = "rustscript-lower"
+version = "0.1.0"
+dependencies = [
+ "rustscript-emit",
+ "rustscript-parser",
+ "rustscript-syntax",
+ "rustscript-typeck",
+ "thiserror",
+]
+
+[[package]]
+name = "rustscript-lsp"
+version = "0.1.0"
+dependencies = [
+ "dashmap 6.1.0",
+ "rustscript-driver",
+ "rustscript-fmt",
+ "rustscript-hover",
+ "rustscript-lower",
+ "rustscript-parser",
+ "rustscript-syntax",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
+name = "rustscript-parser"
+version = "0.1.0"
+dependencies = [
+ "rustscript-syntax",
+ "thiserror",
+]
+
+[[package]]
+name = "rustscript-syntax"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "thiserror",
+]
+
+[[package]]
+name = "rustscript-typeck"
+version = "0.1.0"
+dependencies = [
+ "rustscript-syntax",
+ "thiserror",
+]
+
+[[package]]
+name = "rustscript-web"
+version = "0.1.0"
+dependencies = [
+ "rustscript-driver",
+ "rustscript-emit",
+ "rustscript-hover",
+ "rustscript-lower",
+ "rustscript-parser",
+ "rustscript-syntax",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

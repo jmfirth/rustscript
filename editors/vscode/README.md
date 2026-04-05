@@ -5,7 +5,7 @@ Language support for [RustScript](https://github.com/rustscript/rsc) — Write T
 ## Features
 
 - **Syntax highlighting** for `.rts` files with full coverage of RustScript keywords, types, and expressions
-- **LSP integration** via the `rsc lsp` language server for diagnostics, completions, and go-to-definition
+- **LSP integration** via the `rustscript lsp` language server for diagnostics, completions, and go-to-definition
 - **Bracket matching** and auto-closing for all bracket types including angle brackets for generics
 - **Comment toggling** with `//` line comments and `/* */` block comments
 - **Smart indentation** following brace-based block structure
@@ -13,12 +13,12 @@ Language support for [RustScript](https://github.com/rustscript/rsc) — Write T
 ## Requirements
 
 - Visual Studio Code 1.75.0 or later
-- The `rsc` compiler installed and available on `$PATH` (for LSP features)
+- The `rustscript` compiler installed and available on `$PATH` (for LSP features)
 
-Install `rsc`:
+Install `rustscript`:
 
 ```bash
-cargo install rsc
+cargo install rustscript
 ```
 
 Or build from source:
@@ -26,14 +26,14 @@ Or build from source:
 ```bash
 git clone https://github.com/rustscript/rsc.git
 cd rsc
-cargo install --path crates/rsc-cli
+cargo install --path crates/rustscript-cli
 ```
 
 ## Extension Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `rustscript.serverPath` | `"rsc"` | Path to the `rsc` binary |
+| `rustscript.serverPath` | `"rustscript"` | Path to the `rustscript` binary (or `rsc` alias) |
 | `rustscript.lsp.enable` | `true` | Enable the language server |
 | `rustscript.lsp.args` | `["lsp"]` | Arguments passed to start the language server |
 | `rustscript.trace.server` | `"off"` | Trace LSP communication for debugging |

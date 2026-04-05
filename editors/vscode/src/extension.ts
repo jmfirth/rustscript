@@ -15,7 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
     }
 
-    const serverPath = config.get<string>('serverPath', 'rsc');
+    const serverPath = config.get<string>('serverPath', 'rustscript');
     const serverArgs = config.get<string[]>('lsp.args', ['lsp']);
 
     const serverOptions: ServerOptions = {

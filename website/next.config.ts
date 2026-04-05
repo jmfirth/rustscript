@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   output: 'export',
   pageExtensions: ['ts', 'tsx', 'md', 'mdx'],
   webpack(config) {
-    // Enable WASM support for rsc-web
+    // Enable WASM support for rustscript-web
     config.experiments = {
       ...config.experiments,
       asyncWebAssembly: true,

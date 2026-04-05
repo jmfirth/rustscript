@@ -1,0 +1,31 @@
+#![warn(clippy::pedantic)]
+//! `RustScript` compiler driver — pipeline orchestration and Cargo integration.
+//!
+//! This crate wires the compiler pipeline together: parse, lower, emit,
+//! write files, and invoke Cargo. It also handles project scaffolding
+//! (`init_project`) and diagnostic aggregation.
+
+pub mod deps;
+pub mod error;
+pub mod error_translation;
+pub mod manifest;
+mod pipeline;
+mod project;
+pub mod rustdoc_cache;
+pub mod rustdoc_convert;
+pub mod rustdoc_parser;
+mod templates;
+pub mod typegen;
+
+pub use error_translation::{
+    RustcDiagnostic, RustcErrorCode, RustcSpan, parse_rustc_json_diagnostics,
+    render_rustc_json_diagnostics, translate_rustc_errors, translate_rustc_errors_colored,
+};
+pub use pipeline::{
+    CompileOptions, CompileResult, compile_source, compile_source_with_mods,
+    compile_source_with_mods_and_options, compile_source_with_options,
+};
+pub use project::{Project, WasmTarget, init_project, parse_wasm_target};
+
+// Re-export `ColorMode` so the CLI can use it without depending on `rustscript-syntax` directly for this type.
+pub use rustscript_syntax::diagnostic::ColorMode;

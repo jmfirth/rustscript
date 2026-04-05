@@ -38,15 +38,17 @@ The compiler compiles in-place: `.rs` files are emitted alongside `.rts` files i
 ## Tooling
 
 ```bash
-rsc init my-project              # Create new project (rustscript.json + Cargo.toml + src/main.rts)
-rsc init my-project --template web-server  # With template (cli, web-server, wasm)
-rsc build                        # Compile to native binary
-rsc run                          # Build and run
-rsc run -- --flag value          # Pass args to the binary
-rsc check                        # Type check without building
-rsc fmt                          # Format .rts files
-rsc eject                        # Convert project to pure Rust (removes rustscript.json, unstages .rs files)
+rustscript init my-project              # Create new project (rustscript.json + Cargo.toml + src/main.rts)
+rustscript init my-project --template web-server  # With template (cli, web-server, wasm)
+rustscript build                        # Compile to native binary
+rustscript run                          # Build and run
+rustscript run -- --flag value          # Pass args to the binary
+rustscript check                        # Type check without building
+rustscript fmt                          # Format .rts files
+rustscript eject                        # Convert project to pure Rust (removes rustscript.json, unstages .rs files)
 ```
+
+> The `rsc` command is also available as a short alias for `rustscript`.
 
 ## Syntax
 

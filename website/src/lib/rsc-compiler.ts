@@ -1,7 +1,7 @@
 /**
  * RustScript compiler — WASM interface.
  *
- * Wraps the rsc-web WASM module with typed functions for use in
+ * Wraps the rustscript-web WASM module with typed functions for use in
  * the playground and crate docs viewer.
  *
  * Usage:
@@ -15,7 +15,7 @@ import init, {
   get_diagnostics as wasmGetDiagnostics,
   hover as wasmHover,
   translate_rustdoc as wasmTranslateRustdoc,
-} from '@/wasm/rsc_web';
+} from '@/wasm/rustscript_web';
 
 let initialized = false;
 

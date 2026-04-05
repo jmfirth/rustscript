@@ -1,0 +1,9 @@
+[package]
+name = "rustscript-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustscript-syntax = { path = "../rustscript-syntax" }
+thiserror = { workspace = true }

@@ -1,9 +1,0 @@
-[package]
-name = "rsc-typeck"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-rsc-syntax = { path = "../rsc-syntax" }
-thiserror = { workspace = true }

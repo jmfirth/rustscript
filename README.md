@@ -87,11 +87,13 @@ fn main() {
 ## Getting Started
 
 ```bash
-cargo install rsc
-rsc init my-app
-rsc build
-rsc run
+cargo install rustscript
+rustscript init my-app
+rustscript build
+rustscript run
 ```
+
+> **Note:** The `rsc` command is also available as a short alias for `rustscript`.
 
 ## Why RustScript
 
@@ -138,20 +140,20 @@ rsc run
 ## CLI
 
 ```bash
-rsc init [--template cli|web-server|wasm]   # scaffold a new project
-rsc build [--release] [--target wasm32-wasip1]  # compile to binary or WASM
-rsc run                                      # compile and run
-rsc check                                    # type check without building
-rsc test                                     # run tests
-rsc fmt [--check]                            # format .rts source files
-rsc lsp                                      # start the language server
+rustscript init [--template cli|web-server|wasm]   # scaffold a new project
+rustscript build [--release] [--target wasm32-wasip1]  # compile to binary or WASM
+rustscript run                                      # compile and run
+rustscript check                                    # type check without building
+rustscript test                                     # run tests
+rustscript fmt [--check]                            # format .rts source files
+rustscript lsp                                      # start the language server
 ```
 
 ## Tooling
 
 - **LSP** — diagnostics, formatting, hover, go-to-definition via rust-analyzer proxy. Works with any editor that speaks LSP.
-- **Formatter** — opinionated, zero-config. One style. No debates. `rsc fmt`.
-- **Project templates** — `rsc init --template web-server` scaffolds a project with axum, tokio, and serde pre-configured. Templates for CLI and WASM apps too.
+- **Formatter** — opinionated, zero-config. One style. No debates. `rustscript fmt`.
+- **Project templates** — `rustscript init --template web-server` scaffolds a project with axum, tokio, and serde pre-configured. Templates for CLI and WASM apps too.
 - **Error translation** — `rustc` errors are intercepted and re-rendered in RustScript terms, pointing at your `.rts` source positions.
 
 ## More Examples

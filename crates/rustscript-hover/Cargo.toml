@@ -1,0 +1,10 @@
+[package]
+name = "rustscript-hover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared hover inference logic for the RustScript compiler"
+
+[dependencies]
+rustscript-syntax = { path = "../rustscript-syntax" }
+rustscript-parser = { path = "../rustscript-parser" }

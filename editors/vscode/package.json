@@ -50,8 +50,8 @@
       "properties": {
         "rustscript.serverPath": {
           "type": "string",
-          "default": "rsc",
-          "description": "Path to the rsc binary"
+          "default": "rustscript",
+          "description": "Path to the rustscript binary (or rsc alias)"
         },
         "rustscript.lsp.enable": {
           "type": "boolean",
@@ -66,7 +66,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Arguments passed to the rsc binary to start the language server"
+          "description": "Arguments passed to the rustscript binary to start the language server"
         },
         "rustscript.trace.server": {
           "type": "string",

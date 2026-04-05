@@ -18,7 +18,7 @@ release:
     cargo build --workspace --release
 
 start *ARGS:
-    cargo run --bin rsc -- {{ARGS}}
+    cargo run --bin rustscript -- {{ARGS}}
 
 doc:
     cargo doc --workspace --no-deps --open
@@ -29,7 +29,7 @@ clean:
 examples: build
     #!/usr/bin/env bash
     set -e
-    RSC="$(pwd)/target/debug/rsc"
+    RSC="$(pwd)/target/debug/rustscript"
     ROOT="$(pwd)"
     echo "Validating examples..."
     for dir in examples/*/; do
@@ -50,7 +50,7 @@ examples: build
 
 # Build the WASM binary and install into website
 web-wasm:
-    wasm-pack build crates/rsc-web --target web --out-dir ../../website/src/wasm
+    wasm-pack build crates/rustscript-web --target web --out-dir ../../website/src/wasm
     rm -rf website/public/wasm
     cp -r website/src/wasm website/public/wasm
 

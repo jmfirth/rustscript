@@ -1,0 +1,13 @@
+[package]
+name = "rustscript-fmt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustscript-syntax = { path = "../rustscript-syntax" }
+rustscript-parser = { path = "../rustscript-parser" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rustscript-driver = { path = "../rustscript-driver" }

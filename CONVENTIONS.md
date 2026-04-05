@@ -1,4 +1,4 @@
-# RustScript (rsc) Coding Conventions
+# RustScript Coding Conventions
 
 This document defines the rules all contributors (human and agent) follow. When in doubt, this document wins.
 
@@ -24,7 +24,7 @@ This document defines the rules all contributors (human and agent) follow. When 
 - Types: `PascalCase`
 - Functions, methods, variables: `snake_case`
 - Constants: `SCREAMING_SNAKE_CASE`
-- Crate names: `rsc-xxx` (kebab-case in Cargo.toml, `rsc_xxx` as Rust identifiers)
+- Crate names: `rustscript-xxx` (kebab-case in Cargo.toml, `rustscript_xxx` as Rust identifiers)
 - Module files: `snake_case.rs`
 - AST node types: `PascalCase` matching the grammar production (e.g., `FnDecl`, `IfExpr`, `BinaryOp`)
 - Test functions: `test_<what>_<condition>_<expected>` (e.g., `test_parser_empty_function_produces_fn_decl`)
@@ -76,12 +76,12 @@ These are two fundamentally different things. Never conflate them.
 | Crate | Purpose | Used in |
 |-------|---------|---------|
 | `thiserror` | Error derive macros | All library crates |
-| `anyhow` | Top-level error handling | `rsc-cli` |
-| `clap` (derive) | Argument parsing | `rsc-cli` |
+| `anyhow` | Top-level error handling | `rustscript-cli` |
+| `clap` (derive) | Argument parsing | `rustscript-cli` |
 | `codespan-reporting` | Diagnostic rendering with source spans | Diagnostic infrastructure |
 | `tempfile` | Test temp files | dev-dependency |
 | `insta` | Snapshot testing | dev-dependency |
-| `regex` | Error translation (rustc → RustScript type names) | `rsc-driver` |
+| `regex` | Error translation (rustc → RustScript type names) | `rustscript-driver` |
 
 Parser/lexer crate selection (e.g., `logos`, `winnow`, `chumsky`, or hand-written) is a Phase 0 design decision. The choice will be added to this table when made.
 

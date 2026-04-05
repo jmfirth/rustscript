@@ -37,7 +37,7 @@ test.describe('Playground WASM integration', () => {
 
     // Evaluate the WASM compiler directly in the browser
     const result = await page.evaluate(async () => {
-      const wasm = await import('/wasm/rsc_web.js');
+      const wasm = await import('/wasm/rustscript_web.js');
       await wasm.default();
       const output = wasm.compile('function main() { console.log("hello"); }');
       return output;
@@ -53,7 +53,7 @@ test.describe('Playground WASM integration', () => {
     await page.waitForLoadState('networkidle');
 
     const hoverText = await page.evaluate(async () => {
-      const wasm = await import('/wasm/rsc_web.js');
+      const wasm = await import('/wasm/rustscript_web.js');
       await wasm.default();
       return wasm.hover('console.log("hello");', 0, 9);
     });
@@ -66,7 +66,7 @@ test.describe('Playground WASM integration', () => {
     await page.waitForLoadState('networkidle');
 
     const diagnostics = await page.evaluate(async () => {
-      const wasm = await import('/wasm/rsc_web.js');
+      const wasm = await import('/wasm/rustscript_web.js');
       await wasm.default();
       return wasm.get_diagnostics('function main( { }');
     });

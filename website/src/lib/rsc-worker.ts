@@ -10,7 +10,7 @@ import init, {
   get_diagnostics,
   hover,
   translate_rustdoc,
-} from '@/wasm/rsc_web';
+} from '@/wasm/rustscript_web';
 
 let ready = false;
 

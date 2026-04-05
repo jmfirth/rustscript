@@ -1,0 +1,21 @@
+[package]
+name = "rustscript-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustscript-syntax = { path = "../rustscript-syntax" }
+rustscript-parser = { path = "../rustscript-parser" }
+rustscript-lower = { path = "../rustscript-lower" }
+rustscript-driver = { path = "../rustscript-driver" }
+rustscript-hover = { path = "../rustscript-hover" }
+rustscript-fmt = { path = "../rustscript-fmt" }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
+dashmap = "6"
+thiserror = { workspace = true }
+serde_json = "1"
+
+[dev-dependencies]
+tower-lsp = "0.20"
