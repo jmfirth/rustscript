@@ -79,11 +79,13 @@ function ItemSection({
   );
 }
 
-/** Strip markdown code fences and doc comment prefix from translator output */
+/** Strip markdown code fences and doc prefix from translator output.
+ *  The translator emits "docs\n---\n```rustscript\nsignature\n```".
+ *  We want only the signature. Find the LAST ```rustscript fence. */
 function stripCodeFences(sig: string): string {
-  // Remove everything before the code fence (docs are shown separately)
-  const fenceStart = sig.indexOf('```');
-  const cleaned = fenceStart >= 0 ? sig.substring(fenceStart) : sig;
+  // Find the last ```rustscript fence — that's the actual signature
+  const lastFence = sig.lastIndexOf('```rustscript');
+  const cleaned = lastFence >= 0 ? sig.substring(lastFence) : sig;
   return cleaned
     .replace(/^```\w*\n?/gm, '')
     .replace(/^```$/gm, '')
