@@ -130,22 +130,22 @@ const examples = [
   {
     name: 'REST API',
     description: 'Book catalog with axum + serde. 8 endpoints, typed JSON responses, filter/map/reduce.',
-    href: 'https://github.com/user/rsc/tree/main/examples/json_api',
+    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/json_api',
   },
   {
     name: 'HTTP Client',
     description: 'Async HTTP client with reqwest. Fetch from JSONPlaceholder, parse JSON, process data.',
-    href: 'https://github.com/user/rsc/tree/main/examples/http_client',
+    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/http_client',
   },
   {
     name: 'CLI Tool',
     description: 'Task manager with command dispatch, search, filtering, and formatted output.',
-    href: 'https://github.com/user/rsc/tree/main/examples/cli_tool',
+    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/cli_tool',
   },
   {
     name: 'Tauri Desktop App',
     description: 'Notes app with RustScript backend, React frontend, and shared types via rsc types.',
-    href: 'https://github.com/user/rsc/tree/main/examples/tauri_notes',
+    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/tauri_notes',
   },
 ];
 
@@ -280,15 +280,18 @@ export default function HomePage() {
           </p>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {examples.map((example) => (
-              <div
+              <a
                 key={example.name}
-                className="p-6 rounded-lg border border-[var(--color-border)]"
+                href={example.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-6 rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors group"
               >
-                <h3 className="font-semibold mb-2">{example.name}</h3>
+                <h3 className="font-semibold mb-2 group-hover:text-[var(--color-accent)] transition-colors">{example.name}</h3>
                 <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
                   {example.description}
                 </p>
-              </div>
+              </a>
             ))}
           </div>
         </div>
