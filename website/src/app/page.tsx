@@ -46,9 +46,9 @@ rsc run`;
 
 const stats = [
   { value: '2,600+', label: 'Tests' },
-  { value: '330+', label: 'Builtins' },
+  { value: '330+', label: 'Built-in Methods' },
   { value: '11', label: 'Crates' },
-  { value: '0', label: 'Conformance Gaps' },
+  { value: '195', label: 'Conformance Tests' },
 ];
 
 const features = [
@@ -56,7 +56,7 @@ const features = [
     title: 'Familiar Syntax',
     bullets: [
       'Every TypeScript pattern: classes, generics, async/await, destructuring',
-      '330+ standard library methods: map, filter, reduce, find, forEach',
+      '330+ built-in methods: map, filter, reduce, find, forEach, and more',
       'Template literals, optional chaining, nullish coalescing, spread',
       'String unions, type aliases, interfaces, discriminated unions',
     ],
@@ -128,24 +128,24 @@ const features = [
 
 const examples = [
   {
+    name: 'Tauri Desktop App',
+    description: 'Notes app with RustScript backend, React frontend, shared types, and @command decorators.',
+    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/tauri_notes',
+  },
+  {
     name: 'REST API',
-    description: 'Book catalog with axum + serde. 8 endpoints, typed JSON responses, filter/map/reduce.',
+    description: 'Book catalog with axum + serde. Typed JSON responses, filter/map/reduce pipelines.',
     href: 'https://github.com/jmfirth/rustscript/tree/main/examples/json_api',
   },
   {
     name: 'HTTP Client',
-    description: 'Async HTTP client with reqwest. Fetch from JSONPlaceholder, parse JSON, process data.',
+    description: 'Async HTTP client with reqwest. Parallel fetches with Promise.all, typed responses.',
     href: 'https://github.com/jmfirth/rustscript/tree/main/examples/http_client',
   },
   {
     name: 'CLI Tool',
-    description: 'Task manager with command dispatch, search, filtering, and formatted output.',
+    description: 'Task manager with clap. Command dispatch, search, filtering, and formatted output.',
     href: 'https://github.com/jmfirth/rustscript/tree/main/examples/cli_tool',
-  },
-  {
-    name: 'Tauri Desktop App',
-    description: 'Notes app with RustScript backend, React frontend, and shared types via rsc types.',
-    href: 'https://github.com/jmfirth/rustscript/tree/main/examples/tauri_notes',
   },
 ];
 
@@ -269,8 +269,39 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Examples */}
+      {/* Crate docs */}
       <section className="py-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 className="text-3xl font-bold mb-4">
+            Every Rust crate, in TypeScript syntax
+          </h2>
+          <p className="text-[var(--color-text-secondary)] mb-8 max-w-2xl mx-auto">
+            The entire Rust ecosystem already speaks your language. Browse any crate,
+            any version, with its public API translated to RustScript syntax on demand.
+            Powered by rustdoc JSON and WebAssembly.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3 mb-8">
+            {['axum', 'serde', 'tokio', 'clap', 'reqwest', 'sqlx'].map((crate_name) => (
+              <Link
+                key={crate_name}
+                href={`/crates?name=${crate_name}&version=latest`}
+                className="px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm font-mono hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
+              >
+                {crate_name}
+              </Link>
+            ))}
+          </div>
+          <Link
+            href="/crates"
+            className="inline-flex items-center px-8 py-3 rounded-lg bg-[var(--color-accent)] text-white font-medium hover:opacity-90 transition-opacity"
+          >
+            Browse All Crates &rarr;
+          </Link>
+        </div>
+      </section>
+
+      {/* Examples */}
+      <section className="py-20 bg-[var(--color-bg-secondary)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-center mb-4">
             Real-world examples
@@ -285,7 +316,7 @@ export default function HomePage() {
                 href={example.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-6 rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors group"
+                className="p-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-accent)] transition-colors group"
               >
                 <h3 className="font-semibold mb-2 group-hover:text-[var(--color-accent)] transition-colors">{example.name}</h3>
                 <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
@@ -294,25 +325,6 @@ export default function HomePage() {
               </a>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* Crate docs CTA */}
-      <section className="py-16 bg-[var(--color-bg-secondary)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-2xl font-bold mb-3">
-            Browse crate APIs in RustScript syntax
-          </h2>
-          <p className="text-[var(--color-text-secondary)] mb-6 max-w-lg mx-auto">
-            Look up any Rust crate and see its public API translated to familiar
-            TypeScript-style signatures. Powered by rustdoc JSON and WebAssembly.
-          </p>
-          <Link
-            href="/crates"
-            className="inline-flex items-center px-8 py-3 rounded-lg border border-[var(--color-border)] font-medium hover:bg-[var(--color-bg)] transition-colors"
-          >
-            Explore Crates &rarr;
-          </Link>
         </div>
       </section>
 
