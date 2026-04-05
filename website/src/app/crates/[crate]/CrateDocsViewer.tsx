@@ -87,6 +87,36 @@ function stripCodeFences(sig: string): string {
     .trim();
 }
 
+/** Standard Rust trait impl methods that are noise for RustScript developers */
+const FILTERED_NAMES = new Set([
+  'borrow', 'borrow_mut',
+  'from', 'into', 'try_from', 'try_into',
+  'as_ref', 'as_mut',
+  'deref', 'deref_mut',
+  'drop',
+  'clone', 'clone_from',
+  'default',
+  'eq', 'ne', 'partial_cmp', 'cmp',
+  'hash',
+  'fmt',
+  'type_id',
+]);
+
+/** Filter out standard trait impls and internal items */
+function filterItems(items: TranslatedItem[]): TranslatedItem[] {
+  return items.filter(item => {
+    // Filter out standard trait impl methods
+    if (item.kind === 'function' && FILTERED_NAMES.has(item.name)) {
+      return false;
+    }
+    // Filter out items starting with underscore (internal)
+    if (item.name.startsWith('_')) {
+      return false;
+    }
+    return true;
+  });
+}
+
 function DocItem({ item }: { item: TranslatedItem }) {
   const signature = stripCodeFences(item.signature);
 
@@ -107,9 +137,10 @@ function DocItem({ item }: { item: TranslatedItem }) {
         <code className="rustscript">{signature}</code>
       </pre>
       {item.docs && (
-        <div className="px-4 py-3 text-sm text-[var(--color-text-secondary)] border-t border-[var(--color-border)] leading-relaxed whitespace-pre-wrap">
-          {item.docs}
-        </div>
+        <div
+          className="px-4 py-3 text-sm text-[var(--color-text-secondary)] border-t border-[var(--color-border)] leading-relaxed [&_code]:bg-[var(--color-code-bg)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono [&_a]:text-[var(--color-accent)] [&_a]:underline"
+          dangerouslySetInnerHTML={{ __html: item.docs }}
+        />
       )}
     </div>
   );
@@ -189,7 +220,7 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
     }
   };
 
-  const grouped = items ? groupItems(items) : null;
+  const grouped = items ? groupItems(filterItems(items)) : null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
