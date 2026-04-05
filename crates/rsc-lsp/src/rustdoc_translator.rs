@@ -286,7 +286,20 @@ pub fn translate_type(ty: &RustdocType) -> String {
             )
         }
 
-        RustdocType::QualifiedPath { name } => name.clone(),
+        RustdocType::QualifiedPath {
+            name,
+            self_type,
+            trait_name: _,
+        } => {
+            match self_type.as_deref() {
+                // <Self as Trait>::Item -> just "Item"
+                Some(RustdocType::Generic(g)) if g == "Self" => name.clone(),
+                // <T as Trait>::Item -> "T.Item" (RustScript dot notation)
+                Some(RustdocType::Generic(g)) => format!("{g}.{name}"),
+                // Anything else -> just the name
+                _ => name.clone(),
+            }
+        }
 
         RustdocType::Infer => "(inferred)".to_owned(),
 
@@ -1038,5 +1051,132 @@ mod tests {
             },
         ];
         assert_eq!(translate_generic_params(&params), "<K extends Eq, V>");
+    }
+
+    // ----- Where clause rendering tests -----
+
+    #[test]
+    fn test_translate_function_where_clause_bounds() {
+        // Simulates a function with where clause bounds already merged into generics.
+        let func = RustdocFunction {
+            generics: vec![RustdocGenericParam {
+                name: "H".to_owned(),
+                bounds: vec!["Handler".to_owned(), "Clone".to_owned()],
+            }],
+            params: vec![("h".to_owned(), RustdocType::Generic("H".to_owned()))],
+            return_type: None,
+            is_async: false,
+            is_unsafe: false,
+            has_self: false,
+            parent_type: None,
+        };
+        assert_eq!(
+            translate_function("handler", &func),
+            "function handler<H extends Handler & Clone>(h: H): void"
+        );
+    }
+
+    #[test]
+    fn test_translate_function_where_clause_with_multiple_params() {
+        let func = RustdocFunction {
+            generics: vec![
+                RustdocGenericParam {
+                    name: "T".to_owned(),
+                    bounds: vec!["Debug".to_owned(), "Clone".to_owned()],
+                },
+                RustdocGenericParam {
+                    name: "U".to_owned(),
+                    bounds: vec!["Send".to_owned()],
+                },
+            ],
+            params: vec![
+                ("x".to_owned(), RustdocType::Generic("T".to_owned())),
+                ("y".to_owned(), RustdocType::Generic("U".to_owned())),
+            ],
+            return_type: Some(RustdocType::Primitive("i32".to_owned())),
+            is_async: false,
+            is_unsafe: false,
+            has_self: false,
+            parent_type: None,
+        };
+        assert_eq!(
+            translate_function("process", &func),
+            "function process<T extends Debug & Clone, U extends Send>(x: T, y: U): i32"
+        );
+    }
+
+    // ----- QualifiedPath translation tests -----
+
+    #[test]
+    fn test_translate_qualified_path_self_shows_name() {
+        // <Self as Iterator>::Item -> "Item"
+        let ty = RustdocType::QualifiedPath {
+            name: "Item".to_owned(),
+            self_type: Some(Box::new(RustdocType::Generic("Self".to_owned()))),
+            trait_name: Some("Iterator".to_owned()),
+        };
+        assert_eq!(translate_type(&ty), "Item");
+    }
+
+    #[test]
+    fn test_translate_qualified_path_generic_dot_notation() {
+        // <T as Add>::Output -> "T.Output"
+        let ty = RustdocType::QualifiedPath {
+            name: "Output".to_owned(),
+            self_type: Some(Box::new(RustdocType::Generic("T".to_owned()))),
+            trait_name: Some("Add".to_owned()),
+        };
+        assert_eq!(translate_type(&ty), "T.Output");
+    }
+
+    #[test]
+    fn test_translate_qualified_path_no_self_type() {
+        // When self_type is None, just show the name.
+        let ty = RustdocType::QualifiedPath {
+            name: "Item".to_owned(),
+            self_type: None,
+            trait_name: Some("Iterator".to_owned()),
+        };
+        assert_eq!(translate_type(&ty), "Item");
+    }
+
+    #[test]
+    fn test_translate_qualified_path_non_generic_self_type() {
+        // When self_type is a resolved path (not a generic), just show the name.
+        let ty = RustdocType::QualifiedPath {
+            name: "Item".to_owned(),
+            self_type: Some(Box::new(RustdocType::ResolvedPath {
+                name: "Vec".to_owned(),
+                args: vec![RustdocType::Primitive("i32".to_owned())],
+            })),
+            trait_name: Some("IntoIterator".to_owned()),
+        };
+        assert_eq!(translate_type(&ty), "Item");
+    }
+
+    #[test]
+    fn test_translate_function_with_qualified_path_return() {
+        // fn next(&self) -> Option<<Self as Iterator>::Item>
+        // should render as: function Iterator.next(): Item | null
+        let func = RustdocFunction {
+            generics: vec![],
+            params: vec![],
+            return_type: Some(RustdocType::ResolvedPath {
+                name: "Option".to_owned(),
+                args: vec![RustdocType::QualifiedPath {
+                    name: "Item".to_owned(),
+                    self_type: Some(Box::new(RustdocType::Generic("Self".to_owned()))),
+                    trait_name: Some("Iterator".to_owned()),
+                }],
+            }),
+            is_async: false,
+            is_unsafe: false,
+            has_self: true,
+            parent_type: Some("Iterator".to_owned()),
+        };
+        assert_eq!(
+            translate_function("next", &func),
+            "function Iterator.next(): Item | null"
+        );
     }
 }
