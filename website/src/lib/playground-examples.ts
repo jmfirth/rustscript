@@ -315,38 +315,30 @@ function main() {
     id: 'concurrency',
     label: 'Concurrency',
     rts: `/** Simulate a slow computation */
-async function compute(label: string, ms: i32): string {
+async function compute(label: string, value: i32): string {
   console.log(\`[\${label}] starting...\`);
-  return \`\${label} done in \${ms}ms\`;
+  return \`\${label} = \${value}\`;
 }
 
 async function main() {
   // Sequential
-  const a = await compute("task-1", 100);
+  const a = await compute("task-1", 10);
   console.log(a);
 
   // Parallel with Promise.all
   const [b, c, d] = await Promise.all([
-    compute("task-2", 200),
-    compute("task-3", 150),
-    compute("task-4", 300),
+    compute("task-2", 20),
+    compute("task-3", 30),
+    compute("task-4", 40),
   ]);
   console.log(b);
   console.log(c);
   console.log(d);
 
-  // Shared mutable state across tasks
-  const counter = shared<i32>(0);
-
-  spawn(() => {
-    *counter += 1;
-  });
-
-  spawn(() => {
-    *counter += 1;
-  });
-
-  console.log(\`Counter: \${*counter}\`);
+  // Shared mutable state (Arc<Mutex<T>>)
+  const counter: shared<i32> = shared(0);
+  const val = counter.lock();
+  console.log(\`Counter: \${val}\`);
 }`,
   },
 ];
