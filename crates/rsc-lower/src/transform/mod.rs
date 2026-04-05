@@ -186,10 +186,40 @@ pub(crate) struct Transform {
 ///
 /// Handles the special mapping `@tokio_test` → `#[tokio::test]`.
 /// All other decorators map directly: `@name(args)` → `#[name(args)]`.
-fn lower_decorator(decorator: &ast::Decorator) -> RustAttribute {
+/// Build a map of imported name → crate source path from the module's imports.
+/// e.g., `import { command } from "tauri"` → `{"command": "tauri"}`.
+fn build_import_source_map(module: &ast::Module) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for item in &module.items {
+        match &item.kind {
+            ast::ItemKind::Import(import) => {
+                for name in &import.names {
+                    map.insert(name.name.clone(), import.source.value.clone());
+                }
+            }
+            ast::ItemKind::ReExport(reexport) => {
+                for name in &reexport.names {
+                    map.insert(name.name.clone(), reexport.source.value.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+fn lower_decorator(
+    decorator: &ast::Decorator,
+    import_sources: &HashMap<String, String>,
+) -> RustAttribute {
     // Special mapping: @tokio_test → #[tokio::test]
     let path = if decorator.name == "tokio_test" {
         "tokio::test".to_owned()
+    } else if let Some(crate_source) = import_sources.get(&decorator.name) {
+        // Decorator was imported from a crate: @command from "tauri" → #[tauri::command]
+        // Convert the source path: "tauri" → "tauri", "tauri/macros" → "tauri::macros"
+        let crate_path = crate_source.replace('/', "::");
+        format!("{crate_path}::{}", decorator.name)
     } else {
         decorator.name.clone()
     };
@@ -204,7 +234,10 @@ fn lower_decorator(decorator: &ast::Decorator) -> RustAttribute {
 /// Returns `(attributes, extra_derives)` where:
 /// - `attributes` are non-derive attributes to add to the IR item
 /// - `extra_derives` are derive macro names extracted from `@derive(...)` decorators
-fn lower_decorators(decorators: &[ast::Decorator]) -> (Vec<RustAttribute>, Vec<String>) {
+fn lower_decorators(
+    decorators: &[ast::Decorator],
+    import_sources: &HashMap<String, String>,
+) -> (Vec<RustAttribute>, Vec<String>) {
     let mut attributes = Vec::new();
     let mut extra_derives = Vec::new();
     for decorator in decorators {
@@ -219,7 +252,7 @@ fn lower_decorators(decorators: &[ast::Decorator]) -> (Vec<RustAttribute>, Vec<S
                 }
             }
         } else {
-            attributes.push(lower_decorator(decorator));
+            attributes.push(lower_decorator(decorator, import_sources));
         }
     }
     (attributes, extra_derives)
@@ -404,9 +437,13 @@ impl Transform {
         let mut crate_deps: HashSet<CrateDependency> = HashSet::new();
         let mut needs_async_runtime = async_lower::module_needs_async_runtime(module);
 
+        // Build import source map for decorator → attribute resolution.
+        let import_sources = build_import_source_map(module);
+
         for item in &module.items {
             let exported = item.exported;
-            let (decorator_attrs, decorator_derives) = lower_decorators(&item.decorators);
+            let (decorator_attrs, decorator_derives) =
+                lower_decorators(&item.decorators, &import_sources);
             let items_before = items.len();
             match &item.kind {
                 ast::ItemKind::Function(f) => {
