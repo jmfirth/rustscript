@@ -47,13 +47,13 @@ examples: build
     echo "Done."
 
 # Build the WASM binary and install into website
-wasm:
+web-wasm:
     wasm-pack build crates/rsc-web --target web --out-dir ../../website/src/wasm
     rm -rf website/public/wasm
     cp -r website/src/wasm website/public/wasm
 
 # Build the website (builds WASM first)
-web: wasm
+web: web-wasm
     cd website && npm install && npm run build
 
 # Run website e2e tests
