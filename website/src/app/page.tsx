@@ -39,10 +39,10 @@ fn main() {
     println!("{}", serde_json::to_string(&top).unwrap());
 }`;
 
-const installCode = `cargo install rsc
-rsc init my-app --template web-server
+const installCode = `cargo install rustscript
+rustscript init my-app --template web-server
 cd my-app
-rsc run`;
+rustscript run`;
 
 const stats = [
   { value: '2,600+', label: 'Tests' },
