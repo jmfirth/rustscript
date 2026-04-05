@@ -1,5 +1,7 @@
 # Build artifacts
 target/
+website/src/wasm/
+website/out/
 
 # Private (local-only, not published)
 private/
