@@ -112,15 +112,17 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
   });
 }
 
-/** Deduplicate items by name + signature (trait methods appear once per impl) */
+/** Deduplicate items by kind + name, keeping the entry with the most docs */
 function deduplicateItems(items: TranslatedItem[]): TranslatedItem[] {
-  const seen = new Set<string>();
-  return items.filter(item => {
-    const key = `${item.kind}:${item.name}:${stripCodeFences(item.signature)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const best = new Map<string, TranslatedItem>();
+  for (const item of items) {
+    const key = `${item.kind}:${item.name}`;
+    const existing = best.get(key);
+    if (!existing || (item.docs?.length ?? 0) > (existing.docs?.length ?? 0)) {
+      best.set(key, item);
+    }
+  }
+  return Array.from(best.values());
 }
 
 function DocItem({ item }: { item: TranslatedItem }) {
