@@ -3,15 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import Editor, { type Monaco, type OnMount } from '@monaco-editor/react';
+import type { editor as monacoEditor, IPosition } from 'monaco-editor';
 import {
   rustscriptLanguageId,
   rustscriptLanguageConfig,
   rustscriptMonarchLanguage,
 } from '@/lib/rustscript-monarch';
 import { examples, type PlaygroundExample } from '@/lib/playground-examples';
+import { useCompiler } from '@/lib/use-compiler';
+import type { Diagnostic } from '@/lib/rsc-compiler';
 
 const LIGHT_THEME = 'rustscript-light';
 const DARK_THEME = 'rustscript-dark';
+
+type CompilationStatus =
+  | { kind: 'initializing' }
+  | { kind: 'ready' }
+  | { kind: 'compiling' }
+  | { kind: 'success' }
+  | { kind: 'errors'; count: number };
 
 function defineThemes(monaco: Monaco) {
   monaco.editor.defineTheme(LIGHT_THEME, {
@@ -91,14 +101,66 @@ function registerRustScriptLanguage(monaco: Monaco) {
   }
 }
 
+function severityToMonaco(severity: Diagnostic['severity'], monaco: Monaco): number {
+  switch (severity) {
+    case 'error':
+      return monaco.MarkerSeverity.Error;
+    case 'warning':
+      return monaco.MarkerSeverity.Warning;
+    case 'info':
+      return monaco.MarkerSeverity.Info;
+    default:
+      return monaco.MarkerSeverity.Info;
+  }
+}
+
+function statusText(status: CompilationStatus): string {
+  switch (status.kind) {
+    case 'initializing':
+      return 'Initializing compiler...';
+    case 'ready':
+      return 'Ready';
+    case 'compiling':
+      return 'Compiling...';
+    case 'success':
+      return 'Compiled successfully';
+    case 'errors':
+      return `${status.count} error${status.count === 1 ? '' : 's'}`;
+  }
+}
+
+function statusColor(status: CompilationStatus): string {
+  switch (status.kind) {
+    case 'initializing':
+    case 'compiling':
+      return 'var(--color-text-secondary)';
+    case 'ready':
+      return 'var(--color-text-secondary)';
+    case 'success':
+      return '#16A34A';
+    case 'errors':
+      return '#DC2626';
+  }
+}
+
+const DEBOUNCE_MS = 300;
+
 export function PlaygroundEditor() {
   const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [selectedExample, setSelectedExample] = useState<PlaygroundExample>(examples[0]);
   const [rtsCode, setRtsCode] = useState(examples[0].rts);
+  const [rustOutput, setRustOutput] = useState('// Initializing compiler...');
+  const [status, setStatus] = useState<CompilationStatus>({ kind: 'initializing' });
   const [banner, setBanner] = useState<string | null>(null);
+
   const monacoRef = useRef<Monaco | null>(null);
+  const rtsEditorRef = useRef<monacoEditor.IStandaloneCodeEditor | null>(null);
   const bannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const compileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverDisposableRef = useRef<{ dispose: () => void } | null>(null);
+
+  const compiler = useCompiler();
 
   useEffect(() => {
     setMounted(true);
@@ -113,31 +175,141 @@ export function PlaygroundEditor() {
     }
   }, [resolvedTheme, mounted]);
 
+  // Compile function that updates output and diagnostics
+  const doCompile = useCallback(async (source: string) => {
+    if (!compiler.ready) return;
+
+    setStatus({ kind: 'compiling' });
+
+    try {
+      const result = await compiler.compile(source);
+
+      setRustOutput(result.rust_source || '// No output');
+
+      // Set markers on the RustScript editor
+      if (monacoRef.current && rtsEditorRef.current) {
+        const model = rtsEditorRef.current.getModel();
+        if (model) {
+          const markers = result.diagnostics.map((d: Diagnostic) => ({
+            severity: severityToMonaco(d.severity, monacoRef.current!),
+            message: d.message,
+            startLineNumber: d.line ?? 1,
+            startColumn: d.column ?? 1,
+            endLineNumber: d.line ?? 1,
+            endColumn: (d.column ?? 1) + 1,
+          }));
+          monacoRef.current.editor.setModelMarkers(model, 'rustscript', markers);
+        }
+      }
+
+      const errorCount = result.diagnostics.filter(
+        (d: Diagnostic) => d.severity === 'error'
+      ).length;
+
+      if (errorCount > 0) {
+        setStatus({ kind: 'errors', count: errorCount });
+      } else {
+        setStatus({ kind: 'success' });
+      }
+    } catch (err) {
+      setRustOutput(`// Compilation error: ${err}`);
+      setStatus({ kind: 'errors', count: 1 });
+    }
+  }, [compiler]);
+
+  // When compiler becomes ready, compile the initial example and register hover
+  useEffect(() => {
+    if (compiler.ready) {
+      setStatus({ kind: 'ready' });
+      doCompile(rtsCode);
+
+      // Register hover provider
+      if (monacoRef.current && !hoverDisposableRef.current) {
+        const monaco = monacoRef.current;
+        hoverDisposableRef.current = monaco.languages.registerHoverProvider(
+          rustscriptLanguageId,
+          {
+            provideHover: async (model: monacoEditor.ITextModel, position: IPosition) => {
+              const source = model.getValue();
+              try {
+                const info = await compiler.getHover(
+                  source,
+                  position.lineNumber,
+                  position.column
+                );
+                if (info && info.trim().length > 0) {
+                  return {
+                    range: new monaco.Range(
+                      position.lineNumber,
+                      position.column,
+                      position.lineNumber,
+                      position.column
+                    ),
+                    contents: [
+                      {
+                        value: info,
+                        isTrusted: true,
+                      },
+                    ],
+                  };
+                }
+              } catch {
+                // Hover failed silently
+              }
+              return null;
+            },
+          }
+        );
+      }
+    }
+
+    return () => {
+      if (hoverDisposableRef.current) {
+        hoverDisposableRef.current.dispose();
+        hoverDisposableRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compiler.ready]);
+
+  // Debounced compilation on code change
+  const handleCodeChange = useCallback(
+    (value: string | undefined) => {
+      const source = value ?? '';
+      setRtsCode(source);
+
+      if (compileTimeoutRef.current) {
+        clearTimeout(compileTimeoutRef.current);
+      }
+
+      compileTimeoutRef.current = setTimeout(() => {
+        doCompile(source);
+      }, DEBOUNCE_MS);
+    },
+    [doCompile]
+  );
+
   const handleBeforeMount = useCallback((monaco: Monaco) => {
     monacoRef.current = monaco;
     registerRustScriptLanguage(monaco);
     defineThemes(monaco);
   }, []);
 
-  const handleEditorMount: OnMount = useCallback(() => {
-    // Editor is ready
+  const handleEditorMount: OnMount = useCallback((editor) => {
+    rtsEditorRef.current = editor;
   }, []);
 
-  const handleExampleChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const example = examples.find((ex) => ex.id === e.target.value);
-    if (example) {
-      setSelectedExample(example);
-      setRtsCode(example.rts);
-    }
-  }, []);
-
-  const handleCompile = useCallback(() => {
-    setBanner('WASM compilation coming soon -- this is a preview of the editor experience');
-    if (bannerTimeoutRef.current) {
-      clearTimeout(bannerTimeoutRef.current);
-    }
-    bannerTimeoutRef.current = setTimeout(() => setBanner(null), 4000);
-  }, []);
+  const handleExampleChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const example = examples.find((ex) => ex.id === e.target.value);
+      if (example) {
+        setSelectedExample(example);
+        setRtsCode(example.rts);
+        doCompile(example.rts);
+      }
+    },
+    [doCompile]
+  );
 
   const handleCopyRts = useCallback(async () => {
     try {
@@ -152,14 +324,14 @@ export function PlaygroundEditor() {
 
   const handleCopyRs = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(selectedExample.rs);
+      await navigator.clipboard.writeText(rustOutput);
       setBanner('Rust output copied to clipboard');
       if (bannerTimeoutRef.current) clearTimeout(bannerTimeoutRef.current);
       bannerTimeoutRef.current = setTimeout(() => setBanner(null), 2000);
     } catch {
       // Clipboard API not available
     }
-  }, [selectedExample.rs]);
+  }, [rustOutput]);
 
   const monacoTheme = resolvedTheme === 'dark' ? DARK_THEME : LIGHT_THEME;
 
@@ -207,13 +379,6 @@ export function PlaygroundEditor() {
           ))}
         </select>
 
-        <button
-          onClick={handleCompile}
-          className="h-8 px-4 text-sm font-medium rounded-md bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity"
-        >
-          Compile
-        </button>
-
         <div className="flex-1" />
 
         <button
@@ -251,7 +416,7 @@ export function PlaygroundEditor() {
             <Editor
               language={rustscriptLanguageId}
               value={rtsCode}
-              onChange={(value) => setRtsCode(value ?? '')}
+              onChange={handleCodeChange}
               theme={monacoTheme}
               beforeMount={handleBeforeMount}
               onMount={handleEditorMount}
@@ -278,7 +443,7 @@ export function PlaygroundEditor() {
           <div className="flex-1 min-h-0">
             <Editor
               language="rust"
-              value={selectedExample.rs}
+              value={rustOutput}
               theme={monacoTheme}
               beforeMount={handleBeforeMount}
               options={{
@@ -297,12 +462,12 @@ export function PlaygroundEditor() {
       </div>
 
       {/* Status bar */}
-      <div className="flex items-center justify-between px-4 py-1.5 text-xs text-[var(--color-text-secondary)] bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)] shrink-0">
-        <span>
+      <div className="flex items-center justify-between px-4 py-1.5 text-xs bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)] shrink-0">
+        <span className="text-[var(--color-text-secondary)]">
           Example: {selectedExample.label}
         </span>
-        <span>
-          RustScript Playground (Preview)
+        <span style={{ color: statusColor(status) }}>
+          {statusText(status)}
         </span>
       </div>
     </div>
