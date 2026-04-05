@@ -5,7 +5,7 @@ import { Footer } from '@/components/Footer';
 import '@/styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'RustScript - Write TypeScript. Ship Rust.',
+  title: 'RustScript - Ship Rust. Write TypeScript.',
   description:
     'A TypeScript-native authoring language that compiles to idiomatic Rust. 3MB binaries. No V8. No garbage collector.',
 };

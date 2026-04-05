@@ -1,6 +1,6 @@
 # RustScript
 
-**Write TypeScript. Ship Rust.**
+**Ship Rust. Write TypeScript.**
 
 RustScript compiles TypeScript syntax to idiomatic Rust. No runtime, no GC, no lock-in. The generated `.rs` files are human-readable, compile with standard `rustc`, and use normal crates from crates.io. If you ever want out, run `rustscript eject` and keep going in pure Rust.
 

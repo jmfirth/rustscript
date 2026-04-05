@@ -7,7 +7,7 @@ export function Footer() {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <Logo />
           <p className="text-sm text-[var(--color-text-secondary)]">
-            Write TypeScript. Ship Rust.
+            Ship Rust. Write TypeScript.
           </p>
         </div>
       </div>

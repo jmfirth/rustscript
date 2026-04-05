@@ -1,7 +1,7 @@
 # RustScript Language Reference (llms.txt)
 
 > RustScript is a TypeScript-syntax language that compiles to idiomatic Rust.
-> Write TypeScript. Ship Rust. No V8, no npm — you get Rust and crates.
+> Ship Rust. Write TypeScript. No V8, no npm — you get Rust and crates.
 
 ## Quick Mental Model
 
