@@ -70,11 +70,9 @@ function ItemSection({
           ({items.length})
         </span>
       </h2>
-      <div className="space-y-6">
-        {items.map((item) => (
-          <DocItem key={`${item.module ?? ''}::${item.name}`} item={item} />
-        ))}
-      </div>
+      <pre className="bg-[var(--color-code-bg)] rounded-lg p-4 overflow-x-auto text-sm font-mono leading-relaxed">
+        <code>{items.map((item) => formatSignature(stripCodeFences(item.signature))).join('\n')}</code>
+      </pre>
     </section>
   );
 }
