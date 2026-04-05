@@ -8,12 +8,13 @@ See `SPECIFICATION.md` for the full language design.
 
 ## Project State
 
-Pre-release. Full TypeScript syntax coverage, complete builtin library, Tier 2 error enrichment, 2,500+ tests. Conformance validated with 190 combinatorial tests and 65 real-world stress tests. Architecture cleaned up. Remaining: 7 known conformance gaps (switch inference, closure struct returns, multi-generic tuples), then Phase 7 (website/playground/docs).
+Pre-release complete. Full TypeScript syntax coverage, complete builtin library, Tier 2 error enrichment, 2,600+ tests. Zero conformance gaps. Remaining: Phase 7 (website/playground/docs).
 
 ## Key Documents
 
 | Document | Purpose | Read when |
 |----------|---------|-----------|
+| `llms.txt` | **Compact language reference** — syntax, builtins, type mapping, crate integration | **Before writing any RustScript code** |
 | `SPECIFICATION.md` | Language design, syntax, semantics, compilation model | Before any design decision |
 | `PLAN.md` | Task plan, dependencies, status tracking | Before starting any work |
 | `PROCESS.md` | Agent workflow, quality gates, task lifecycle | Before any work |

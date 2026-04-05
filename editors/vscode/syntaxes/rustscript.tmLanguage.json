@@ -8,6 +8,7 @@
     { "include": "#template-literals" },
     { "include": "#numeric-literals" },
     { "include": "#constants" },
+    { "include": "#rust-block" },
     { "include": "#keywords" },
     { "include": "#storage-types" },
     { "include": "#function-declaration" },
@@ -24,6 +25,23 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "rust-block": {
+      "comment": "rust { ... } escape hatch — embedded Rust syntax highlighting",
+      "begin": "\\b(rust)\\s*(\\{)",
+      "end": "\\}",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.rust-block.rustscript" },
+        "2": { "name": "meta.brace.curly.rustscript" }
+      },
+      "endCaptures": {
+        "0": { "name": "meta.brace.curly.rustscript" }
+      },
+      "name": "meta.embedded.block.rust.rustscript",
+      "contentName": "source.rust",
+      "patterns": [
+        { "include": "source.rust" }
+      ]
+    },
     "comments": {
       "patterns": [
         {
@@ -174,8 +192,8 @@
           "match": "\\bmove\\b"
         },
         {
-          "name": "keyword.other.rust-block.rustscript",
-          "match": "\\brust\\b"
+          "name": "keyword.other.derives.rustscript",
+          "match": "\\bderives\\b"
         },
         {
           "name": "keyword.other.shared.rustscript",

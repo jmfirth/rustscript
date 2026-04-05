@@ -1,0 +1,684 @@
+# RustScript Language Reference (llms.txt)
+
+> RustScript is a TypeScript-syntax language that compiles to idiomatic Rust.
+> Write TypeScript. Ship Rust. No V8, no npm — you get Rust and crates.
+
+## Quick Mental Model
+
+If you know TypeScript AND Rust, RustScript is: TypeScript syntax with Rust semantics. The compiler translates `.rts` files to `.rs` files, then runs `cargo build`. The output is a native binary.
+
+Key translation rules:
+- `string` → `String`
+- `Array<T>` → `Vec<T>`
+- `Map<K, V>` → `HashMap<K, V>`
+- `Set<T>` → `HashSet<T>`
+- `T | null` → `Option<T>`
+- `Promise<T>` → async/tokio
+- `console.log(x)` → `println!("{}", x)`
+- `import { X } from "crate"` → `use crate::X;`
+
+## File Extension
+
+`.rts` — RustScript source files.
+
+## Project Structure
+
+```
+my-project/
+  cargo.toml          # Minimal: package name + edition
+  src/
+    index.rts          # Entry point (must have `function main()`)
+```
+
+The compiler generates `.rsc-build/` with the actual Cargo project, Cargo.toml (with detected dependencies), and `.rs` output.
+
+## Tooling
+
+```bash
+rsc init my-project              # Create new project
+rsc init my-project --template web-server  # With template (cli, web-server, wasm)
+rsc build                        # Compile to native binary
+rsc run                          # Build and run
+rsc run -- --flag value          # Pass args to the binary
+rsc check                        # Type check without building
+rsc fmt                          # Format .rts files
+```
+
+## Syntax
+
+RustScript uses TypeScript syntax with these differences:
+
+### Types
+
+```typescript
+// Primitives
+const s: string = "hello";         // → String
+const b: boolean = true;           // → bool
+const n: i32 = 42;                 // → i32
+const f: f64 = 3.14;              // → f64
+const v: void = undefined;         // → ()
+
+// Numeric types (explicit, not just "number")
+// i8, i16, i32, i64, u8, u16, u32, u64, f32, f64
+// Default integer literal: i64. Default float literal: f64.
+// Numeric widening is automatic: i32 + i64 → i64
+
+// Collections
+const arr: Array<i32> = [1, 2, 3];           // → Vec<i32>
+const map: Map<string, i32> = new Map();     // → HashMap<String, i32>
+const set: Set<string> = new Set();          // → HashSet<String>
+const tuple: [string, i32] = ["hi", 42];    // → (String, i32)
+
+// Nullable
+const x: string | null = null;              // → Option<String>
+
+// Never
+function fail(): never { throw "error"; }   // → -> !
+```
+
+### Variable Declarations
+
+```typescript
+const x: i32 = 5;          // Immutable binding (let x: i32 = 5; in Rust)
+let y: i32 = 10;           // Mutable binding (let mut y: i32 = 10; in Rust)
+var z: i32 = 15;           // Same as let (mutable)
+```
+
+### Functions
+
+```typescript
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+async function fetchData(): string {
+  // async functions use tokio runtime
+  return "data";
+}
+
+// Arrow functions / closures
+const double = (x: i32): i32 => x * 2;
+const greet = (name: string): string => `Hello, ${name}!`;
+```
+
+### Generics
+
+```typescript
+function identity<T>(value: T): T {
+  return value;
+}
+
+// With explicit type arguments (turbofish in Rust)
+const result = identity<string>("hello");  // → identity::<String>("hello".to_string())
+
+// Multiple type parameters
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+```
+
+### Type Definitions
+
+```typescript
+// Struct types
+type User = {
+  id: u32,
+  name: string,
+  email: string,
+}
+
+// With derive macros
+type ApiResponse = {
+  status: i32,
+  body: string,
+} derives Serialize, Deserialize
+
+// Optional fields
+type Config = {
+  host: string,
+  port?: i32,          // → port: Option<i32>
+}
+
+// Enums (string union → Rust enum)
+type Color = "red" | "green" | "blue";
+// → enum Color { Red, Green, Blue }
+
+// Data enums (discriminated unions)
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 };
+// → enum Shape { Circle { radius: f64 }, Rect { width: f64, height: f64 } }
+```
+
+### Classes
+
+```typescript
+class Animal {
+  name: string;
+  sound: string;
+
+  constructor(name: string, sound: string) {
+    this.name = name;
+    this.sound = sound;
+  }
+
+  speak(): string {
+    return `${this.name} says ${this.sound}`;
+  }
+}
+
+// Inheritance
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    super(name, "woof");
+    this.breed = breed;
+  }
+}
+```
+
+### Control Flow
+
+```typescript
+// If/else
+if (x > 0) { ... } else if (x < 0) { ... } else { ... }
+
+// For-of (iterating collections)
+for (const item of items) { console.log(item); }
+
+// For-in (iterating object keys)
+for (const key in obj) { console.log(key); }
+
+// Classic for
+for (let i: i32 = 0; i < 10; i = i + 1) { ... }
+
+// While / do-while
+while (condition) { ... }
+do { ... } while (condition);
+
+// Switch (compiles to Rust match)
+switch (color) {
+  case "red": console.log("stop");
+  case "green": console.log("go");
+  default: console.log("unknown");
+}
+
+// Labeled loops
+outer: for (const x of xs) {
+  for (const y of ys) {
+    if (y === target) break outer;
+  }
+}
+```
+
+### Error Handling
+
+```typescript
+try {
+  riskyOperation();
+} catch (e) {
+  console.log(e.message);
+  console.log(e.stack);
+}
+
+// throw compiles to panic! or return Err()
+throw "something went wrong";
+throw new Error("message");
+```
+
+### Imports (Crate Integration)
+
+```typescript
+// Import from a Rust crate
+import { Router, serve } from "axum";
+import { get, post } from "axum/routing";
+import { TcpListener } from "tokio/net";
+import { Serialize, Deserialize } from "serde";
+
+// These compile to:
+// use axum::{Router, serve};
+// use axum::routing::{get, post};
+// use tokio::net::TcpListener;
+// use serde::{Serialize, Deserialize};
+```
+
+The compiler auto-detects imported crates and adds them to the generated Cargo.toml.
+
+### Derives
+
+```typescript
+type Point = {
+  x: f64,
+  y: f64,
+} derives Debug, Clone, Serialize
+
+// Compiles to:
+// #[derive(Debug, Clone, Serialize)]
+// struct Point { pub x: f64, pub y: f64 }
+```
+
+### Async/Await
+
+```typescript
+async function fetchUsers(): Array<User> {
+  const response = await fetch("/api/users");
+  return response;
+}
+
+// Promise.all
+const [a, b] = await Promise.all([fetchA(), fetchB()]);
+
+// The compiler uses tokio as the async runtime.
+// async function main() gets #[tokio::main]
+```
+
+### Template Literals
+
+```typescript
+const name = "world";
+console.log(`Hello, ${name}!`);          // → println!("Hello, {}!", name)
+console.log(`Count: ${items.length}`);   // → println!("Count: {}", items.len())
+```
+
+### Destructuring
+
+```typescript
+// Object destructuring
+const { name, age } = user;    // → let User { name, age, .. } = user;
+
+// Array destructuring
+const [first, ...rest] = items;
+
+// In function params
+function greet({ name, age }: User): string { ... }
+```
+
+### Operators
+
+```typescript
+// Nullish coalescing
+const val = x ?? "default";        // → x.unwrap_or_else(|| "default")
+
+// Optional chaining
+const len = str?.length;            // → str.as_ref().map(|s| s.len())
+
+// Spread
+const arr2 = [...arr1, 4, 5];      // → { let mut v = arr1.clone(); v.extend([4, 5]); v }
+
+// typeof (compile-time)
+type T = typeof someValue;
+
+// instanceof
+if (x instanceof MyClass) { ... }  // → true (statically typed)
+```
+
+### Regex
+
+```typescript
+const re = /pattern/i;              // → Regex::new("(?i)pattern").unwrap()
+const match = str.match(re);
+const found = re.test(str);
+```
+
+## Complete Builtin Reference
+
+### console
+
+```
+console.log(value)          → println!("{}", value)
+console.error(value)        → eprintln!("{}", value)
+console.warn(value)         → eprintln!("[WARN] {}", value)
+console.debug(value)        → println!("[DEBUG] {}", value)
+console.table(value)        → println!("{:#?}", value)
+console.dir(value)          → println!("{:#?}", value)
+console.assert(cond, msg)   → assert!(cond, "{}", msg)
+console.time(label)         → (starts timer)
+console.timeEnd(label)      → (prints elapsed)
+console.timeLog(label)      → (prints current elapsed)
+console.count(label)        → (increments and prints counter)
+console.countReset(label)   → (resets counter)
+console.group(label)        → println!("▶ {}", label)
+console.groupEnd()          → (no-op)
+console.clear()             → (ANSI clear)
+console.trace()             → (prints "Trace")
+```
+
+### String Methods
+
+```
+.toUpperCase()        → .to_uppercase()
+.toLowerCase()        → .to_lowercase()
+.startsWith(s)        → .starts_with(s)
+.endsWith(s)          → .ends_with(s)
+.includes(s)          → .contains(s)
+.split(sep)           → .split(sep).map(|s| s.to_string()).collect()
+.trim()               → .trim().to_string()
+.trimStart()          → .trim_start().to_string()
+.trimEnd()            → .trim_end().to_string()
+.replace(a, b)        → .replacen(a, b, 1)
+.replaceAll(a, b)     → .replace(a, b)
+.charAt(i)            → .chars().nth(i)
+.charCodeAt(i)        → .chars().nth(i).map(|c| c as u32)
+.indexOf(s)           → .find(s).map(|i| i as i64).unwrap_or(-1)
+.lastIndexOf(s)       → .rfind(s).map(|i| i as i64).unwrap_or(-1)
+.slice(start, end)    → string slicing
+.substring(start, end)→ string slicing
+.padStart(len, fill)  → format padding
+.padEnd(len, fill)    → format padding
+.repeat(n)            → .repeat(n)
+.concat(s)            → format!("{}{}", self, s)
+.at(i)                → .chars().nth(i)
+.match(regex)         → Regex captures
+.search(regex)        → Regex find
+.matchAll(regex)      → Regex find_iter
+.codePointAt(i)       → .chars().nth(i).map(|c| c as u32)
+.normalize(form)      → (identity — no ICU)
+.localeCompare(s)     → .cmp(s)
+String.fromCharCode(n)→ char::from_u32(n)
+String.raw            → (identity)
+.length               → .len() as i64
+```
+
+### Array Methods
+
+```
+.push(item)           → .push(item)
+.pop()                → .pop()
+.shift()              → .remove(0)
+.unshift(item)        → .insert(0, item)
+.map(fn)              → .iter().map(fn).collect()
+.filter(fn)           → .iter().filter(fn).collect()
+.reduce(fn, init)     → .iter().fold(init, fn)
+.find(fn)             → .iter().find(fn).cloned()
+.forEach(fn)          → .iter().for_each(fn)
+.some(fn)             → .iter().any(fn)
+.every(fn)            → .iter().all(fn)
+.flat()               → .iter().flatten().collect()
+.flatMap(fn)          → .iter().flat_map(fn).collect()
+.findIndex(fn)        → .iter().position(fn)
+.findLast(fn)         → .iter().rev().find(fn)
+.findLastIndex(fn)    → .iter().rposition(fn)
+.reduceRight(fn, init)→ .iter().rev().fold(init, fn)
+.indexOf(item)        → .iter().position(|x| x == item)
+.lastIndexOf(item)    → .iter().rposition(|x| x == item)
+.includes(item)       → .contains(item)
+.at(i)                → .get(i).cloned()
+.concat(other)        → { let mut v = self.clone(); v.extend(other); v }
+.slice(start, end)    → self[start..end].to_vec()
+.join(sep)            → .iter().map(|x| x.to_string()).collect::<Vec<_>>().join(sep)
+.reverse()            → .reverse() (in-place)
+.sort()               → .sort() (in-place)
+.fill(value)          → .fill(value)
+.splice(i, n)         → .drain(i..i+n).collect()
+.copyWithin(t, s, e)  → copy_within
+.keys()               → 0..len iterator
+.values()             → .iter()
+.entries()            → .iter().enumerate()
+.length               → .len() as i64
+Array.from(iter)      → iter.collect::<Vec<_>>()
+Array.isArray(x)      → true (statically typed)
+Array.of(a, b, c)     → vec![a, b, c]
+new Array(n)          → vec![Default::default(); n]
+```
+
+### Map Methods
+
+```
+.get(key)             → .get(key).cloned()
+.set(key, value)      → .insert(key, value)
+.has(key)             → .contains_key(key)
+.delete(key)          → .remove(key)
+.clear()              → .clear()
+.keys()               → .keys()
+.values()             → .values()
+.entries()            → .iter()
+.forEach(fn)          → .iter().for_each(fn)
+.size                 → .len() as i64
+new Map(entries)      → HashMap::from(entries)
+```
+
+### Set Methods
+
+```
+.add(value)           → .insert(value)
+.has(value)           → .contains(value)
+.delete(value)        → .remove(value)
+.clear()              → .clear()
+.keys()               → .iter()
+.values()             → .iter()
+.entries()            → .iter()
+.forEach(fn)          → .iter().for_each(fn)
+.size                 → .len() as i64
+new Set(iterable)     → HashSet::from_iter(iterable)
+```
+
+### Math
+
+All methods are static: `Math.floor(x)` → `x.floor()` etc.
+
+```
+Math.floor, ceil, round, abs, sqrt, pow, min, max, random,
+log, log2, log10, log1p, sin, cos, tan, asin, acos, atan,
+atan2, sinh, cosh, tanh, asinh, acosh, atanh, exp, expm1,
+cbrt, hypot, sign, trunc, fround, clz32
+Math.PI, Math.E, Math.LN2, Math.LN10, Math.LOG2E, Math.LOG10E,
+Math.SQRT2, Math.SQRT1_2
+```
+
+### Number
+
+```
+Number.parseInt(s)        → s.parse::<i64>()
+Number.parseFloat(s)      → s.parse::<f64>()
+Number.isNaN(x)           → x.is_nan()
+Number.isFinite(x)        → x.is_finite()
+Number.isInteger(x)       → x.fract() == 0.0
+Number.isSafeInteger(x)   → checks range
+Number.MAX_SAFE_INTEGER, MIN_SAFE_INTEGER, EPSILON,
+MAX_VALUE, MIN_VALUE, POSITIVE_INFINITY, NEGATIVE_INFINITY, NaN
+.toFixed(n)               → format!("{:.n$}", x)
+.toPrecision(n)           → format!("{:.n$e}", x)
+.toExponential(n)         → format!("{:.n$e}", x)
+.toString()               → x.to_string()
+```
+
+### Date
+
+```
+new Date()                → SystemTime::now() as millis
+new Date(ms)              → from millis
+new Date("str")           → parse date string
+new Date(y, m, d, ...)    → from components
+Date.now()                → SystemTime::now() millis
+Date.parse(s)             → parse to millis
+Date.UTC(y, m, d, ...)    → UTC millis
+
+// Instance methods (all via Hinnant civil algorithm, no external deps):
+.getTime(), .getFullYear(), .getMonth(), .getDate(), .getDay(),
+.getHours(), .getMinutes(), .getSeconds(), .getMilliseconds(),
+.getTimezoneOffset()
+.setTime(), .setFullYear(), .setMonth(), .setDate(),
+.setHours(), .setMinutes(), .setSeconds(), .setMilliseconds()
+.toISOString(), .toString(), .toDateString(), .toTimeString(),
+.toUTCString(), .toJSON(), .toLocaleDateString(), .toLocaleString(),
+.toLocaleTimeString(), .valueOf()
+```
+
+### RegExp
+
+```
+/pattern/flags            → Regex::new("(?flags)pattern")
+.test(str)                → .is_match(str)
+.exec(str)                → .captures(str)
+.source                   → .as_str()
+.flags                    → "" (flags inline in pattern)
+.global                   → true
+.ignoreCase               → false (conservative)
+.lastIndex                → 0
+```
+
+### JSON
+
+```
+JSON.stringify(value)     → serde_json::to_string(&value)
+JSON.parse(str)           → serde_json::from_str(str)
+```
+
+### Object
+
+```
+Object.keys(obj)              → field names as Vec<String>
+Object.values(obj)            → field values as Vec
+Object.entries(obj)           → (key, value) pairs
+Object.assign(target, source) → field merge
+Object.fromEntries(entries)   → HashMap::from
+Object.freeze(obj)            → (identity — all const in Rust)
+Object.create(proto)          → Default::default()
+Object.hasOwn(obj, key)       → (field existence check)
+Object.is(a, b)               → a == b
+Object.isFrozen(obj)          → true
+Object.getOwnPropertyNames    → field names
+Object.getPrototypeOf         → "Object"
+Object.defineProperty         → (no-op, logs warning)
+```
+
+### Promise
+
+```
+await promise                  → .await
+Promise.all([a, b])           → tokio::join!(a, b)
+Promise.allSettled([a, b])    → tokio::join! with Result wrapping
+Promise.resolve(value)        → async { value }
+Promise.reject(error)         → async { panic!(error) }
+new Promise((resolve, reject) => { ... })  → tokio::oneshot channel
+```
+
+### Global Functions
+
+```
+parseInt(s)                → s.parse::<i64>()
+parseFloat(s)              → s.parse::<f64>()
+isNaN(x)                   → x.is_nan()
+isFinite(x)                → x.is_finite()
+setTimeout(fn, ms)         → tokio::time::sleep + spawn
+setInterval(fn, ms)        → tokio::time::interval loop
+clearTimeout(handle)       → handle.abort()
+clearInterval(handle)      → handle.abort()
+structuredClone(value)     → value.clone()
+queueMicrotask(fn)         → tokio::spawn(fn())
+btoa(s)                    → base64 encode
+atob(s)                    → base64 decode
+encodeURIComponent(s)      → percent encoding
+decodeURIComponent(s)      → percent decoding
+encodeURI(s)               → URI encoding
+decodeURI(s)               → URI decoding
+```
+
+### Error
+
+```
+new Error("message")       → "message".to_string() (errors are strings in Rust)
+.message                   → the string itself
+.stack                     → format!("Error: {}\n    at <rustscript>", e)
+.name                      → "Error"
+.cause                     → ""
+.toString()                → the string itself
+```
+
+## Crate Ecosystem Integration
+
+### How It Works
+
+1. Write `import { X } from "crate"` in your `.rts` file
+2. The compiler detects the import and adds the crate to `Cargo.toml`
+3. The import compiles to `use crate::X;`
+4. Submodule imports: `import { X } from "crate/module"` → `use crate::module::X;`
+
+### Derive Macros
+
+```typescript
+type Data = {
+  name: string,
+  value: i32,
+} derives Serialize, Deserialize, Debug, Clone
+```
+
+Available derives: any Rust derive macro. Common ones:
+- `Debug, Clone, PartialEq, Eq, Hash, Copy` (auto-detected)
+- `Serialize, Deserialize` (from serde — triggers serde dependency)
+- `Parser` (from clap)
+
+### Known Working Crate Patterns
+
+**axum (web framework):**
+```typescript
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+
+async function handler(): string { return "Hello!"; }
+
+async function main() {
+  const app = new Router().route("/", get(handler));
+  const listener = await TcpListener.bind("0.0.0.0:3000");
+  await serve(listener, app);
+}
+```
+
+**serde (serialization):**
+```typescript
+type User = { name: string, age: u32 } derives Serialize
+
+function main() {
+  const user: User = { name: "Alice", age: 30 };
+  console.log(JSON.stringify(user));
+}
+```
+
+### Type Mapping for Crate APIs
+
+When reading Rust crate documentation, mentally translate:
+- `&str` / `String` → `string`
+- `Vec<T>` → `Array<T>`
+- `HashMap<K, V>` → `Map<K, V>`
+- `Option<T>` → `T | null`
+- `Result<T, E>` → try/catch (throw on Err)
+- `impl Trait` → just use the concrete type
+- `&self` → hidden (method calls work normally)
+- Lifetimes → ignored (compiler handles ownership)
+
+## What's NOT TypeScript
+
+- **No `any` type** — everything is typed
+- **No `undefined`** — use `null` (compiles to `None`)
+- **No `interface` keyword** — use `type = { ... }` instead
+- **No `enum` keyword for TS-style enums** — use string unions: `type X = "a" | "b"`
+- **Numeric types are explicit** — `i32`, `i64`, `f64` instead of `number`
+- **No prototype chain** — `class extends` uses Rust trait generation
+- **No `this` in standalone functions** — only in class methods
+- **No dynamic property access** — `obj[dynamicKey]` only works on arrays/maps
+- **No `namespace`** — use module imports instead
+- **No declaration merging** — each type is defined once
+
+## Ownership and Borrowing
+
+RustScript handles ownership automatically:
+- The compiler inserts `.clone()` calls where needed
+- Values are moved by default (Rust semantics)
+- String literals auto-convert: `"hello"` → `"hello".to_string()`
+- Numeric widening is automatic: `i32 + i64` → `i64`
+- Iterator closures receive references (the compiler handles `&` correctly)
+
+You do NOT need to think about:
+- Lifetimes (the compiler manages them)
+- `&` and `&mut` (the compiler inserts borrows)
+- `.clone()` (the compiler inserts clones when needed)
+- `move` closures (the compiler decides)
+
+## Known Limitations
+
+- `namespace` declarations → diagnostic, use imports instead
+- Mapped type key remapping (`as` clause) → not parsed
+- Complex trait object patterns from crates may not lower correctly
+- POST/PUT request body extraction (axum `Json<T>` extractor) → not yet supported
