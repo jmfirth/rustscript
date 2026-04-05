@@ -22,8 +22,11 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         {children}
       </code>
     ),
-    pre: ({ children }) => (
-      <pre className="bg-[var(--color-code-bg)] p-4 rounded-lg overflow-x-auto my-4 font-mono text-sm">
+    pre: ({ children, ...props }) => (
+      <pre
+        className="bg-[var(--color-code-bg)] p-4 rounded-lg overflow-x-auto my-4 font-mono text-sm"
+        {...props}
+      >
         {children}
       </pre>
     ),

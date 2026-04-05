@@ -1,4 +1,5 @@
 import createMDX from '@next/mdx';
+import rehypeShiki from '@shikijs/rehype';
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
@@ -14,5 +15,18 @@ const nextConfig: NextConfig = {
   },
 };
 
-const withMDX = createMDX({});
+const withMDX = createMDX({
+  options: {
+    rehypePlugins: [
+      [rehypeShiki, {
+        themes: {
+          light: 'github-light',
+          dark: 'github-dark',
+        },
+        defaultColor: false,
+      }],
+    ],
+  },
+});
+
 export default withMDX(nextConfig);

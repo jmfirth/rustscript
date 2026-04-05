@@ -50,13 +50,18 @@ body {
 html:not(.dark) .shiki,
 html:not(.dark) .shiki span {
   color: var(--shiki-light) !important;
-  background-color: var(--shiki-light-bg) !important;
+  background-color: transparent !important;
 }
 
 html.dark .shiki,
 html.dark .shiki span {
   color: var(--shiki-dark) !important;
-  background-color: var(--shiki-dark-bg) !important;
+  background-color: transparent !important;
+}
+
+/* Shiki pre blocks fill their container */
+.shiki {
+  height: 100%;
 }
 
 @font-face {

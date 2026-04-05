@@ -373,11 +373,23 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
             Some(with_doc_comment(&f.doc_comment, &sig))
         }
         ItemKind::TypeDef(td) if td.name.name == name => {
-            let sig = format!("```rustscript\ntype {name} = ...\n```");
+            let sig = format_type_def_hover(name, td);
             Some(with_doc_comment(&td.doc_comment, &sig))
         }
         ItemKind::Interface(iface) if iface.name.name == name => {
-            let sig = format!("```rustscript\ninterface {name}\n```");
+            let fields: Vec<String> = iface
+                .fields
+                .iter()
+                .map(|f| format!("  {}: {}", f.name.name, format_type_ann(&f.type_ann)))
+                .collect();
+            let sig = if fields.is_empty() {
+                format!("```rustscript\ninterface {name}\n```")
+            } else {
+                format!(
+                    "```rustscript\ninterface {name} {{\n{}\n}}\n```",
+                    fields.join(",\n")
+                )
+            };
             Some(with_doc_comment(&iface.doc_comment, &sig))
         }
         ItemKind::EnumDef(e) if e.name.name == name => {
@@ -400,6 +412,51 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
             Some(with_doc_comment(&c.doc_comment, &sig))
         }
         _ => None,
+    }
+}
+
+/// Format a full type definition for hover display.
+fn format_type_def_hover(name: &str, td: &rsc_syntax::ast::TypeDef) -> String {
+    let generics = td.type_params.as_ref().map_or_else(String::new, |tp| {
+        let params: Vec<String> = tp
+            .params
+            .iter()
+            .map(|p| p.name.name.clone())
+            .collect();
+        if params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", params.join(", "))
+        }
+    });
+
+    let derives_str = if td.derives.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = td.derives.iter().map(|d| d.name.as_str()).collect();
+        format!(" derives {}", names.join(", "))
+    };
+
+    if !td.fields.is_empty() {
+        let fields: Vec<String> = td
+            .fields
+            .iter()
+            .map(|f| {
+                let opt = if f.optional { "?" } else { "" };
+                format!("  {}{opt}: {}", f.name.name, format_type_ann(&f.type_ann))
+            })
+            .collect();
+        format!(
+            "```rustscript\ntype {name}{generics} = {{\n{}\n}}{derives_str}\n```",
+            fields.join(",\n")
+        )
+    } else if let Some(ref alias) = td.type_alias {
+        format!(
+            "```rustscript\ntype {name}{generics} = {}{derives_str}\n```",
+            format_type_ann(alias)
+        )
+    } else {
+        format!("```rustscript\ntype {name}{generics}{derives_str}\n```")
     }
 }
 
