@@ -46,5 +46,19 @@ examples: build
     done
     echo "Done."
 
+# Build the WASM binary and install into website
+wasm:
+    wasm-pack build crates/rsc-web --target web --out-dir ../../website/src/wasm
+    rm -rf website/public/wasm
+    cp -r website/src/wasm website/public/wasm
+
+# Build the website (builds WASM first)
+web: wasm
+    cd website && npm install && npm run build
+
+# Run website e2e tests
+web-test: web
+    cd website && npx playwright test
+
 ci: check test-all doc
     @echo "CI passed"
