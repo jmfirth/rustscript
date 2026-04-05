@@ -71,7 +71,11 @@ function ItemSection({
         </span>
       </h2>
       <pre className="bg-[var(--color-code-bg)] rounded-lg p-4 overflow-x-auto text-sm font-mono leading-relaxed">
-        <code>{items.map((item) => formatSignature(stripCodeFences(item.signature))).join('\n')}</code>
+        <code>{items.map((item) => {
+          const sig = formatSignature(stripCodeFences(item.signature));
+          const summary = firstSentence(item.docs);
+          return summary ? `${sig}\n  // ${summary}` : sig;
+        }).join('\n\n')}</code>
       </pre>
     </section>
   );
@@ -125,6 +129,20 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
     }
     return true;
   });
+}
+
+/** Extract the first sentence from docs, stripping markdown/HTML noise */
+function firstSentence(docs: string | null): string | null {
+  if (!docs) return null;
+  // Strip HTML tags
+  const plain = docs.replace(/<[^>]+>/g, '');
+  // Take first sentence (up to first period followed by space/newline, or first newline)
+  const match = plain.match(/^(.+?[.!])\s/);
+  const sentence = match ? match[1] : plain.split('\n')[0];
+  // Trim and limit length
+  const trimmed = sentence?.trim();
+  if (!trimmed || trimmed.length < 3) return null;
+  return trimmed.length > 120 ? trimmed.substring(0, 117) + '...' : trimmed;
 }
 
 /** Deduplicate items by kind + name, keeping the entry with the most docs */
