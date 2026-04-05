@@ -594,6 +594,22 @@ fn parse_type(value: &serde_json::Value) -> RustdocType {
                 .unwrap_or_default();
             RustdocType::ImplTrait(bounds)
         }
+        "dyn_trait" => {
+            // dyn Trait — same structure as impl_trait but with "traits" key
+            let bounds = inner
+                .get("traits")
+                .and_then(|t| t.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|b| {
+                            let trait_ref = b.get("trait")?;
+                            extract_type_name(trait_ref)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            RustdocType::ImplTrait(bounds)
+        }
         "function_pointer" => {
             let sig = inner.get("sig");
             let params = sig

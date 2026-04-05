@@ -79,12 +79,35 @@ function ItemSection({
   );
 }
 
-/** Strip markdown code fences from translator output */
+/** Strip markdown code fences and doc comment prefix from translator output */
 function stripCodeFences(sig: string): string {
-  return sig
+  // Remove everything before the code fence (docs are shown separately)
+  const fenceStart = sig.indexOf('```');
+  const cleaned = fenceStart >= 0 ? sig.substring(fenceStart) : sig;
+  return cleaned
     .replace(/^```\w*\n?/gm, '')
     .replace(/^```$/gm, '')
     .trim();
+}
+
+/** Pretty-print a long function signature across multiple lines */
+function formatSignature(sig: string): string {
+  // If it's short enough, leave it
+  if (sig.length < 80) return sig;
+
+  // Break function params across lines:
+  // function name(param1: T, param2: U): R  →
+  // function name(
+  //   param1: T,
+  //   param2: U
+  // ): R
+  return sig.replace(
+    /^((?:async\s+)?function\s+\S+)\(([^)]{40,})\)(:\s*.+)?$/,
+    (_match, prefix, params, ret) => {
+      const paramList = params.split(',').map((p: string) => `  ${p.trim()}`).join(',\n');
+      return `${prefix}(\n${paramList}\n)${ret || ''}`;
+    }
+  );
 }
 
 /** Filter out trait impl methods and internal items.
@@ -126,7 +149,7 @@ function deduplicateItems(items: TranslatedItem[]): TranslatedItem[] {
 }
 
 function DocItem({ item }: { item: TranslatedItem }) {
-  const signature = stripCodeFences(item.signature);
+  const signature = formatSignature(stripCodeFences(item.signature));
 
   return (
     <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
