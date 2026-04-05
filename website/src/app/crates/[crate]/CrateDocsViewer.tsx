@@ -87,31 +87,23 @@ function stripCodeFences(sig: string): string {
     .trim();
 }
 
-/** Standard Rust trait impl methods that are noise for RustScript developers */
-const FILTERED_NAMES = new Set([
-  'borrow', 'borrow_mut',
-  'from', 'into', 'try_from', 'try_into',
-  'as_ref', 'as_mut',
-  'deref', 'deref_mut',
-  'drop',
-  'clone', 'clone_from',
-  'default',
-  'eq', 'ne', 'partial_cmp', 'cmp',
-  'hash',
-  'fmt',
-  'type_id',
-]);
-
-/** Filter out standard trait impls and internal items */
+/** Filter out impl methods (shown as "Type.method" in signatures) and internal items.
+ *  Keep only top-level functions, structs, traits, and enums — the crate's actual public API. */
 function filterItems(items: TranslatedItem[]): TranslatedItem[] {
   return items.filter(item => {
-    // Filter out standard trait impl methods
-    if (item.kind === 'function' && FILTERED_NAMES.has(item.name)) {
-      return false;
-    }
     // Filter out items starting with underscore (internal)
     if (item.name.startsWith('_')) {
       return false;
+    }
+    // For functions: filter out impl methods (signature contains "Type.method")
+    // These are trait impls, blanket impls, etc. — noise for RustScript devs.
+    // Keep only free functions (no dot in the signature before the parens).
+    if (item.kind === 'function') {
+      const sig = stripCodeFences(item.signature);
+      // Matches "function SomeType.methodName" — an impl method
+      if (/function\s+\S+\.\S+/.test(sig)) {
+        return false;
+      }
     }
     return true;
   });
