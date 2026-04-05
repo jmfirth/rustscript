@@ -366,16 +366,19 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
                 .map_or_else(|| "void".to_owned(), format_type_ann);
 
             let async_prefix = if f.is_async { "async " } else { "" };
-            Some(format!(
+            let sig = format!(
                 "```rustscript\n{async_prefix}function {name}({}): {ret}\n```",
                 params.join(", ")
-            ))
+            );
+            Some(with_doc_comment(&f.doc_comment, &sig))
         }
         ItemKind::TypeDef(td) if td.name.name == name => {
-            Some(format!("```rustscript\ntype {name} = ...\n```"))
+            let sig = format!("```rustscript\ntype {name} = ...\n```");
+            Some(with_doc_comment(&td.doc_comment, &sig))
         }
         ItemKind::Interface(iface) if iface.name.name == name => {
-            Some(format!("```rustscript\ninterface {name}\n```"))
+            let sig = format!("```rustscript\ninterface {name}\n```");
+            Some(with_doc_comment(&iface.doc_comment, &sig))
         }
         ItemKind::EnumDef(e) if e.name.name == name => {
             let variants: Vec<String> = e
@@ -386,15 +389,25 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
                     rsc_syntax::ast::EnumVariant::Data { name: n, .. } => n.name.clone(),
                 })
                 .collect();
-            Some(format!(
+            let sig = format!(
                 "```rustscript\nenum {name} {{ {} }}\n```",
                 variants.join(", ")
-            ))
+            );
+            Some(with_doc_comment(&e.doc_comment, &sig))
         }
         ItemKind::Class(c) if c.name.name == name => {
-            Some(format!("```rustscript\nclass {name}\n```"))
+            let sig = format!("```rustscript\nclass {name}\n```");
+            Some(with_doc_comment(&c.doc_comment, &sig))
         }
         _ => None,
+    }
+}
+
+/// Prepend a doc comment to a signature if present.
+fn with_doc_comment(doc: &Option<String>, sig: &str) -> String {
+    match doc {
+        Some(comment) if !comment.is_empty() => format!("{comment}\n\n---\n\n{sig}"),
+        _ => sig.to_owned(),
     }
 }
 
@@ -561,7 +574,8 @@ mod tests {
     #[test]
     fn test_hover_builtin_console() {
         let source = "function main() { console.log(\"hello\"); }";
-        let result = hover(source, 1, 18);
+        // "console" starts at 0-based col 18, 1-based col 19
+        let result = hover(source, 1, 19);
         assert!(
             result.contains("console"),
             "expected console hover, got: {result}"
@@ -571,14 +585,16 @@ mod tests {
     #[test]
     fn test_hover_builtin_log() {
         let source = "function main() { console.log(\"hello\"); }";
-        let result = hover(source, 1, 26);
+        // "log" starts at 0-based col 26, 1-based col 27
+        let result = hover(source, 1, 27);
         assert!(result.contains("log"), "expected log hover, got: {result}");
     }
 
     #[test]
     fn test_hover_user_function() {
         let source = "function greet(name: string): string { return name; }";
-        let result = hover(source, 1, 9);
+        // "greet" starts at 0-based col 9, 1-based col 10
+        let result = hover(source, 1, 10);
         assert!(
             result.contains("function greet"),
             "expected greet signature, got: {result}"
@@ -586,9 +602,23 @@ mod tests {
     }
 
     #[test]
+    fn test_hover_doc_comment() {
+        let source = "/** Greets a person */\nfunction greet(name: string): string { return name; }";
+        let result = hover(source, 2, 10);
+        assert!(
+            result.contains("Greets a person"),
+            "expected doc comment in hover, got: {result}"
+        );
+        assert!(
+            result.contains("function greet"),
+            "expected signature in hover, got: {result}"
+        );
+    }
+
+    #[test]
     fn test_hover_out_of_bounds() {
         let source = "let x = 1;";
-        let result = hover(source, 99, 0);
+        let result = hover(source, 99, 1);
         assert!(result.is_empty());
     }
 
