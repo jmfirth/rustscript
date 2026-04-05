@@ -1,0 +1,98 @@
+# Date
+
+`Date` provides JavaScript-compatible date/time handling. Implemented using Rust's `SystemTime` and the Hinnant civil date algorithm -- no external dependencies.
+
+## Creating dates
+
+```typescript
+const now = new Date();                    // Current time
+const fromMs = new Date(1700000000000);    // From milliseconds since epoch
+const fromStr = new Date("2024-01-15");    // Parse date string
+const fromParts = new Date(2024, 0, 15);  // Year, month (0-based), day
+```
+
+Full component constructor:
+
+```typescript
+const precise = new Date(2024, 0, 15, 10, 30, 0, 0);
+// Year, month, day, hours, minutes, seconds, milliseconds
+```
+
+## Static methods
+
+```typescript
+Date.now();                     // Current time as milliseconds
+Date.parse("2024-01-15");      // Parse string to milliseconds
+Date.UTC(2024, 0, 15);         // UTC milliseconds from components
+```
+
+## Getters
+
+```typescript
+const d = new Date();
+
+d.getTime();           // Milliseconds since epoch
+d.getFullYear();       // 4-digit year
+d.getMonth();          // 0-11 (January = 0)
+d.getDate();           // 1-31 (day of month)
+d.getDay();            // 0-6 (Sunday = 0)
+d.getHours();          // 0-23
+d.getMinutes();        // 0-59
+d.getSeconds();        // 0-59
+d.getMilliseconds();   // 0-999
+d.getTimezoneOffset(); // Minutes offset from UTC
+```
+
+## Setters
+
+```typescript
+let d = new Date();
+
+d.setTime(1700000000000);
+d.setFullYear(2025);
+d.setMonth(5);          // June (0-based)
+d.setDate(15);
+d.setHours(10);
+d.setMinutes(30);
+d.setSeconds(0);
+d.setMilliseconds(0);
+```
+
+## Formatting
+
+```typescript
+const d = new Date();
+
+d.toISOString();          // "2024-01-15T10:30:00.000Z"
+d.toString();             // Human-readable full date
+d.toDateString();         // Date portion only
+d.toTimeString();         // Time portion only
+d.toUTCString();          // UTC string format
+d.toJSON();               // Same as toISOString()
+d.toLocaleDateString();   // Locale-aware date
+d.toLocaleString();       // Locale-aware date + time
+d.toLocaleTimeString();   // Locale-aware time
+```
+
+## valueOf
+
+```typescript
+d.valueOf();   // Same as getTime() -- milliseconds since epoch
+```
+
+## Example: measuring elapsed time
+
+```typescript
+function main() {
+  const start = Date.now();
+
+  // do some work
+  let sum: i64 = 0;
+  for (let i: i64 = 0; i < 1000000; i = i + 1) {
+    sum = sum + i;
+  }
+
+  const elapsed = Date.now() - start;
+  console.log(`Sum: ${sum}, took ${elapsed}ms`);
+}
+```

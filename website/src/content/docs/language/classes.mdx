@@ -1,0 +1,118 @@
+# Classes
+
+RustScript classes compile to Rust structs with `impl` blocks. Inheritance uses trait generation to produce idiomatic Rust.
+
+## Basic class
+
+```typescript
+class Animal {
+  name: string;
+  sound: string;
+
+  constructor(name: string, sound: string) {
+    this.name = name;
+    this.sound = sound;
+  }
+
+  speak(): string {
+    return `${this.name} says ${this.sound}`;
+  }
+}
+```
+
+Generates:
+
+```rust
+struct Animal {
+    pub name: String,
+    pub sound: String,
+}
+
+impl Animal {
+    fn new(name: String, sound: String) -> Self {
+        Self { name, sound }
+    }
+
+    fn speak(&self) -> String {
+        format!("{} says {}", self.name, self.sound)
+    }
+}
+```
+
+## Constructors
+
+The `constructor` method compiles to an associated `new` function:
+
+```typescript
+const dog = new Animal("Rex", "woof");
+console.log(dog.speak());
+```
+
+## Inheritance with extends
+
+```typescript
+class Dog extends Animal {
+  breed: string;
+
+  constructor(name: string, breed: string) {
+    super(name, "woof");
+    this.breed = breed;
+  }
+}
+```
+
+The compiler generates a trait for the base class and implements it on the child. The `super()` call initializes the parent fields.
+
+## How it maps to Rust
+
+Classes in TypeScript have a prototype chain. Rust has no inheritance. The compiler bridges this gap:
+
+- **Fields** become struct fields
+- **Methods** become `impl` blocks
+- **`extends`** generates a trait for the parent's interface and implements it on the child struct
+- **`super()`** initializes parent fields in the child's constructor
+- **`this`** compiles to `&self` or `&mut self`
+
+The generated Rust is verbose but idiomatic -- it uses traits and composition, which is how Rust developers model inheritance.
+
+## Instance methods
+
+Methods that read data take `&self`. Methods that modify data take `&mut self`. The compiler figures out which:
+
+```typescript
+class Counter {
+  count: i32;
+
+  constructor() {
+    this.count = 0;
+  }
+
+  increment(): void {
+    this.count = this.count + 1;
+  }
+
+  value(): i32 {
+    return this.count;
+  }
+}
+```
+
+## When to use classes vs types
+
+Use **types** (structs) when you have data with no behavior or simple behavior:
+
+```typescript
+type Point = { x: f64, y: f64 }
+```
+
+Use **classes** when you need constructors, methods, or inheritance:
+
+```typescript
+class HttpClient {
+  baseUrl: string;
+  constructor(baseUrl: string) { this.baseUrl = baseUrl; }
+  // methods...
+}
+```
+
+In Rust, most developers prefer structs + standalone functions. Classes are there when object-oriented patterns are the natural fit.

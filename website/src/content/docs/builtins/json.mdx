@@ -1,0 +1,106 @@
+# JSON
+
+`JSON.stringify` and `JSON.parse` compile to serde_json, Rust's standard serialization library.
+
+## JSON.stringify
+
+Convert a value to a JSON string:
+
+```typescript
+type User = {
+  name: string,
+  age: u32,
+} derives Serialize
+
+function main() {
+  const user: User = { name: "Alice", age: 30 };
+  const json = JSON.stringify(user);
+  console.log(json);   // {"name":"Alice","age":30}
+}
+```
+
+Generates:
+
+```rust
+let json = serde_json::to_string(&user).unwrap();
+```
+
+The type must have `derives Serialize` for `JSON.stringify` to work.
+
+## JSON.parse
+
+Parse a JSON string into a typed value:
+
+```typescript
+type Config = {
+  host: string,
+  port: i32,
+} derives Deserialize
+
+function main() {
+  const raw = "{\"host\":\"localhost\",\"port\":8080}";
+  const config: Config = JSON.parse(raw);
+  console.log(config.host);   // localhost
+}
+```
+
+Generates:
+
+```rust
+let config: Config = serde_json::from_str(&raw).unwrap();
+```
+
+The type must have `derives Deserialize` for `JSON.parse` to work.
+
+## Serde integration
+
+When you use `derives Serialize` or `derives Deserialize`, the compiler automatically adds `serde` and `serde_json` to the generated Cargo.toml. You don't need to import serde explicitly for JSON operations -- the derives handle it.
+
+For explicit serde imports (e.g., to use serde attributes with crate APIs):
+
+```typescript
+import { Serialize, Deserialize } from "serde";
+
+type ApiResponse = {
+  status: i32,
+  body: string,
+} derives Serialize, Deserialize
+```
+
+## Real-world pattern: JSON API
+
+```typescript
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+
+type Todo = {
+  id: u32,
+  title: string,
+  completed: bool,
+} derives Serialize
+
+function getTodos(): Array<Todo> {
+  const t1: Todo = { id: 1, title: "Learn RustScript", completed: true };
+  const t2: Todo = { id: 2, title: "Build an API", completed: false };
+  return [t1, t2];
+}
+
+async function handleList(): string {
+  return JSON.stringify(getTodos());
+}
+
+async function main() {
+  const app = new Router().route("/todos", get(handleList));
+  const listener = await TcpListener.bind("0.0.0.0:3000");
+  await serve(listener, app);
+}
+```
+
+## When to use derives
+
+| Operation | Required derive |
+|-----------|----------------|
+| `JSON.stringify(value)` | `derives Serialize` |
+| `JSON.parse(str)` | `derives Deserialize` |
+| Both directions | `derives Serialize, Deserialize` |

@@ -1,0 +1,89 @@
+# Console
+
+`console` methods compile to Rust's print macros and standard output.
+
+## Basic output
+
+```typescript
+console.log("hello");       // println!("hello")
+console.error("fail");      // eprintln!("fail")
+console.warn("caution");    // eprintln!("[WARN] caution")
+console.debug("trace");     // println!("[DEBUG] trace")
+```
+
+`console.log` prints to stdout. `console.error` and `console.warn` print to stderr.
+
+## Structured output
+
+```typescript
+const data = { name: "Alice", age: 30 };
+console.table(data);    // Pretty-printed with {:#?}
+console.dir(data);      // Same as table
+```
+
+## Assertions
+
+```typescript
+console.assert(x > 0, "x must be positive");
+```
+
+Compiles to `assert!(x > 0, "{}", "x must be positive")`. Panics if the condition is false.
+
+## Timers
+
+Measure execution time:
+
+```typescript
+console.time("fetch");
+
+// ... do some work ...
+
+console.timeLog("fetch");    // Prints elapsed so far
+console.timeEnd("fetch");    // Prints final elapsed time
+```
+
+## Counters
+
+```typescript
+console.count("loop");        // "loop: 1"
+console.count("loop");        // "loop: 2"
+console.count("loop");        // "loop: 3"
+console.countReset("loop");   // Resets to 0
+console.count("loop");        // "loop: 1"
+```
+
+## Grouping
+
+```typescript
+console.group("Section");
+console.log("inside group");
+console.groupEnd();
+```
+
+## Other
+
+```typescript
+console.clear();    // ANSI clear screen
+console.trace();    // Prints "Trace"
+```
+
+## Complete reference
+
+| Method | Rust output |
+|--------|-------------|
+| `console.log(value)` | `println!("{}", value)` |
+| `console.error(value)` | `eprintln!("{}", value)` |
+| `console.warn(value)` | `eprintln!("[WARN] {}", value)` |
+| `console.debug(value)` | `println!("[DEBUG] {}", value)` |
+| `console.table(value)` | `println!("{:#?}", value)` |
+| `console.dir(value)` | `println!("{:#?}", value)` |
+| `console.assert(cond, msg)` | `assert!(cond, "{}", msg)` |
+| `console.time(label)` | Starts a timer |
+| `console.timeEnd(label)` | Prints elapsed, removes timer |
+| `console.timeLog(label)` | Prints current elapsed |
+| `console.count(label)` | Increments and prints counter |
+| `console.countReset(label)` | Resets counter to 0 |
+| `console.group(label)` | Prints group header |
+| `console.groupEnd()` | No-op |
+| `console.clear()` | ANSI clear sequence |
+| `console.trace()` | Prints "Trace" |

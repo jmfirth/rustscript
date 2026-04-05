@@ -1,0 +1,161 @@
+# Type Definitions
+
+RustScript uses `type` declarations for structs, enums, and aliases. There is no `interface` keyword.
+
+## Struct types
+
+```typescript
+type User = {
+  id: u32,
+  name: string,
+  email: string,
+}
+```
+
+Generates:
+
+```rust
+struct User {
+    pub id: u32,
+    pub name: String,
+    pub email: String,
+}
+```
+
+Create instances with object literal syntax:
+
+```typescript
+const user: User = { id: 1, name: "Alice", email: "alice@example.com" };
+```
+
+## Optional fields
+
+Fields with `?` compile to `Option<T>`:
+
+```typescript
+type Config = {
+  host: string,
+  port?: i32,
+  debug?: boolean,
+}
+```
+
+Generates:
+
+```rust
+struct Config {
+    pub host: String,
+    pub port: Option<i32>,
+    pub debug: Option<bool>,
+}
+```
+
+## Derives
+
+Add Rust derive macros with the `derives` keyword:
+
+```typescript
+type Point = {
+  x: f64,
+  y: f64,
+} derives Debug, Clone, PartialEq
+```
+
+Generates:
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+```
+
+Common derives:
+
+| Derive | What it does |
+|--------|-------------|
+| `Debug` | Enables `console.table()` and `{:?}` formatting |
+| `Clone` | Allows explicit cloning |
+| `PartialEq` | Enables `==` comparison |
+| `Eq` | Full equality (for Hash maps as keys) |
+| `Hash` | Enables use as Map key or Set element |
+| `Serialize` | JSON serialization via serde |
+| `Deserialize` | JSON deserialization via serde |
+
+Using `Serialize` or `Deserialize` automatically adds serde as a dependency. See [Derives](/docs/ecosystem/derives) for more.
+
+## String enums
+
+A union of string literals becomes a Rust enum:
+
+```typescript
+type Color = "red" | "green" | "blue";
+```
+
+Generates:
+
+```rust
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+```
+
+Use them in switch statements:
+
+```typescript
+function describe(c: Color): string {
+  switch (c) {
+    case "red": return "warm";
+    case "green": return "cool";
+    case "blue": return "cool";
+  }
+}
+```
+
+## Data enums (discriminated unions)
+
+TypeScript's discriminated union pattern compiles to Rust enums with data:
+
+```typescript
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 };
+```
+
+Generates:
+
+```rust
+enum Shape {
+    Circle { radius: f64 },
+    Rect { width: f64, height: f64 },
+}
+```
+
+The discriminant field (`kind`) determines the variant. Use switch to match:
+
+```typescript
+function area(shape: Shape): f64 {
+  switch (shape.kind) {
+    case "circle":
+      return 3.14159 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}
+```
+
+## Type aliases
+
+Simple type aliases work for renaming:
+
+```typescript
+type UserId = u32;
+type Email = string;
+```
+
+## What about interfaces?
+
+RustScript does not have the `interface` keyword. Use `type = { ... }` for all object types. This is a deliberate simplification -- in TypeScript, `type` and `interface` overlap significantly. RustScript picks one.

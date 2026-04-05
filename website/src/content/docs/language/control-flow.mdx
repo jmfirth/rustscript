@@ -1,0 +1,148 @@
+# Control Flow
+
+All the familiar control flow from TypeScript, compiling to efficient Rust.
+
+## if / else
+
+```typescript
+if (x > 0) {
+  console.log("positive");
+} else if (x < 0) {
+  console.log("negative");
+} else {
+  console.log("zero");
+}
+```
+
+## for-of
+
+Iterate over collections. This is the most common loop in RustScript.
+
+```typescript
+const items: Array<string> = ["a", "b", "c"];
+
+for (const item of items) {
+  console.log(item);
+}
+```
+
+Generates:
+
+```rust
+for item in &items {
+    println!("{}", item);
+}
+```
+
+## for-in
+
+Iterate over keys of a map or object:
+
+```typescript
+for (const key in obj) {
+  console.log(key);
+}
+```
+
+## Classic for
+
+C-style for loops work as expected:
+
+```typescript
+for (let i: i32 = 0; i < 10; i = i + 1) {
+  console.log(`Count: ${i}`);
+}
+```
+
+Note: use `i = i + 1` rather than `i++` (postfix increment is not supported).
+
+## while
+
+```typescript
+let count: i32 = 0;
+while (count < 5) {
+  console.log(`${count}`);
+  count = count + 1;
+}
+```
+
+## do-while
+
+```typescript
+let attempts: i32 = 0;
+do {
+  attempts = attempts + 1;
+  console.log(`Attempt ${attempts}`);
+} while (attempts < 3);
+```
+
+## switch
+
+`switch` compiles to Rust's `match` expression. No fall-through -- each case is independent.
+
+```typescript
+switch (color) {
+  case "red":
+    console.log("stop");
+  case "green":
+    console.log("go");
+  case "yellow":
+    console.log("caution");
+  default:
+    console.log("unknown");
+}
+```
+
+Generates:
+
+```rust
+match color.as_str() {
+    "red" => println!("{}", "stop"),
+    "green" => println!("{}", "go"),
+    "yellow" => println!("{}", "caution"),
+    _ => println!("{}", "unknown"),
+}
+```
+
+Switch works with strings, integers, and enums.
+
+## Labeled loops
+
+Break or continue outer loops from inner loops:
+
+```typescript
+outer: for (const x of xs) {
+  for (const y of ys) {
+    if (y === target) {
+      break outer;
+    }
+  }
+}
+```
+
+Generates:
+
+```rust
+'outer: for x in &xs {
+    for y in &ys {
+        if y == &target {
+            break 'outer;
+        }
+    }
+}
+```
+
+## Pattern: early return
+
+RustScript supports early return just like TypeScript:
+
+```typescript
+function findUser(users: Array<User>, name: string): User | null {
+  for (const user of users) {
+    if (user.name === name) {
+      return user;
+    }
+  }
+  return null;
+}
+```

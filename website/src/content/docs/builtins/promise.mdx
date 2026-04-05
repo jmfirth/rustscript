@@ -1,0 +1,136 @@
+# Promise and Async/Await
+
+Async code in RustScript uses the same `async`/`await` syntax as TypeScript. Under the hood, it compiles to tokio, Rust's standard async runtime.
+
+## async / await
+
+```typescript
+async function fetchData(): string {
+  const result = await someAsyncOperation();
+  return result;
+}
+```
+
+Generates:
+
+```rust
+async fn fetch_data() -> String {
+    let result = some_async_operation().await;
+    result
+}
+```
+
+## async main
+
+If your program uses async operations, make `main` async:
+
+```typescript
+async function main() {
+  const data = await fetchData();
+  console.log(data);
+}
+```
+
+The compiler adds `#[tokio::main]` to the generated Rust, bootstrapping the tokio runtime.
+
+## Promise.all
+
+Run multiple async operations concurrently:
+
+```typescript
+async function fetchA(): string { return "a"; }
+async function fetchB(): string { return "b"; }
+
+async function main() {
+  const [a, b] = await Promise.all([fetchA(), fetchB()]);
+  console.log(`${a}, ${b}`);
+}
+```
+
+Generates `tokio::join!(fetchA(), fetchB())`, running both futures concurrently on the tokio runtime.
+
+## Promise.allSettled
+
+Like `Promise.all` but doesn't short-circuit on failure:
+
+```typescript
+const results = await Promise.allSettled([fetchA(), fetchB()]);
+```
+
+Generates `tokio::join!` with Result wrapping, so all operations complete regardless of individual failures.
+
+## Promise.resolve / Promise.reject
+
+```typescript
+const value = await Promise.resolve("hello");     // async { "hello" }
+const error = await Promise.reject("failed");     // async { panic!("failed") }
+```
+
+## new Promise
+
+The constructor pattern for wrapping callback-based APIs:
+
+```typescript
+const result = await new Promise((resolve, reject) => {
+  // resolve("value") to fulfill
+  // reject("error") to fail
+});
+```
+
+Compiles to a `tokio::oneshot` channel.
+
+## Timers
+
+```typescript
+// Delay execution
+setTimeout(() => {
+  console.log("delayed");
+}, 1000);
+
+// Repeated execution
+const handle = setInterval(() => {
+  console.log("tick");
+}, 500);
+
+// Cancel
+clearInterval(handle);
+```
+
+`setTimeout` compiles to `tokio::time::sleep` + `tokio::spawn`. `setInterval` compiles to a `tokio::time::interval` loop. Cancellation uses `handle.abort()`.
+
+## Real-world pattern: concurrent HTTP requests
+
+```typescript
+import { get } from "reqwest";
+
+async function fetchUsers(): string {
+  const response = await get("https://api.example.com/users");
+  return await response.text();
+}
+
+async function fetchPosts(): string {
+  const response = await get("https://api.example.com/posts");
+  return await response.text();
+}
+
+async function main() {
+  // Fetch both concurrently
+  const [users, posts] = await Promise.all([fetchUsers(), fetchPosts()]);
+  console.log(`Users: ${users}`);
+  console.log(`Posts: ${posts}`);
+}
+```
+
+## How it maps to Rust
+
+| RustScript | Rust |
+|-----------|------|
+| `async function f()` | `async fn f()` |
+| `await expr` | `expr.await` |
+| `Promise.all([a, b])` | `tokio::join!(a, b)` |
+| `Promise.allSettled([a, b])` | `tokio::join!` with Result wrapping |
+| `Promise.resolve(v)` | `async { v }` |
+| `Promise.reject(e)` | `async { panic!(e) }` |
+| `new Promise((res, rej) => ...)` | `tokio::oneshot` channel |
+| `setTimeout(fn, ms)` | `tokio::time::sleep` + `spawn` |
+| `setInterval(fn, ms)` | `tokio::time::interval` loop |

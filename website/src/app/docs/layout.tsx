@@ -5,12 +5,50 @@ const sidebarItems = [
     title: 'Getting Started',
     items: [
       { title: 'Installation', href: '/docs/getting-started/installation' },
+      { title: 'Hello World', href: '/docs/getting-started/hello-world' },
+      { title: 'Project Structure', href: '/docs/getting-started/project-structure' },
     ],
   },
   {
-    title: 'Guide',
+    title: 'Language',
     items: [
-      { title: 'Overview', href: '/docs' },
+      { title: 'Types', href: '/docs/language/types' },
+      { title: 'Variables', href: '/docs/language/variables' },
+      { title: 'Functions', href: '/docs/language/functions' },
+      { title: 'Control Flow', href: '/docs/language/control-flow' },
+      { title: 'Classes', href: '/docs/language/classes' },
+      { title: 'Type Definitions', href: '/docs/language/type-definitions' },
+      { title: 'Modules', href: '/docs/language/modules' },
+      { title: 'Error Handling', href: '/docs/language/error-handling' },
+    ],
+  },
+  {
+    title: 'Builtins',
+    items: [
+      { title: 'String', href: '/docs/builtins/string' },
+      { title: 'Array', href: '/docs/builtins/array' },
+      { title: 'Map & Set', href: '/docs/builtins/map-set' },
+      { title: 'Math', href: '/docs/builtins/math' },
+      { title: 'Date', href: '/docs/builtins/date' },
+      { title: 'JSON', href: '/docs/builtins/json' },
+      { title: 'Console', href: '/docs/builtins/console' },
+      { title: 'Promise & Async', href: '/docs/builtins/promise' },
+    ],
+  },
+  {
+    title: 'Ecosystem',
+    items: [
+      { title: 'Importing Crates', href: '/docs/ecosystem/importing-crates' },
+      { title: 'Derives', href: '/docs/ecosystem/derives' },
+      { title: 'Rust Blocks', href: '/docs/ecosystem/rust-blocks' },
+      { title: 'Type Mapping', href: '/docs/ecosystem/type-mapping' },
+    ],
+  },
+  {
+    title: 'Reference',
+    items: [
+      { title: 'CLI Commands', href: '/docs/reference/cli-commands' },
+      { title: 'Cheatsheet', href: '/docs/reference/cheatsheet' },
     ],
   },
 ];

@@ -1,0 +1,84 @@
+# Error Handling
+
+RustScript uses try/catch/throw -- the error handling pattern every TypeScript developer knows. Under the hood, it compiles to Rust's `Result` type and `panic!`.
+
+## try / catch
+
+```typescript
+try {
+  riskyOperation();
+} catch (e) {
+  console.log(e.message);
+}
+```
+
+The catch variable has `.message`, `.stack`, `.name`, `.cause`, and `.toString()`:
+
+```typescript
+try {
+  throw new Error("something broke");
+} catch (e) {
+  console.log(e.message);  // "something broke"
+  console.log(e.stack);    // "Error: something broke\n    at <rustscript>"
+  console.log(e.name);     // "Error"
+}
+```
+
+## throw
+
+```typescript
+throw "something went wrong";
+throw new Error("detailed message");
+```
+
+`throw` compiles to `panic!` for unrecoverable errors, or `return Err()` when inside a function that returns `Result`.
+
+## Error object
+
+`new Error("message")` creates a string error. In the generated Rust, errors are strings:
+
+```typescript
+const err = new Error("failed");
+// err.message → "failed"
+// err.stack → "Error: failed\n    at <rustscript>"
+// err.name → "Error"
+// err.cause → ""
+// err.toString() → "failed"
+```
+
+## Pattern: function-level error handling
+
+Wrap external calls in try/catch to handle failures gracefully:
+
+```typescript
+async function main() {
+  try {
+    const posts = await fetchPosts();
+    console.log(`Fetched ${posts.length} posts`);
+
+    for (const post of posts) {
+      console.log(`  [${post.id}] ${post.title}`);
+    }
+  } catch (err: string) {
+    console.log(`Error: ${err}`);
+  }
+}
+```
+
+## How it maps to Rust
+
+| RustScript | Rust |
+|-----------|------|
+| `try { ... }` | Block with error handling |
+| `catch (e) { ... }` | Match on `Err(e)` |
+| `throw "msg"` | `panic!("msg")` |
+| `throw new Error("msg")` | `panic!("msg")` |
+| `e.message` | The error string |
+| `e.stack` | Formatted stack trace string |
+
+## Best practices
+
+- Use try/catch around external operations (network, file I/O, parsing)
+- Throw with descriptive messages: `throw new Error("user not found: " + id)`
+- Catch at the boundary -- let errors propagate up to where they can be handled meaningfully
+- For expected failure cases, prefer returning `T | null` over throwing

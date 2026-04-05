@@ -1,0 +1,98 @@
+# Modules
+
+RustScript's import/export system maps directly to Rust's `use` declarations and the crate ecosystem.
+
+## Importing from Rust crates
+
+```typescript
+import { Router, serve } from "axum";
+import { get, post } from "axum/routing";
+import { TcpListener } from "tokio/net";
+import { Serialize, Deserialize } from "serde";
+```
+
+Generates:
+
+```rust
+use axum::{Router, serve};
+use axum::routing::{get, post};
+use tokio::net::TcpListener;
+use serde::{Serialize, Deserialize};
+```
+
+The compiler automatically detects which crates you import and adds them to the generated `Cargo.toml`.
+
+## Submodule imports
+
+Slash-separated paths map to Rust's `::` module paths:
+
+```typescript
+import { get } from "axum/routing";       // → use axum::routing::get;
+import { TcpListener } from "tokio/net";  // → use tokio::net::TcpListener;
+```
+
+## How crate detection works
+
+When the compiler sees `import { X } from "crate-name"`, it:
+
+1. Recognizes `"crate-name"` as a crate (not a local file)
+2. Adds `crate-name = "latest"` to the generated Cargo.toml dependencies
+3. Emits `use crate_name::X;` in the Rust output
+
+Known crates (axum, tokio, serde, reqwest, etc.) get pinned to compatible versions. Unknown crates get the latest version.
+
+## Export
+
+Export functions and types to make them available to other modules:
+
+```typescript
+export function helper(): string {
+  return "help";
+}
+
+export type Config = {
+  debug: boolean,
+}
+```
+
+## Multiple files
+
+Organize code across files within `src/`. The entry point is always `src/index.rts`.
+
+## What's different from TypeScript
+
+- **No relative path imports** like `import { X } from "./file"` in the current version -- code is organized within single files
+- **No `namespace`** -- use imports from crates instead
+- **No barrel exports** (`export * from`) -- import what you need directly
+- **No default exports** -- use named exports
+- **No declaration merging** -- each type is defined once
+
+## Real-world example
+
+A typical web server import block:
+
+```typescript
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+import { Serialize } from "serde";
+
+type Todo = {
+  id: u32,
+  title: string,
+  completed: bool,
+} derives Serialize
+
+async function handleList(): string {
+  return JSON.stringify(getTodos());
+}
+
+async function main() {
+  const app = new Router()
+    .route("/todos", get(handleList));
+  const listener = await TcpListener.bind("0.0.0.0:3000");
+  await serve(listener, app);
+}
+```
+
+Every import resolves to a real Rust crate. You get the entire Rust ecosystem through TypeScript syntax.

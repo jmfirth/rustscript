@@ -1,0 +1,99 @@
+# CLI Commands
+
+The `rsc` command-line tool compiles, runs, formats, and manages RustScript projects.
+
+## rsc init
+
+Create a new project:
+
+```bash
+rsc init my-project
+```
+
+Creates a directory with `cargo.toml` and `src/index.rts`.
+
+### Templates
+
+```bash
+rsc init my-api --template web-server    # axum web server
+rsc init my-tool --template cli          # CLI application
+rsc init my-wasm --template wasm         # WebAssembly project
+```
+
+## rsc build
+
+Compile to a native binary:
+
+```bash
+rsc build
+```
+
+This:
+1. Parses `.rts` files
+2. Type-checks
+3. Lowers to Rust
+4. Emits `.rs` files to `.rsc-build/`
+5. Runs `cargo build`
+
+The output binary is in `.rsc-build/target/debug/`.
+
+## rsc run
+
+Build and execute in one step:
+
+```bash
+rsc run
+```
+
+Pass arguments to the compiled binary with `--`:
+
+```bash
+rsc run -- --port 8080 --verbose
+```
+
+Everything after `--` is forwarded to your program, not to `rsc`.
+
+## rsc check
+
+Type-check without building:
+
+```bash
+rsc check
+```
+
+Faster than `rsc build` because it skips code generation and `cargo build`. Use it for quick validation while editing.
+
+## rsc fmt
+
+Format `.rts` source files:
+
+```bash
+rsc fmt
+```
+
+Applies consistent formatting to all `.rts` files in the project. Analogous to `prettier` for TypeScript or `rustfmt` for Rust.
+
+## Common workflows
+
+### Development loop
+
+```bash
+rsc run                    # Build and run
+rsc check                  # Quick type check
+rsc fmt                    # Format before committing
+```
+
+### Production build
+
+```bash
+rsc build                  # Compile to native binary
+./.rsc-build/target/debug/my-project   # Run the binary directly
+```
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Compilation error (parse, type check, or lowering) |
+| Non-zero | `cargo build` or runtime failure |

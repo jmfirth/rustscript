@@ -1,0 +1,94 @@
+# Rust Blocks
+
+When you need to write raw Rust inside RustScript, use `rust { }`. It's an escape hatch for cases where RustScript's abstractions aren't enough.
+
+## Syntax
+
+```typescript
+rust {
+  println!("This is raw Rust code");
+  let x: Vec<i32> = vec![1, 2, 3];
+  for item in &x {
+      println!("{}", item);
+  }
+}
+```
+
+Everything inside `rust { }` is emitted verbatim into the generated `.rs` file. No parsing, no transformation.
+
+## When to use it
+
+### Calling Rust APIs that don't have RustScript equivalents
+
+```typescript
+rust {
+  use std::fs;
+  let contents = fs::read_to_string("config.toml").unwrap();
+  println!("{}", contents);
+}
+```
+
+### Using Rust macros
+
+```typescript
+rust {
+  env!("CARGO_PKG_VERSION");
+}
+```
+
+### Performance-critical inner loops
+
+```typescript
+function process(data: Array<i32>): i64 {
+  // Normal RustScript for the API boundary
+  let result: i64 = 0;
+
+  rust {
+    // Raw Rust for the hot path
+    for chunk in data.chunks(4) {
+        let sum: i64 = chunk.iter().map(|x| *x as i64).sum();
+        result += sum;
+    }
+  }
+
+  return result;
+}
+```
+
+### Complex trait implementations
+
+When you need a trait impl that RustScript can't express:
+
+```typescript
+rust {
+  impl std::fmt::Display for MyType {
+      fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+          write!(f, "MyType({})", self.value)
+      }
+  }
+}
+```
+
+## Rules
+
+- Code inside `rust { }` is emitted as-is. You're responsible for its correctness.
+- You can reference variables and types from the surrounding RustScript code.
+- Rust blocks appear at the same scope level in the generated code.
+- Syntax errors in rust blocks show up as `rustc` errors, not RustScript compiler errors.
+
+## When NOT to use it
+
+Don't reach for `rust { }` as a first resort. RustScript covers:
+
+- All standard control flow
+- String, Array, Map, Set operations
+- Async/await with tokio
+- Crate imports
+- JSON serialization
+- Error handling
+
+Use `rust { }` only when you genuinely need something outside RustScript's coverage. The more RustScript code you write, the more the compiler can help you with ownership, type checking, and diagnostics.
+
+## Ejecting
+
+If you find yourself writing a lot of rust blocks, you might be ready to eject. Copy the generated `.rs` from `.rsc-build/` into a pure Rust project and continue there. That's by design -- no lock-in.

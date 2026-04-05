@@ -1,0 +1,130 @@
+# Type Mapping
+
+When reading Rust crate documentation, you need to translate Rust types to RustScript types. This page is the Rosetta Stone.
+
+## Core type mapping
+
+| Rust | RustScript | Notes |
+|------|-----------|-------|
+| `String` | `string` | |
+| `&str` | `string` | The compiler handles the conversion |
+| `bool` | `boolean` | |
+| `i8`, `i16`, `i32`, `i64` | `i8`, `i16`, `i32`, `i64` | Same names |
+| `u8`, `u16`, `u32`, `u64` | `u8`, `u16`, `u32`, `u64` | Same names |
+| `f32`, `f64` | `f32`, `f64` | Same names |
+| `()` | `void` | Unit type |
+| `!` | `never` | Never returns |
+| `Vec<T>` | `Array<T>` | |
+| `HashMap<K, V>` | `Map<K, V>` | |
+| `HashSet<T>` | `Set<T>` | |
+| `Option<T>` | `T \| null` | |
+| `(A, B)` | `[A, B]` | Tuple syntax |
+| `Result<T, E>` | try/catch | throw on Err |
+
+## Ownership and references
+
+| Rust | RustScript |
+|------|-----------|
+| `&self` | Hidden -- method calls work normally |
+| `&mut self` | Hidden -- the compiler infers mutability |
+| `&T` | Just `T` -- borrows are automatic |
+| `&mut T` | Just `T` -- mutable borrows are automatic |
+| `Box<T>` | Just `T` |
+| `Arc<T>` | Just `T` |
+| `Cow<'_, str>` | `string` |
+
+You don't write lifetimes, references, or smart pointers. The compiler manages ownership.
+
+## Function signatures
+
+Rust documentation:
+```rust
+fn process(input: &str, count: usize) -> Vec<String>
+```
+
+RustScript equivalent:
+```typescript
+function process(input: string, count: u64): Array<string>
+```
+
+Rust documentation:
+```rust
+fn find(items: &[Item], predicate: impl Fn(&Item) -> bool) -> Option<&Item>
+```
+
+RustScript equivalent:
+```typescript
+function find(items: Array<Item>, predicate: (item: Item) => boolean): Item | null
+```
+
+## Async functions
+
+Rust documentation:
+```rust
+async fn fetch(url: &str) -> Result<Response, Error>
+```
+
+RustScript equivalent:
+```typescript
+async function fetch(url: string): Response
+// Errors handled via try/catch
+```
+
+## Trait bounds and generics
+
+Rust documentation:
+```rust
+fn serialize<T: Serialize>(value: &T) -> String
+```
+
+RustScript equivalent:
+```typescript
+function serialize<T>(value: T): string
+// T must have `derives Serialize` on its type definition
+```
+
+## Common crate patterns
+
+### axum
+
+| Rust | RustScript |
+|------|-----------|
+| `Router::new()` | `new Router()` |
+| `Router::route("/", get(handler))` | `.route("/", get(handler))` |
+| `axum::serve(listener, app)` | `await serve(listener, app)` |
+
+### serde
+
+| Rust | RustScript |
+|------|-----------|
+| `#[derive(Serialize)]` | `derives Serialize` |
+| `serde_json::to_string(&val)` | `JSON.stringify(val)` |
+| `serde_json::from_str(s)` | `JSON.parse(s)` |
+
+### reqwest
+
+| Rust | RustScript |
+|------|-----------|
+| `reqwest::get(url).await` | `await get(url)` |
+| `response.json::<T>().await` | `await response.json()` |
+| `response.text().await` | `await response.text()` |
+
+### tokio
+
+| Rust | RustScript |
+|------|-----------|
+| `#[tokio::main]` | `async function main()` |
+| `tokio::join!(a, b)` | `await Promise.all([a, b])` |
+| `TcpListener::bind(addr).await` | `await TcpListener.bind(addr)` |
+
+## Reading Rust docs: a workflow
+
+1. Find the function/method you want on [docs.rs](https://docs.rs)
+2. Look at the signature
+3. Translate types using the table above
+4. Ignore lifetimes (`'a`, `'_`)
+5. Ignore `&` and `&mut` -- just use the base type
+6. Replace `impl Trait` with the concrete type you're using
+7. Wrap in `async`/`await` if the Rust function is async
+
+If the Rust API is too complex for RustScript to express, use a [rust block](/docs/ecosystem/rust-blocks) as an escape hatch.

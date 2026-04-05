@@ -1,0 +1,112 @@
+# Hello World
+
+Every RustScript program starts with a `main` function in `src/index.rts`.
+
+## Create a project
+
+```bash
+rsc init hello
+cd hello
+```
+
+This gives you:
+
+```
+hello/
+  cargo.toml
+  src/
+    index.rts
+```
+
+## Write your first program
+
+Open `src/index.rts` and replace its contents:
+
+```typescript
+function main() {
+  console.log("Hello from RustScript!");
+}
+```
+
+## Run it
+
+```bash
+rsc run
+```
+
+Output:
+
+```
+Hello from RustScript!
+```
+
+## What just happened
+
+The compiler:
+
+1. Parsed `index.rts` into a RustScript AST
+2. Type-checked the program
+3. Lowered the AST to Rust IR
+4. Emitted a `.rs` file into `.rsc-build/`
+5. Ran `cargo build` on the generated Rust project
+6. Executed the resulting native binary
+
+The generated Rust looks like this:
+
+```rust
+fn main() {
+    println!("{}", "Hello from RustScript!");
+}
+```
+
+No V8. No garbage collector. You just compiled TypeScript syntax to a native binary.
+
+## A slightly bigger example
+
+```typescript
+function greet(name: string): string {
+  return `Hello, ${name}!`;
+}
+
+function main() {
+  const names: Array<string> = ["Alice", "Bob", "Charlie"];
+
+  for (const name of names) {
+    console.log(greet(name));
+  }
+
+  console.log(`Greeted ${names.length} people`);
+}
+```
+
+```bash
+rsc run
+```
+
+```
+Hello, Alice!
+Hello, Bob!
+Hello, Charlie!
+Greeted 3 people
+```
+
+Template literals, typed arrays, for-of loops, and string interpolation -- all compiling to idiomatic Rust.
+
+## Async main
+
+If your program needs async (HTTP servers, network calls, timers), make `main` async:
+
+```typescript
+async function main() {
+  console.log("Starting...");
+  // async operations work here
+}
+```
+
+The compiler adds `#[tokio::main]` to the generated Rust, giving you the tokio async runtime.
+
+## Next steps
+
+- [Project Structure](/docs/getting-started/project-structure) -- understand what each file does
+- [Types](/docs/language/types) -- RustScript's type system
+- [Importing Crates](/docs/ecosystem/importing-crates) -- use Rust's ecosystem from day one

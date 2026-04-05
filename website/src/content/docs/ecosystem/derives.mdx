@@ -1,0 +1,155 @@
+# Derives
+
+The `derives` keyword adds Rust derive macros to your types. It's how you opt into traits like serialization, debug printing, cloning, and equality.
+
+## Syntax
+
+```typescript
+type Point = {
+  x: f64,
+  y: f64,
+} derives Debug, Clone, PartialEq
+```
+
+Generates:
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+```
+
+## Common derives
+
+### Debug
+
+Enables pretty-printing with `console.table()` and `console.dir()`:
+
+```typescript
+type User = {
+  name: string,
+  age: u32,
+} derives Debug
+
+function main() {
+  const user: User = { name: "Alice", age: 30 };
+  console.table(user);
+  // User {
+  //     name: "Alice",
+  //     age: 30,
+  // }
+}
+```
+
+### Clone
+
+Allows explicit cloning of values. The compiler inserts clones automatically where needed, but `Clone` is required on the type for this to work.
+
+```typescript
+type Config = {
+  host: string,
+  port: i32,
+} derives Clone
+```
+
+### PartialEq and Eq
+
+Enable equality comparison with `==`:
+
+```typescript
+type Point = {
+  x: i32,
+  y: i32,
+} derives PartialEq, Eq
+
+function main() {
+  const a: Point = { x: 1, y: 2 };
+  const b: Point = { x: 1, y: 2 };
+  console.log(`${a == b}`);   // true
+}
+```
+
+`Eq` is stricter than `PartialEq` -- it guarantees reflexivity. Use `Eq` when the type might be a HashMap key.
+
+### Hash
+
+Required for using the type as a Map key or Set element:
+
+```typescript
+type Coord = {
+  x: i32,
+  y: i32,
+} derives Hash, Eq, PartialEq
+```
+
+### Copy
+
+For small, stack-allocated types that should be copied instead of moved:
+
+```typescript
+type Flags = {
+  debug: bool,
+  verbose: bool,
+} derives Copy, Clone
+```
+
+`Copy` requires `Clone`. Only works for types whose fields are all `Copy` (primitives, booleans -- not String or Vec).
+
+### Serialize and Deserialize
+
+Enable JSON serialization via serde:
+
+```typescript
+type ApiResponse = {
+  status: i32,
+  body: string,
+} derives Serialize, Deserialize
+```
+
+Using these automatically adds `serde` and `serde_json` as dependencies. See [JSON](/docs/builtins/json) for usage.
+
+You can also import serde explicitly:
+
+```typescript
+import { Serialize, Deserialize } from "serde";
+```
+
+## Combining derives
+
+Stack as many as you need:
+
+```typescript
+type Record = {
+  id: u64,
+  name: string,
+  value: f64,
+} derives Debug, Clone, PartialEq, Serialize, Deserialize
+```
+
+## Any Rust derive works
+
+The `derives` keyword isn't limited to the common ones above. Any Rust derive macro works:
+
+```typescript
+import { Parser } from "clap";
+
+type Args = {
+  input: string,
+  verbose: bool,
+} derives Parser, Debug
+```
+
+If the derive macro comes from a crate, import it first (or the crate will be auto-detected from the derive name for known crates like serde).
+
+## When to use derives
+
+| You want to... | Use |
+|----------------|-----|
+| Print a struct for debugging | `derives Debug` |
+| Serialize to JSON | `derives Serialize` |
+| Parse from JSON | `derives Deserialize` |
+| Compare with `==` | `derives PartialEq` |
+| Use as a Map key | `derives Hash, Eq, PartialEq` |
+| Pass by copy (small types) | `derives Copy, Clone` |

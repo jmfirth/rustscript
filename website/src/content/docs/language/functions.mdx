@@ -1,0 +1,135 @@
+# Functions
+
+Functions in RustScript look exactly like TypeScript. They compile to Rust functions with full type safety.
+
+## Function declarations
+
+```typescript
+function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+```
+
+Generates:
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
+
+Parameters require type annotations. Return types can be inferred but explicit is recommended.
+
+## Arrow functions and closures
+
+```typescript
+const double = (x: i32): i32 => x * 2;
+const greet = (name: string): string => `Hello, ${name}!`;
+```
+
+Arrow functions compile to Rust closures:
+
+```rust
+let double = |x: i32| -> i32 { x * 2 };
+```
+
+Multi-line closures work too:
+
+```typescript
+const process = (items: Array<string>): Array<string> => {
+  const filtered = items.filter(s => s.length > 3);
+  return filtered.map(s => s.toUpperCase());
+};
+```
+
+## Async functions
+
+```typescript
+async function fetchData(): string {
+  return "data";
+}
+```
+
+Async functions use tokio as the runtime. An `async function main()` gets `#[tokio::main]`:
+
+```typescript
+async function main() {
+  const data = await fetchData();
+  console.log(data);
+}
+```
+
+Generates:
+
+```rust
+#[tokio::main]
+async fn main() {
+    let data = fetch_data().await;
+    println!("{}", data);
+}
+```
+
+## Generics
+
+```typescript
+function identity<T>(value: T): T {
+  return value;
+}
+
+const result = identity<string>("hello");
+```
+
+Multiple type parameters:
+
+```typescript
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+```
+
+Explicit type arguments compile to Rust's turbofish syntax:
+
+```rust
+let result = identity::<String>("hello".to_string());
+```
+
+## Functions as parameters
+
+Pass functions to other functions -- the standard higher-order pattern:
+
+```typescript
+function apply(value: i32, fn: (x: i32) => i32): i32 {
+  return fn(value);
+}
+
+const result = apply(5, (x: i32): i32 => x * 2);  // 10
+```
+
+## Methods on types
+
+Functions that operate on struct types are defined as standalone functions. Class methods are covered in [Classes](/docs/language/classes).
+
+```typescript
+type User = {
+  name: string,
+  age: u32,
+}
+
+function greetUser(user: User): string {
+  return `Hello, ${user.name}!`;
+}
+```
+
+## throws annotation
+
+Functions can declare that they throw:
+
+```typescript
+async function fetchPosts(): Array<Post> throws string {
+  const response = await get(url);
+  const posts: Array<Post> = await response.json();
+  return posts;
+}
+```
+
+This signals to the compiler that the function returns a `Result` in the generated Rust.

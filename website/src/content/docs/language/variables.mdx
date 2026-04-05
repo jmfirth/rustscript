@@ -1,0 +1,121 @@
+# Variables
+
+RustScript has three variable declaration keywords. They map directly to Rust's mutability model.
+
+## const vs let vs var
+
+```typescript
+const x: i32 = 5;     // Immutable   → let x: i32 = 5;
+let y: i32 = 10;      // Mutable     → let mut y: i32 = 10;
+var z: i32 = 15;      // Mutable     → let mut z: i32 = 15;
+```
+
+`const` is immutable -- you cannot reassign it. `let` and `var` are mutable.
+
+In TypeScript, `const` only prevents reassignment of the binding (you can still mutate the object). In RustScript, `const` means truly immutable -- the compiler enforces it at the Rust level.
+
+```typescript
+const name: string = "Alice";
+// name = "Bob";  // Compile error: cannot assign to immutable variable
+
+let count: i32 = 0;
+count = count + 1;   // OK: let is mutable
+```
+
+## Type inference
+
+Type annotations are optional when the type can be inferred:
+
+```typescript
+const x = 42;           // i64
+const name = "hello";   // string
+const pi = 3.14;        // f64
+const items = [1, 2];   // Array<i64>
+const yes = true;       // boolean
+```
+
+## Destructuring
+
+### Object destructuring
+
+```typescript
+type User = {
+  name: string,
+  age: u32,
+}
+
+const user: User = { name: "Alice", age: 30 };
+const { name, age } = user;
+```
+
+Generates:
+
+```rust
+let User { name, age, .. } = user;
+```
+
+### Array destructuring
+
+```typescript
+const items: Array<i32> = [1, 2, 3];
+const [first, ...rest] = items;
+```
+
+### In function parameters
+
+```typescript
+function greet({ name, age }: User): string {
+  return `${name} is ${age}`;
+}
+```
+
+## Spread operator
+
+### Arrays
+
+```typescript
+const a: Array<i32> = [1, 2, 3];
+const b = [...a, 4, 5];  // [1, 2, 3, 4, 5]
+```
+
+The spread operator clones and extends:
+
+```rust
+{
+    let mut v = a.clone();
+    v.extend([4, 5]);
+    v
+}
+```
+
+## Operators
+
+### Nullish coalescing
+
+```typescript
+const value = maybeNull ?? "default";
+```
+
+Compiles to `Option::unwrap_or_else`:
+
+```rust
+let value = maybe_null.unwrap_or_else(|| "default".to_string());
+```
+
+### Optional chaining
+
+```typescript
+const len = name?.length;
+```
+
+Compiles to `Option::map`:
+
+```rust
+let len = name.as_ref().map(|s| s.len());
+```
+
+### typeof
+
+```typescript
+type T = typeof someValue;  // Compile-time type extraction
+```

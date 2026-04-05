@@ -1,0 +1,157 @@
+# Map and Set
+
+`Map<K, V>` compiles to `HashMap<K, V>`. `Set<T>` compiles to `HashSet<T>`.
+
+## Map
+
+### Creating a Map
+
+```typescript
+const scores: Map<string, i32> = new Map();
+```
+
+With initial entries:
+
+```typescript
+const config: Map<string, string> = new Map([
+  ["host", "localhost"],
+  ["port", "8080"],
+]);
+```
+
+### Setting and getting
+
+```typescript
+const map: Map<string, i32> = new Map();
+
+map.set("alice", 100);
+map.set("bob", 85);
+
+const score = map.get("alice");   // 100
+```
+
+### Checking and deleting
+
+```typescript
+map.has("alice");      // true
+map.delete("alice");   // removes the entry
+map.clear();           // removes all entries
+```
+
+### Size
+
+```typescript
+const count = map.size;   // number of entries
+```
+
+### Iterating
+
+```typescript
+const map: Map<string, i32> = new Map();
+map.set("a", 1);
+map.set("b", 2);
+
+// Keys
+for (const key of map.keys()) {
+  console.log(key);
+}
+
+// Values
+for (const val of map.values()) {
+  console.log(`${val}`);
+}
+
+// Entries
+for (const entry of map.entries()) {
+  console.log(`${entry}`);
+}
+
+// forEach
+map.forEach((value: i32, key: string) => {
+  console.log(`${key}: ${value}`);
+});
+```
+
+### Map methods reference
+
+| Method | Rust equivalent |
+|--------|----------------|
+| `.get(key)` | `.get(key).cloned()` |
+| `.set(key, value)` | `.insert(key, value)` |
+| `.has(key)` | `.contains_key(key)` |
+| `.delete(key)` | `.remove(key)` |
+| `.clear()` | `.clear()` |
+| `.keys()` | `.keys()` |
+| `.values()` | `.values()` |
+| `.entries()` | `.iter()` |
+| `.forEach(fn)` | `.iter().for_each(fn)` |
+| `.size` | `.len() as i64` |
+
+---
+
+## Set
+
+### Creating a Set
+
+```typescript
+const tags: Set<string> = new Set();
+```
+
+From an iterable:
+
+```typescript
+const unique: Set<i32> = new Set([1, 2, 3, 2, 1]);  // {1, 2, 3}
+```
+
+### Adding and checking
+
+```typescript
+const set: Set<string> = new Set();
+
+set.add("rust");
+set.add("typescript");
+
+set.has("rust");      // true
+set.has("python");    // false
+```
+
+### Removing
+
+```typescript
+set.delete("rust");   // removes "rust"
+set.clear();          // removes all elements
+```
+
+### Size
+
+```typescript
+const count = set.size;
+```
+
+### Iterating
+
+```typescript
+const set: Set<string> = new Set();
+set.add("a");
+set.add("b");
+
+for (const item of set.values()) {
+  console.log(item);
+}
+
+set.forEach(item => console.log(item));
+```
+
+### Set methods reference
+
+| Method | Rust equivalent |
+|--------|----------------|
+| `.add(value)` | `.insert(value)` |
+| `.has(value)` | `.contains(value)` |
+| `.delete(value)` | `.remove(value)` |
+| `.clear()` | `.clear()` |
+| `.keys()` | `.iter()` |
+| `.values()` | `.iter()` |
+| `.entries()` | `.iter()` |
+| `.forEach(fn)` | `.iter().for_each(fn)` |
+| `.size` | `.len() as i64` |

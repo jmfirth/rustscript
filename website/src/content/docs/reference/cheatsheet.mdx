@@ -1,0 +1,199 @@
+# Cheatsheet
+
+Dense single-page reference for RustScript. Bookmark this.
+
+## Type mapping
+
+| RustScript | Rust |
+|-----------|------|
+| `string` | `String` |
+| `boolean` | `bool` |
+| `i8` / `i16` / `i32` / `i64` | `i8` / `i16` / `i32` / `i64` |
+| `u8` / `u16` / `u32` / `u64` | `u8` / `u16` / `u32` / `u64` |
+| `f32` / `f64` | `f32` / `f64` |
+| `void` | `()` |
+| `never` | `!` |
+| `Array<T>` | `Vec<T>` |
+| `Map<K, V>` | `HashMap<K, V>` |
+| `Set<T>` | `HashSet<T>` |
+| `[A, B]` (tuple) | `(A, B)` |
+| `T \| null` | `Option<T>` |
+| `Promise<T>` | async + tokio |
+
+## Variables
+
+```typescript
+const x = 5;       // immutable (let)
+let y = 10;        // mutable (let mut)
+var z = 15;        // mutable (let mut)
+```
+
+## Functions
+
+```typescript
+function add(a: i32, b: i32): i32 { return a + b; }
+async function fetch(): string { return "data"; }
+const double = (x: i32): i32 => x * 2;
+function id<T>(v: T): T { return v; }
+```
+
+## Types
+
+```typescript
+// Struct
+type User = { id: u32, name: string }
+
+// With derives
+type User = { id: u32, name: string } derives Serialize, Debug
+
+// Optional field
+type Config = { host: string, port?: i32 }
+
+// String enum
+type Color = "red" | "green" | "blue"
+
+// Data enum (discriminated union)
+type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+```
+
+## Control flow
+
+```typescript
+if (x > 0) { } else { }
+for (const item of items) { }
+for (let i: i32 = 0; i < 10; i = i + 1) { }
+while (cond) { }
+do { } while (cond);
+switch (x) { case "a": ... default: ... }
+outer: for (const x of xs) { break outer; }
+```
+
+## Imports
+
+```typescript
+import { Router } from "axum";           // use axum::Router;
+import { get } from "axum/routing";      // use axum::routing::get;
+import { Serialize } from "serde";       // use serde::Serialize;
+```
+
+## Error handling
+
+```typescript
+try { riskyOp(); } catch (e) { console.log(e.message); }
+throw new Error("failed");
+```
+
+## Operators
+
+```typescript
+x ?? "default"       // nullish coalescing → unwrap_or_else
+x?.length            // optional chaining → .map()
+[...arr, 4, 5]       // spread → clone + extend
+`hello ${name}`      // template literal → format!
+```
+
+## String methods
+
+| Method | Example |
+|--------|---------|
+| `.toUpperCase()` | `"hi".toUpperCase()` -- `"HI"` |
+| `.toLowerCase()` | `"HI".toLowerCase()` -- `"hi"` |
+| `.includes(s)` | `"hello".includes("ell")` -- `true` |
+| `.startsWith(s)` | `"hello".startsWith("he")` -- `true` |
+| `.split(sep)` | `"a,b".split(",")` -- `["a","b"]` |
+| `.trim()` | `" hi ".trim()` -- `"hi"` |
+| `.replace(a,b)` | `"ab".replace("a","x")` -- `"xb"` |
+| `.slice(s,e)` | `"hello".slice(0,2)` -- `"he"` |
+| `.length` | `"hi".length` -- `2` |
+
+## Array methods
+
+| Method | Example |
+|--------|---------|
+| `.push(x)` | Append |
+| `.pop()` | Remove last |
+| `.map(fn)` | Transform |
+| `.filter(fn)` | Keep matching |
+| `.reduce(fn, init)` | Fold |
+| `.find(fn)` | First match |
+| `.some(fn)` | Any match? |
+| `.every(fn)` | All match? |
+| `.includes(x)` | Contains? |
+| `.join(sep)` | Concatenate |
+| `.sort()` | In-place sort |
+| `.length` | Element count |
+
+## Map methods
+
+| Method | |
+|--------|--|
+| `new Map()` | Create |
+| `.set(k, v)` | Insert |
+| `.get(k)` | Retrieve |
+| `.has(k)` | Check |
+| `.delete(k)` | Remove |
+| `.size` | Count |
+
+## Set methods
+
+| Method | |
+|--------|--|
+| `new Set()` | Create |
+| `.add(v)` | Insert |
+| `.has(v)` | Check |
+| `.delete(v)` | Remove |
+| `.size` | Count |
+
+## Console
+
+```typescript
+console.log("stdout");
+console.error("stderr");
+console.warn("stderr with [WARN]");
+console.debug("stdout with [DEBUG]");
+console.table(obj);          // pretty-print
+console.assert(cond, "msg"); // panic if false
+console.time("label");       // start timer
+console.timeEnd("label");    // print elapsed
+```
+
+## Math
+
+```typescript
+Math.floor(3.7)    Math.ceil(3.2)    Math.round(3.5)
+Math.abs(-5.0)     Math.sqrt(16.0)   Math.pow(2.0, 10.0)
+Math.min(a, b)     Math.max(a, b)    Math.random()
+Math.PI            Math.E
+```
+
+## JSON
+
+```typescript
+JSON.stringify(value)    // requires derives Serialize
+JSON.parse(str)          // requires derives Deserialize
+```
+
+## Async
+
+```typescript
+async function main() { }           // #[tokio::main]
+const x = await asyncFn();          // .await
+const [a, b] = await Promise.all([fetchA(), fetchB()]);
+```
+
+## Classes
+
+```typescript
+class Foo {
+  x: i32;
+  constructor(x: i32) { this.x = x; }
+  get(): i32 { return this.x; }
+}
+class Bar extends Foo { }
+```
+
+## Not in RustScript
+
+No `any`, `undefined`, `number`, `interface`, `namespace`, `enum` keyword, prototype chain, dynamic property access, declaration merging.

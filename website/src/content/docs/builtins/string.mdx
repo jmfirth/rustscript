@@ -1,0 +1,151 @@
+# String Methods
+
+`string` in RustScript compiles to Rust's `String`. All familiar JavaScript string methods are available.
+
+## Case conversion
+
+```typescript
+const s = "Hello World";
+s.toUpperCase();    // "HELLO WORLD"
+s.toLowerCase();    // "hello world"
+```
+
+## Searching
+
+```typescript
+const s = "hello world";
+
+s.startsWith("hello");    // true
+s.endsWith("world");      // true
+s.includes("lo wo");      // true
+s.indexOf("world");       // 6
+s.lastIndexOf("l");       // 9
+```
+
+`indexOf` and `lastIndexOf` return `-1` when not found, just like JavaScript.
+
+## Splitting and joining
+
+```typescript
+const parts = "a,b,c".split(",");     // ["a", "b", "c"]
+const joined = parts.join(" - ");      // "a - b - c"
+```
+
+## Trimming
+
+```typescript
+const s = "  hello  ";
+s.trim();        // "hello"
+s.trimStart();   // "hello  "
+s.trimEnd();     // "  hello"
+```
+
+## Replacing
+
+```typescript
+const s = "foo bar foo";
+s.replace("foo", "baz");       // "baz bar foo"  (first only)
+s.replaceAll("foo", "baz");    // "baz bar baz"  (all)
+```
+
+## Slicing and substring
+
+```typescript
+const s = "hello world";
+s.slice(0, 5);       // "hello"
+s.substring(6, 11);  // "world"
+```
+
+## Character access
+
+```typescript
+const s = "hello";
+s.charAt(0);       // "h"
+s.charCodeAt(0);   // 104
+s.at(0);           // "h"
+s.codePointAt(0);  // 104
+```
+
+## Padding
+
+```typescript
+"42".padStart(5, "0");   // "00042"
+"hi".padEnd(5, ".");     // "hi..."
+```
+
+## Other methods
+
+```typescript
+"ha".repeat(3);              // "hahaha"
+"hello".concat(" world");   // "hello world"
+```
+
+## Length
+
+```typescript
+const len = "hello".length;  // 5
+```
+
+`.length` compiles to `.len() as i64`.
+
+## Template literals
+
+String interpolation with backticks:
+
+```typescript
+const name = "world";
+console.log(`Hello, ${name}!`);
+console.log(`Length: ${name.length}`);
+```
+
+Generates:
+
+```rust
+println!("Hello, {}!", name);
+println!("Length: {}", name.len());
+```
+
+## Regex methods
+
+```typescript
+const s = "hello world";
+const re = /world/;
+
+s.match(re);       // Regex captures
+s.search(re);      // Index of first match
+s.matchAll(re);    // All matches (iterator)
+```
+
+## Static methods
+
+```typescript
+String.fromCharCode(72);   // "H"
+```
+
+## Complete reference
+
+| Method | Rust equivalent |
+|--------|----------------|
+| `.toUpperCase()` | `.to_uppercase()` |
+| `.toLowerCase()` | `.to_lowercase()` |
+| `.startsWith(s)` | `.starts_with(s)` |
+| `.endsWith(s)` | `.ends_with(s)` |
+| `.includes(s)` | `.contains(s)` |
+| `.split(sep)` | `.split(sep).collect()` |
+| `.trim()` | `.trim().to_string()` |
+| `.trimStart()` | `.trim_start().to_string()` |
+| `.trimEnd()` | `.trim_end().to_string()` |
+| `.replace(a, b)` | `.replacen(a, b, 1)` |
+| `.replaceAll(a, b)` | `.replace(a, b)` |
+| `.charAt(i)` | `.chars().nth(i)` |
+| `.charCodeAt(i)` | `.chars().nth(i).map(\|c\| c as u32)` |
+| `.indexOf(s)` | `.find(s)` |
+| `.lastIndexOf(s)` | `.rfind(s)` |
+| `.slice(start, end)` | String slicing |
+| `.substring(start, end)` | String slicing |
+| `.padStart(len, fill)` | Format padding |
+| `.padEnd(len, fill)` | Format padding |
+| `.repeat(n)` | `.repeat(n)` |
+| `.concat(s)` | `format!("{}{}", self, s)` |
+| `.at(i)` | `.chars().nth(i)` |
+| `.length` | `.len() as i64` |

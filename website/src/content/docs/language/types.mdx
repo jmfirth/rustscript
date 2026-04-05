@@ -1,0 +1,146 @@
+# Types
+
+RustScript uses explicit types instead of TypeScript's `number`. You get the performance and precision of Rust's type system with TypeScript's syntax.
+
+## Primitives
+
+```typescript
+const s: string = "hello";       // Rust: String
+const b: boolean = true;         // Rust: bool
+const n: i32 = 42;               // Rust: i32
+const f: f64 = 3.14;             // Rust: f64
+const v: void = undefined;       // Rust: ()
+```
+
+### Why not `number`?
+
+TypeScript's `number` is a 64-bit float for everything. Rust distinguishes integers from floats, and sizes matter. RustScript exposes all of Rust's numeric types:
+
+| RustScript | Rust | Range |
+|-----------|------|-------|
+| `i8` | `i8` | -128 to 127 |
+| `i16` | `i16` | -32,768 to 32,767 |
+| `i32` | `i32` | -2B to 2B |
+| `i64` | `i64` | -9.2e18 to 9.2e18 |
+| `u8` | `u8` | 0 to 255 |
+| `u16` | `u16` | 0 to 65,535 |
+| `u32` | `u32` | 0 to 4B |
+| `u64` | `u64` | 0 to 18.4e18 |
+| `f32` | `f32` | 32-bit float |
+| `f64` | `f64` | 64-bit float |
+
+**Defaults:** Integer literals default to `i64`. Float literals default to `f64`.
+
+**Widening:** Mixing numeric types widens automatically. `i32 + i64` produces `i64`.
+
+```typescript
+const small: i32 = 10;
+const big: i64 = 1000;
+const result = small + big;  // result is i64
+```
+
+## string
+
+`string` in RustScript compiles to Rust's owned `String`. String literals are automatically converted:
+
+```typescript
+const name: string = "Alice";  // → "Alice".to_string()
+```
+
+You never deal with `&str` vs `String`. The compiler handles it.
+
+## boolean
+
+```typescript
+const yes: boolean = true;   // → bool
+const no: boolean = false;
+```
+
+## void and never
+
+```typescript
+function log(msg: string): void {
+  console.log(msg);
+}
+
+function fail(): never {
+  throw "fatal error";
+}
+```
+
+`void` compiles to `()`. `never` compiles to `!` -- a function that never returns.
+
+## Collections
+
+### Array
+
+```typescript
+const nums: Array<i32> = [1, 2, 3];          // → Vec<i32>
+const names: Array<string> = ["a", "b"];      // → Vec<String>
+```
+
+`Array<T>` compiles to `Vec<T>`. See [Array builtins](/docs/builtins/array) for all methods.
+
+### Map
+
+```typescript
+const scores: Map<string, i32> = new Map();  // → HashMap<String, i32>
+scores.set("alice", 100);
+scores.set("bob", 85);
+```
+
+`Map<K, V>` compiles to `HashMap<K, V>`. See [Map and Set builtins](/docs/builtins/map-set).
+
+### Set
+
+```typescript
+const tags: Set<string> = new Set();          // → HashSet<String>
+tags.add("rust");
+tags.add("typescript");
+```
+
+`Set<T>` compiles to `HashSet<T>`.
+
+## Tuples
+
+```typescript
+const pair: [string, i32] = ["hello", 42];   // → (String, i32)
+```
+
+Tuples are fixed-length, heterogeneous collections. They compile to Rust tuples.
+
+## Nullable types
+
+There is no `undefined` in RustScript. Use `null` to represent absence:
+
+```typescript
+const name: string | null = null;             // → Option<String>
+const found: string | null = "Alice";         // → Some("Alice".to_string())
+```
+
+`T | null` compiles to `Option<T>`. Use nullish coalescing and optional chaining:
+
+```typescript
+const display = name ?? "Anonymous";          // → name.unwrap_or_else(...)
+const len = name?.length;                     // → name.as_ref().map(|s| s.len())
+```
+
+## Type inference
+
+RustScript infers types where it can. You don't always need annotations:
+
+```typescript
+const x = 42;              // inferred as i64
+const s = "hello";         // inferred as string
+const arr = [1, 2, 3];    // inferred as Array<i64>
+```
+
+Function parameters always require type annotations. Return types can often be inferred but explicit annotations are recommended.
+
+## What's NOT in RustScript
+
+- **No `any`** -- everything is typed
+- **No `undefined`** -- use `null` (compiles to `None`)
+- **No `number`** -- use explicit numeric types (`i32`, `f64`, etc.)
+- **No `interface`** -- use `type = { ... }` instead
+- **No union types beyond `T | null`** -- use string unions or data enums for tagged unions

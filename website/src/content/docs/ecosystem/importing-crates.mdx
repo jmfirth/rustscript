@@ -1,0 +1,118 @@
+# Importing Crates
+
+RustScript gives you the entire Rust crate ecosystem through TypeScript import syntax. No `npm install`. No `package.json`. Write an import, and the compiler handles the rest.
+
+## How it works
+
+```typescript
+import { Router, serve } from "axum";
+```
+
+When the compiler sees this:
+
+1. It recognizes `"axum"` as a Rust crate
+2. It adds `axum = "..."` to the generated `Cargo.toml` in `.rsc-build/`
+3. It emits `use axum::{Router, serve};` in the generated Rust
+4. Cargo downloads and compiles the crate on first build
+
+You write one line. The compiler figures out the dependency, the version, and the `use` declaration.
+
+## Submodule imports
+
+Slash-separated paths map to Rust module paths:
+
+```typescript
+import { get, post } from "axum/routing";
+// → use axum::routing::{get, post};
+
+import { TcpListener } from "tokio/net";
+// → use tokio::net::TcpListener;
+
+import { Serialize, Deserialize } from "serde";
+// → use serde::{Serialize, Deserialize};
+```
+
+## Auto-dependency detection
+
+The compiler inspects every import in your `.rts` file. Known crates get pinned to compatible versions. For example, importing from `"axum"` adds `axum = "0.7"` with the right feature flags.
+
+Known crate patterns include:
+- **axum** -- web framework
+- **tokio** -- async runtime (with appropriate features)
+- **serde / serde_json** -- serialization
+- **reqwest** -- HTTP client
+- **clap** -- CLI argument parsing
+
+Unknown crate names get the latest version from crates.io.
+
+## The generated Cargo.toml
+
+Your source `cargo.toml` is minimal:
+
+```toml
+[package]
+name = "my-api"
+edition = "2021"
+```
+
+The compiler generates a full `Cargo.toml` in `.rsc-build/`:
+
+```toml
+[package]
+name = "my-api"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+You never edit this generated file. It's rebuilt from your imports every time you compile.
+
+## Example: web server
+
+```typescript
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+
+async function hello(): string {
+  return "Hello from RustScript!";
+}
+
+async function main() {
+  const app = new Router().route("/", get(hello));
+  const listener = await TcpListener.bind("0.0.0.0:3000");
+  console.log("Listening on http://0.0.0.0:3000");
+  await serve(listener, app);
+}
+```
+
+Three imports. Three crates auto-detected. A running web server.
+
+## Example: HTTP client
+
+```typescript
+import { get } from "reqwest";
+
+type Post = {
+  userId: i64,
+  id: i64,
+  title: string,
+  body: string,
+} derives Deserialize
+
+async function main() {
+  const response = await get("https://jsonplaceholder.typicode.com/posts/1");
+  const post: Post = await response.json();
+  console.log(post.title);
+}
+```
+
+## Tips
+
+- **Read the Rust crate docs.** RustScript imports map directly to Rust's `use` paths. The crate's Rust documentation tells you what's available.
+- **Use [Type Mapping](/docs/ecosystem/type-mapping)** to translate Rust types back to RustScript when reading crate docs.
+- **Feature flags** are handled automatically for known crates. For unknown crates, you may need to check that the right features are enabled.
