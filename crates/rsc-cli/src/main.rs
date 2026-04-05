@@ -7,7 +7,7 @@
 mod repl;
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -70,6 +70,9 @@ enum Command {
         /// Disable Tier 2 borrow inference (all params stay owned)
         #[arg(long)]
         no_borrow_inference: bool,
+        /// Also generate TypeScript type definitions into the specified directory
+        #[arg(long)]
+        emit_types: Option<PathBuf>,
     },
     /// Compile and run the project
     Run {
@@ -134,6 +137,12 @@ enum Command {
         #[arg(long)]
         release: bool,
     },
+    /// Generate TypeScript type definitions from `RustScript` source
+    Types {
+        /// Output directory for `.d.ts` files
+        #[arg(long, short = 'o', default_value = "types")]
+        out: PathBuf,
+    },
 }
 
 fn main() {
@@ -175,7 +184,14 @@ fn run(cli: Cli) -> Result<i32> {
             release,
             target,
             no_borrow_inference,
-        } => cmd_build(release, target.as_deref(), no_borrow_inference, color),
+            emit_types,
+        } => cmd_build(
+            release,
+            target.as_deref(),
+            no_borrow_inference,
+            color,
+            emit_types.as_deref(),
+        ),
         Command::Run {
             args,
             target,
@@ -194,6 +210,7 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Lsp => cmd_lsp(),
         Command::Repl => repl::run_repl(),
         Command::Dev { release } => cmd_dev(release),
+        Command::Types { out } => cmd_types(&out),
     }
 }
 
@@ -230,6 +247,7 @@ fn cmd_build(
     target: Option<&str>,
     no_borrow_inference: bool,
     color: ColorMode,
+    emit_types: Option<&Path>,
 ) -> Result<i32> {
     let mut project = open_project()?;
     project.compile_options.no_borrow_inference = no_borrow_inference;
@@ -237,6 +255,9 @@ fn cmd_build(
     match project.build(release, target) {
         Ok(()) => {
             println!("Build complete");
+            if let Some(types_dir) = emit_types {
+                emit_types_to_dir(&project.root, types_dir)?;
+            }
             Ok(0)
         }
         Err(DriverError::CompilationFailed(_) | DriverError::CargoBuildFailed) => {
@@ -417,6 +438,44 @@ fn cmd_remove(crate_name: &str) -> Result<i32> {
 fn cmd_lsp() -> Result<i32> {
     rsc_lsp::run_server().map_err(|e| anyhow::anyhow!("LSP server failed: {e}"))?;
     Ok(0)
+}
+
+/// Generate TypeScript type definitions for the project.
+///
+/// Walks `src/` for `.rts` files, generates `.d.ts` files for types with
+/// `Serialize` or `Deserialize` derives, and writes them to the output directory.
+fn cmd_types(out: &Path) -> Result<i32> {
+    let project = open_project()?;
+    emit_types_to_dir(&project.root, out)?;
+    Ok(0)
+}
+
+/// Emit TypeScript type definitions from a project into the given output directory.
+///
+/// Shared between `rsc types` and `rsc build --emit-types`.
+fn emit_types_to_dir(project_root: &Path, out: &Path) -> Result<()> {
+    let results = rsc_driver::typegen::generate_types_for_project(project_root)
+        .context("failed to generate type definitions")?;
+
+    if results.is_empty() {
+        println!("No serializable types found");
+        return Ok(());
+    }
+
+    let mut count = 0;
+    for (relative_path, content) in &results {
+        let output_path = out.join(relative_path);
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        }
+        std::fs::write(&output_path, content)
+            .with_context(|| format!("failed to write {}", output_path.display()))?;
+        count += 1;
+    }
+
+    println!("Generated {count} type file(s) in {}/", out.display());
+    Ok(())
 }
 
 /// Start watch mode: compile on file changes with debouncing.

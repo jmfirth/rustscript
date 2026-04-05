@@ -14,6 +14,7 @@ pub mod rustdoc_cache;
 pub mod rustdoc_convert;
 pub mod rustdoc_parser;
 mod templates;
+pub mod typegen;
 
 pub use error_translation::{
     RustcDiagnostic, RustcErrorCode, RustcSpan, parse_rustc_json_diagnostics,
