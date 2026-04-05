@@ -1,13 +1,13 @@
 # CLI Commands
 
-The `rsc` command-line tool compiles, runs, formats, and manages RustScript projects.
+The `rustscript` command-line tool compiles, runs, formats, and manages RustScript projects. The short alias `rsc` is also available.
 
-## rsc init
+## rustscript init
 
 Create a new project:
 
 ```bash
-rsc init my-project
+rustscript init my-project
 ```
 
 Creates a directory with `rustscript.json`, a generated `Cargo.toml`, `.gitignore`, and `src/main.rts`.
@@ -15,17 +15,17 @@ Creates a directory with `rustscript.json`, a generated `Cargo.toml`, `.gitignor
 ### Templates
 
 ```bash
-rsc init my-api --template web-server    # axum web server
-rsc init my-tool --template cli          # CLI application
-rsc init my-wasm --template wasm         # WebAssembly project
+rustscript init my-api --template web-server    # axum web server
+rustscript init my-tool --template cli          # CLI application
+rustscript init my-wasm --template wasm         # WebAssembly project
 ```
 
-## rsc build
+## rustscript build
 
 Compile to a native binary:
 
 ```bash
-rsc build
+rustscript build
 ```
 
 This:
@@ -38,48 +38,87 @@ This:
 
 The output binary is in `target/debug/`.
 
-## rsc run
+## rustscript run
 
 Build and execute in one step:
 
 ```bash
-rsc run
+rustscript run
 ```
 
 Pass arguments to the compiled binary with `--`:
 
 ```bash
-rsc run -- --port 8080 --verbose
+rustscript run -- --port 8080 --verbose
 ```
 
-Everything after `--` is forwarded to your program, not to `rsc`.
+Everything after `--` is forwarded to your program, not to the compiler.
 
-## rsc check
+## rustscript check
 
 Type-check without building:
 
 ```bash
-rsc check
+rustscript check
 ```
 
-Faster than `rsc build` because it skips code generation and `cargo build`. Use it for quick validation while editing.
+Faster than `rustscript build` because it skips code generation and `cargo build`. Use it for quick validation while editing.
 
-## rsc fmt
+## rustscript dev
+
+Watch mode — rebuilds on file changes:
+
+```bash
+rustscript dev
+```
+
+Watches `src/` for `.rts` file changes and recompiles automatically.
+
+## rustscript fmt
 
 Format `.rts` source files:
 
 ```bash
-rsc fmt
+rustscript fmt
 ```
 
 Applies consistent formatting to all `.rts` files in the project. Analogous to `prettier` for TypeScript or `rustfmt` for Rust.
 
-## rsc eject
+## rustscript test
+
+Compile and run tests:
+
+```bash
+rustscript test
+```
+
+## rustscript types
+
+Generate TypeScript type definitions from your RustScript source:
+
+```bash
+rustscript types --out frontend/src/types/
+```
+
+Emits `.d.ts` files for types that derive `Serialize` or `Deserialize`. Use this to share types between a RustScript backend and a TypeScript frontend.
+
+## rustscript add / remove
+
+Manage dependencies:
+
+```bash
+rustscript add serde --version 1 --features derive
+rustscript remove serde
+```
+
+Reads and writes the `dependencies` section of `rustscript.json`.
+
+## rustscript eject
 
 Convert a RustScript project to pure Rust:
 
 ```bash
-rsc eject
+rustscript eject
 ```
 
 This:
@@ -94,16 +133,16 @@ Use this when you want to graduate a project out of RustScript without losing an
 ### Development loop
 
 ```bash
-rsc run                    # Build and run
-rsc check                  # Quick type check
-rsc fmt                    # Format before committing
+rustscript dev                # Watch mode
+rustscript check              # Quick type check
+rustscript fmt                # Format before committing
 ```
 
 ### Production build
 
 ```bash
-rsc build                  # Compile to native binary
-./target/debug/my-project  # Run the binary directly
+rustscript build              # Compile to native binary
+./target/debug/my-project     # Run the binary directly
 ```
 
 ## Exit codes

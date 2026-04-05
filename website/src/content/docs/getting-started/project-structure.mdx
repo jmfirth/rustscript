@@ -30,12 +30,24 @@ my-project/
 
 ## rustscript.json
 
-The project manifest. Created by `rsc init`, lives in the project root:
+The project manifest. Created by `rustscript init`, lives in the project root:
 
 ```json
 {
   "name": "my-project",
-  "edition": "2021"
+  "edition": "2024"
+}
+```
+
+You can also declare explicit dependencies with pinned versions:
+
+```json
+{
+  "name": "my-project",
+  "edition": "2024",
+  "dependencies": {
+    "clap": { "version": "4", "features": ["derive"] }
+  }
 }
 ```
 
@@ -44,7 +56,10 @@ Fields:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Package name (used in `Cargo.toml`) |
-| `edition` | No | Rust edition, defaults to `"2021"` |
+| `version` | No | Project version, defaults to `"0.1.0"` |
+| `edition` | No | Rust edition, defaults to `"2024"` |
+| `dependencies` | No | Explicit dependency versions and features |
+| `devDependencies` | No | Dev-only dependencies |
 
 ## Cargo.toml
 
@@ -57,7 +72,7 @@ Example generated `Cargo.toml`:
 ```toml
 [package]
 name = "my-project"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 axum = "0.7"
@@ -82,7 +97,7 @@ You can organize code into multiple `.rts` files, but `main.rts` is where execut
 
 ## .gitignore
 
-`rsc init` generates a `.gitignore` that covers the right files:
+`rustscript init` generates a `.gitignore` that covers the right files:
 
 ```
 /src/*.rs
@@ -93,12 +108,12 @@ Generated `.rs` files are intentionally gitignored — they're build artifacts d
 
 ## Templates
 
-`rsc init` supports templates for common project types:
+`rustscript init` supports templates for common project types:
 
 ```bash
-rsc init my-api --template web-server    # axum web server scaffold
-rsc init my-cli --template cli           # CLI tool scaffold
-rsc init my-wasm --template wasm         # WASM project scaffold
+rustscript init my-api --template web-server    # axum web server scaffold
+rustscript init my-cli --template cli           # CLI tool scaffold
+rustscript init my-wasm --template wasm         # WASM project scaffold
 ```
 
 ## The compilation pipeline
@@ -120,7 +135,7 @@ Each stage:
 Because the generated Rust is idiomatic and human-readable, you can eject at any time:
 
 ```bash
-rsc eject
+rustscript eject
 ```
 
 This converts the project to a standard Rust project: removes `rustscript.json`, unstages the generated `.rs` files from `.gitignore`, and leaves you with a pure Rust codebase. No lock-in.
