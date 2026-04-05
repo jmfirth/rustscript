@@ -56,6 +56,10 @@ web-wasm:
 web: web-wasm
     cd website && npm install && npm run build
 
+# Serve the built website locally
+web-serve: web
+    cd website && npx serve out
+
 # Run website e2e tests
 web-test: web
     cd website && npx playwright test
