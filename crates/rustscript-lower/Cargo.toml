@@ -3,6 +3,8 @@ name = "rustscript-lower"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "RustScript AST to Rust IR lowering with ownership inference"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

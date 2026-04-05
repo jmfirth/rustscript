@@ -3,6 +3,8 @@ name = "rustscript-typeck"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Type inference, resolution, and checking for the RustScript compiler"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

@@ -3,6 +3,8 @@ name = "rustscript-lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Language server (LSP) for RustScript with diagnostics, hover, and completions"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

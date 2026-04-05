@@ -3,6 +3,8 @@ name = "rustscript-emit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Rust IR to .rs source code emitter for the RustScript compiler"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

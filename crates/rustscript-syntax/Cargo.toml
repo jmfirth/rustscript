@@ -3,6 +3,8 @@ name = "rustscript-syntax"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "AST types, Rust IR, spans, and diagnostics for the RustScript compiler"
 
 [dependencies]
 thiserror = { workspace = true }

@@ -3,7 +3,8 @@ name = "rustscript-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WASM bindings for the RustScript compiler"
+repository = "https://github.com/jmfirth/rustscript"
+description = "WebAssembly bindings for client-side RustScript compilation"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

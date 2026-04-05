@@ -3,6 +3,8 @@ name = "rustscript-driver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Compilation pipeline orchestration and Cargo integration for RustScript"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

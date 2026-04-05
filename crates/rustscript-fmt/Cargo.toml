@@ -3,6 +3,8 @@ name = "rustscript-fmt"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Source code formatter for RustScript (.rts) files"
 
 [dependencies]
 rustscript-syntax = { path = "../rustscript-syntax" }

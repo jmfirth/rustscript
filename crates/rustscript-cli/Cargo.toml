@@ -3,6 +3,8 @@ name = "rustscript"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository = "https://github.com/jmfirth/rustscript"
+description = "Command-line interface for the RustScript compiler"
 
 [[bin]]
 name = "rustscript"
