@@ -112,6 +112,17 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
   });
 }
 
+/** Deduplicate items by name + signature (trait methods appear once per impl) */
+function deduplicateItems(items: TranslatedItem[]): TranslatedItem[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = `${item.kind}:${item.name}:${stripCodeFences(item.signature)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function DocItem({ item }: { item: TranslatedItem }) {
   const signature = stripCodeFences(item.signature);
 
@@ -215,7 +226,7 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
     }
   };
 
-  const grouped = items ? groupItems(filterItems(items)) : null;
+  const grouped = items ? groupItems(deduplicateItems(filterItems(items))) : null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
