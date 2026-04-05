@@ -1,0 +1,11 @@
+name = "rustscript-docs-proxy"
+main = "rustdoc-proxy.ts"
+compatibility_date = "2025-01-01"
+
+# Deploy: cd website/worker && npx wrangler deploy
+# Dev:    cd website/worker && npx wrangler dev
+
+# Custom domain (configure after first deploy):
+# routes = [
+#   { pattern = "proxy.rustscript.dev/*", zone_name = "rustscript.dev" }
+# ]
