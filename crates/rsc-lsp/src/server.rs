@@ -424,6 +424,22 @@ impl LanguageServer for RscLanguageServer {
                 }));
             }
 
+            // Fall back to rsc-hover's token-based hover for builtins and
+            // user-defined symbols that the span-based system missed.
+            // rsc-hover expects 1-based line/column (Monaco convention);
+            // LSP uses 0-based.
+            let hover_result =
+                rsc_hover::hover(&source_text, position.line + 1, position.character + 1);
+            if !hover_result.is_empty() {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: hover_result,
+                    }),
+                    range: None,
+                }));
+            }
+
             // Try rustdoc-based hover for imported symbols.
             if let Some((crate_name, symbol_name)) = find_import_at_cursor(&module, offset)
                 && let Some(build_dir) = self.build_dir.read().await.as_ref()

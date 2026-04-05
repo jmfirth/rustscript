@@ -14,6 +14,7 @@ rsc-parser = { path = "../rsc-parser" }
 rsc-lower = { path = "../rsc-lower" }
 rsc-emit = { path = "../rsc-emit" }
 rsc-driver = { path = "../rsc-driver" }
+rsc-hover = { path = "../rsc-hover" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

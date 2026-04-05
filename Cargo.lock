@@ -1129,6 +1129,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsc-hover"
+version = "0.1.0"
+dependencies = [
+ "rsc-parser",
+ "rsc-syntax",
+]
+
+[[package]]
 name = "rsc-lower"
 version = "0.1.0"
 dependencies = [
@@ -1146,6 +1154,7 @@ dependencies = [
  "dashmap 6.1.0",
  "rsc-driver",
  "rsc-fmt",
+ "rsc-hover",
  "rsc-lower",
  "rsc-parser",
  "rsc-syntax",
@@ -1185,6 +1194,7 @@ version = "0.1.0"
 dependencies = [
  "rsc-driver",
  "rsc-emit",
+ "rsc-hover",
  "rsc-lower",
  "rsc-parser",
  "rsc-syntax",

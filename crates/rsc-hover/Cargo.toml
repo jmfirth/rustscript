@@ -1,0 +1,10 @@
+[package]
+name = "rsc-hover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared hover inference logic for the RustScript compiler"
+
+[dependencies]
+rsc-syntax = { path = "../rsc-syntax" }
+rsc-parser = { path = "../rsc-parser" }

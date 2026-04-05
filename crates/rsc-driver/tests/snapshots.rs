@@ -4487,7 +4487,8 @@ struct Foo {
 
 #[test]
 fn test_snapshot_simple_enum_with_derives() {
-    let source = "import { Serialize } from \"serde\";\ntype Dir = \"north\" | \"south\" derives Serialize";
+    let source =
+        "import { Serialize } from \"serde\";\ntype Dir = \"north\" | \"south\" derives Serialize";
 
     let expected = "\
 use serde::Serialize;

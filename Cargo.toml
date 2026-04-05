@@ -7,6 +7,7 @@ members = [
     "crates/rsc-emit",
     "crates/rsc-fmt",
     "crates/rsc-driver",
+    "crates/rsc-hover",
     "crates/rsc-lsp",
     "crates/rsc-cli",
     "crates/rsc-web",

@@ -9,6 +9,7 @@ rsc-syntax = { path = "../rsc-syntax" }
 rsc-parser = { path = "../rsc-parser" }
 rsc-lower = { path = "../rsc-lower" }
 rsc-driver = { path = "../rsc-driver" }
+rsc-hover = { path = "../rsc-hover" }
 rsc-fmt = { path = "../rsc-fmt" }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
