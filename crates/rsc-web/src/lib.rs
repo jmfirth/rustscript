@@ -445,12 +445,13 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
         }
     }
 
-    // Build a map of function name → return type for call-site inference.
+    // Build lookup maps for type inference.
     let fn_return_types = collect_fn_return_types(&module);
+    let type_fields = collect_type_fields(&module);
 
     // Search inside function bodies for local variables and parameters.
     for item in &module.items {
-        if let Some(sig) = extract_local_hover(item, token, &fn_return_types) {
+        if let Some(sig) = extract_local_hover(item, token, &fn_return_types, &type_fields) {
             return sig;
         }
     }
@@ -771,6 +772,7 @@ fn extract_local_hover(
     item: &rsc_syntax::ast::Item,
     name: &str,
     fn_return_types: &std::collections::HashMap<String, String>,
+    type_fields: &std::collections::HashMap<String, Vec<(String, String)>>,
 ) -> Option<String> {
     use rsc_syntax::ast::ItemKind;
 
@@ -784,15 +786,22 @@ fn extract_local_hover(
                 }
             }
 
-            // Check body statements for variable declarations
+            // Collect variable types for inference
+            let var_types = collect_var_types(&f.body.stmts);
+
+            // Build full inference context
+            let infer_ctx = InferCtx {
+                fn_return_types,
+                var_types: &var_types,
+                type_fields,
+            };
+
+            // Check body statements for variable declarations (with full inference)
             for stmt in &f.body.stmts {
-                if let Some(sig) = extract_var_hover(stmt, name, fn_return_types) {
+                if let Some(sig) = extract_var_hover_ctx(stmt, name, &infer_ctx) {
                     return Some(sig);
                 }
             }
-
-            // Collect variable types for closure param inference
-            let var_types = collect_var_types(&f.body.stmts);
 
             // Check closure parameters in expressions
             for stmt in &f.body.stmts {
@@ -807,7 +816,59 @@ fn extract_local_hover(
     }
 }
 
-/// Extract hover info from a variable declaration statement.
+/// Extract hover info from a variable declaration with full inference context.
+fn extract_var_hover_ctx(
+    stmt: &rsc_syntax::ast::Stmt,
+    name: &str,
+    ctx: &InferCtx<'_>,
+) -> Option<String> {
+    use rsc_syntax::ast::{Stmt, VarBinding};
+
+    match stmt {
+        Stmt::VarDecl(decl) if decl.name.name == name => {
+            let binding = match decl.binding {
+                VarBinding::Const => "const",
+                VarBinding::Let => "let",
+                VarBinding::Var => "var",
+            };
+            let ty = if let Some(ann) = &decl.type_ann {
+                format!(": {}", format_type_ann(ann))
+            } else {
+                infer_type_from_expr_ctx(&decl.init, ctx)
+                    .map_or_else(String::new, |t| format!(": {t}"))
+            };
+            Some(format!("```rustscript\n{binding} {name}{ty}\n```"))
+        }
+        // Recurse into nested blocks
+        Stmt::If(if_stmt) => {
+            for s in &if_stmt.then_block.stmts {
+                if let Some(sig) = extract_var_hover_ctx(s, name, ctx) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        Stmt::While(w) => {
+            for s in &w.body.stmts {
+                if let Some(sig) = extract_var_hover_ctx(s, name, ctx) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        Stmt::For(f) => {
+            for s in &f.body.stmts {
+                if let Some(sig) = extract_var_hover_ctx(s, name, ctx) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Extract hover info from a variable declaration statement (legacy, without full context).
 fn extract_var_hover(
     stmt: &rsc_syntax::ast::Stmt,
     name: &str,
@@ -884,16 +945,60 @@ fn extract_var_hover(
     }
 }
 
+/// Context for type inference during hover.
+struct InferCtx<'a> {
+    fn_return_types: &'a std::collections::HashMap<String, String>,
+    var_types: &'a std::collections::HashMap<String, String>,
+    type_fields: &'a std::collections::HashMap<String, Vec<(String, String)>>,
+}
+
+/// Collect type name → vec of (field_name, field_type) from module.
+fn collect_type_fields(
+    module: &rsc_syntax::ast::Module,
+) -> std::collections::HashMap<String, Vec<(String, String)>> {
+    use rsc_syntax::ast::ItemKind;
+    let mut map = std::collections::HashMap::new();
+    for item in &module.items {
+        if let ItemKind::TypeDef(td) = &item.kind {
+            let fields: Vec<(String, String)> = td
+                .fields
+                .iter()
+                .map(|f| (f.name.name.clone(), format_type_ann(&f.type_ann)))
+                .collect();
+            if !fields.is_empty() {
+                map.insert(td.name.name.clone(), fields);
+            }
+        }
+    }
+    map
+}
+
 /// Try to infer the type of an expression for hover display.
 fn infer_type_from_expr(
     expr: &rsc_syntax::ast::Expr,
     fn_return_types: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
+    // Legacy wrapper — builds minimal context
+    let empty_var = std::collections::HashMap::new();
+    let empty_fields = std::collections::HashMap::new();
+    let ctx = InferCtx {
+        fn_return_types,
+        var_types: &empty_var,
+        type_fields: &empty_fields,
+    };
+    infer_type_from_expr_ctx(expr, &ctx)
+}
+
+/// Try to infer the type of an expression with full context.
+fn infer_type_from_expr_ctx(
+    expr: &rsc_syntax::ast::Expr,
+    ctx: &InferCtx<'_>,
+) -> Option<String> {
     use rsc_syntax::ast::ExprKind;
 
     match &expr.kind {
         // Function call → look up return type
-        ExprKind::Call(call) => fn_return_types.get(&call.callee.name).cloned(),
+        ExprKind::Call(call) => ctx.fn_return_types.get(&call.callee.name).cloned(),
         // String literal → string
         ExprKind::StringLit(_) => Some("string".to_owned()),
         // Template literal → string
@@ -906,24 +1011,98 @@ fn infer_type_from_expr(
         // Array literal → Array<...>
         ExprKind::ArrayLit(_) => Some("Array<...>".to_owned()),
         // Await → unwrap the inner expression
-        ExprKind::Await(inner) => infer_type_from_expr(inner, fn_return_types),
-        // Method call on known collection method → try to infer
+        ExprKind::Await(inner) => infer_type_from_expr_ctx(inner, ctx),
+        // Field access → look up field type on receiver
+        ExprKind::FieldAccess(fa) => {
+            // Try to infer the receiver type, then look up the field
+            let receiver_type = infer_type_from_expr_ctx(&fa.object, ctx)?;
+            let fields = ctx.type_fields.get(&receiver_type)?;
+            fields
+                .iter()
+                .find(|(name, _)| name == &fa.field.name)
+                .map(|(_, ty)| ty.clone())
+        }
+        // Identifier → look up in var_types
+        ExprKind::Ident(ident) => ctx.var_types.get(&ident.name).cloned(),
+        // Method call on known collection method
         ExprKind::MethodCall(mc) => {
             match mc.method.name.as_str() {
-                "filter" => {
-                    // filter preserves the array type
-                    infer_type_from_expr(&mc.object, fn_return_types)
+                "filter" | "sort" | "reverse" | "slice" | "concat" => {
+                    // Preserves the collection type
+                    infer_type_from_expr_ctx(&mc.object, ctx)
                 }
-                "map" => Some("Array<...>".to_owned()),
-                "find" => Some("... | null".to_owned()),
-                "join" => Some("string".to_owned()),
-                "toString" => Some("string".to_owned()),
+                "map" => {
+                    // map return type is Array<ReturnTypeOfClosure>
+                    // Try to infer from the closure argument
+                    if let Some(closure_arg) = mc.args.first() {
+                        if let ExprKind::Closure(closure) = &closure_arg.kind {
+                            let closure_ret = infer_closure_return_type(closure, &mc.object, ctx);
+                            if let Some(ret) = closure_ret {
+                                return Some(format!("Array<{ret}>"));
+                            }
+                        }
+                    }
+                    Some("Array<...>".to_owned())
+                }
+                "find" => {
+                    // Returns element type | null
+                    let receiver_type = infer_type_from_expr_ctx(&mc.object, ctx)?;
+                    extract_element_type(&receiver_type)
+                        .map(|e| format!("{e} | null"))
+                }
+                "join" | "toString" => Some("string".to_owned()),
                 "length" => Some("i64".to_owned()),
+                "reduce" => None, // Too complex to infer
+                "some" | "every" | "includes" => Some("boolean".to_owned()),
+                "indexOf" | "findIndex" => Some("i64".to_owned()),
+                "pop" | "shift" => {
+                    let receiver_type = infer_type_from_expr_ctx(&mc.object, ctx)?;
+                    extract_element_type(&receiver_type)
+                        .map(|e| format!("{e} | null"))
+                }
                 _ => None,
             }
         }
         _ => None,
     }
+}
+
+/// Infer the return type of a closure, using the receiver's element type for param inference.
+fn infer_closure_return_type(
+    closure: &rsc_syntax::ast::ClosureExpr,
+    receiver: &rsc_syntax::ast::Expr,
+    ctx: &InferCtx<'_>,
+) -> Option<String> {
+    use rsc_syntax::ast::ClosureBody;
+
+    // If the closure has an explicit return type, use it
+    if let Some(rt) = &closure.return_type {
+        return Some(format_type_ann(rt));
+    }
+
+    // For expression body closures (b => b.title), infer from the body
+    if let ClosureBody::Expr(body_expr) = &closure.body {
+        // Build a temporary context with the closure param's inferred type
+        let receiver_type = infer_type_from_expr_ctx(receiver, ctx)?;
+        let element_type = extract_element_type(&receiver_type)?;
+
+        // If the body is a field access on the param, look up the field type
+        if let rsc_syntax::ast::ExprKind::FieldAccess(fa) = &body_expr.kind {
+            if let rsc_syntax::ast::ExprKind::Ident(ident) = &fa.object.kind {
+                // Check if this ident is the closure param
+                if closure.params.first().map(|p| &p.name.name) == Some(&ident.name) {
+                    // Look up field type on the element type
+                    let fields = ctx.type_fields.get(element_type)?;
+                    return fields
+                        .iter()
+                        .find(|(name, _)| name == &fa.field.name)
+                        .map(|(_, ty)| ty.clone());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Format a full type definition for hover display.
