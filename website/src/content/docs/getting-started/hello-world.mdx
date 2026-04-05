@@ -1,6 +1,6 @@
 # Hello World
 
-Every RustScript program starts with a `main` function in `src/index.rts`.
+Every RustScript program starts with a `main` function in `src/main.rts`.
 
 ## Create a project
 
@@ -13,14 +13,16 @@ This gives you:
 
 ```
 hello/
-  cargo.toml
+  rustscript.json
+  Cargo.toml
+  .gitignore
   src/
-    index.rts
+    main.rts
 ```
 
 ## Write your first program
 
-Open `src/index.rts` and replace its contents:
+Open `src/main.rts` and replace its contents:
 
 ```typescript
 function main() {
@@ -44,10 +46,10 @@ Hello from RustScript!
 
 The compiler:
 
-1. Parsed `index.rts` into a RustScript AST
+1. Parsed `main.rts` into a RustScript AST
 2. Type-checked the program
 3. Lowered the AST to Rust IR
-4. Emitted a `.rs` file into `.rsc-build/`
+4. Emitted a `.rs` file in-place next to `main.rts`
 5. Ran `cargo build` on the generated Rust project
 6. Executed the resulting native binary
 

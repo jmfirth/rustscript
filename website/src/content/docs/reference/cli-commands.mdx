@@ -10,7 +10,7 @@ Create a new project:
 rsc init my-project
 ```
 
-Creates a directory with `cargo.toml` and `src/index.rts`.
+Creates a directory with `rustscript.json`, a generated `Cargo.toml`, `.gitignore`, and `src/main.rts`.
 
 ### Templates
 
@@ -32,10 +32,11 @@ This:
 1. Parses `.rts` files
 2. Type-checks
 3. Lowers to Rust
-4. Emits `.rs` files to `.rsc-build/`
-5. Runs `cargo build`
+4. Emits `.rs` files in-place next to source files
+5. Merges detected dependencies into the project root `Cargo.toml`
+6. Runs `cargo build`
 
-The output binary is in `.rsc-build/target/debug/`.
+The output binary is in `target/debug/`.
 
 ## rsc run
 
@@ -73,6 +74,21 @@ rsc fmt
 
 Applies consistent formatting to all `.rts` files in the project. Analogous to `prettier` for TypeScript or `rustfmt` for Rust.
 
+## rsc eject
+
+Convert a RustScript project to pure Rust:
+
+```bash
+rsc eject
+```
+
+This:
+1. Removes `rustscript.json` (the RustScript manifest)
+2. Removes `/src/*.rs` from `.gitignore` so the generated Rust files are tracked
+3. Leaves you with a standard Cargo project you can continue in pure Rust
+
+Use this when you want to graduate a project out of RustScript without losing any code. The generated `.rs` files are idiomatic, human-readable Rust — they're a clean starting point.
+
 ## Common workflows
 
 ### Development loop
@@ -87,7 +103,7 @@ rsc fmt                    # Format before committing
 
 ```bash
 rsc build                  # Compile to native binary
-./.rsc-build/target/debug/my-project   # Run the binary directly
+./target/debug/my-project  # Run the binary directly
 ```
 
 ## Exit codes

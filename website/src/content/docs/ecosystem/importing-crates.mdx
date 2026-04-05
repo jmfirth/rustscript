@@ -11,7 +11,7 @@ import { Router, serve } from "axum";
 When the compiler sees this:
 
 1. It recognizes `"axum"` as a Rust crate
-2. It adds `axum = "..."` to the generated `Cargo.toml` in `.rsc-build/`
+2. It merges `axum = "..."` into the `Cargo.toml` in your project root
 3. It emits `use axum::{Router, serve};` in the generated Rust
 4. Cargo downloads and compiles the crate on first build
 
@@ -47,15 +47,11 @@ Unknown crate names get the latest version from crates.io.
 
 ## The generated Cargo.toml
 
-Your source `cargo.toml` is minimal:
+The compiler generates and maintains `Cargo.toml` in your project root. It is a standard Cargo manifest -- commit it to git.
 
-```toml
-[package]
-name = "my-api"
-edition = "2021"
-```
+The compiler merges rather than overwrites: the `[dependencies]` section is rebuilt from your imports on every compile, but any other edits you make (pinned versions, feature flags, `[profile]` sections) are preserved.
 
-The compiler generates a full `Cargo.toml` in `.rsc-build/`:
+Example generated `Cargo.toml`:
 
 ```toml
 [package]
@@ -68,8 +64,6 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
-
-You never edit this generated file. It's rebuilt from your imports every time you compile.
 
 ## Example: web server
 

@@ -91,4 +91,10 @@ Use `rust { }` only when you genuinely need something outside RustScript's cover
 
 ## Ejecting
 
-If you find yourself writing a lot of rust blocks, you might be ready to eject. Copy the generated `.rs` from `.rsc-build/` into a pure Rust project and continue there. That's by design -- no lock-in.
+If you find yourself writing a lot of rust blocks, you might be ready to eject to pure Rust:
+
+```bash
+rsc eject
+```
+
+This converts the project to a standard Cargo project: the generated `.rs` files become the source of truth, `rustscript.json` is removed, and you continue in pure Rust. The generated code is idiomatic and human-readable -- a clean starting point. No lock-in.
