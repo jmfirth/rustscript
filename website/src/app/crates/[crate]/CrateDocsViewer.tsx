@@ -99,6 +99,15 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
     if (item.is_trait_impl) {
       return false;
     }
+    // Filter out all method-style functions (Type.method or Trait.method)
+    // These are either trait method definitions or inherent impl methods.
+    // A RustScript dev wants to see types and free functions, not method lists.
+    if (item.kind === 'function') {
+      const sig = stripCodeFences(item.signature);
+      if (/function\s+\S+\.\S+/.test(sig)) {
+        return false;
+      }
+    }
     return true;
   });
 }
