@@ -174,7 +174,7 @@ mod tests {
             is_async: true,
             is_unsafe: false,
             has_self: true,
-            parent_type: Some("Server".to_owned()),
+            parent_type: Some("Server".to_owned()), is_trait_impl: false,
         };
 
         let info = convert_function("axum", "serve", &func);
@@ -291,7 +291,7 @@ mod tests {
                 is_async: false,
                 is_unsafe: false,
                 has_self: true,
-                parent_type: Some("Router".to_owned()),
+                parent_type: Some("Router".to_owned()), is_trait_impl: false,
             }),
         };
         crate_data.items.insert("0:2".to_owned(), method_item);

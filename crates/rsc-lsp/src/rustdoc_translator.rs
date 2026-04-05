@@ -749,6 +749,7 @@ mod tests {
             is_unsafe: false,
             has_self: true,
             parent_type: Some("Router".to_owned()),
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("route", &func),
@@ -1173,6 +1174,7 @@ mod tests {
             is_unsafe: false,
             has_self: true,
             parent_type: Some("Iterator".to_owned()),
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("next", &func),
