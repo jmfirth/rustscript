@@ -9,13 +9,11 @@ RustScript compiles TypeScript syntax to idiomatic Rust. No runtime, no GC, no l
 ## Quick Start
 
 ```bash
-cargo install rustscript
-rustscript init my-app
+cargo install rustscript  # installs rustscript + rsc
+rsc init my-app
 cd my-app
-rustscript run
+rsc run
 ```
-
-> `rsc` is available as a short alias for `rustscript`.
 
 ## What It Looks Like
 
