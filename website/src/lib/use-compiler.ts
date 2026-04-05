@@ -25,10 +25,15 @@ export function useCompiler() {
       type: 'module',
     });
 
+    worker.onerror = (e) => {
+      console.error('[useCompiler] Worker error:', e);
+    };
+
     worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const { id, type, result, error } = e.data;
 
       if (type === 'ready') {
+        console.log('[useCompiler] Compiler ready');
         setReady(true);
         return;
       }

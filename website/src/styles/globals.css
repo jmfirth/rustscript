@@ -46,6 +46,19 @@ body {
   transition: background-color 0.2s, color 0.2s;
 }
 
+/* Shiki dual theme: light mode uses --shiki-light-*, dark mode uses --shiki-dark-* */
+html:not(.dark) .shiki,
+html:not(.dark) .shiki span {
+  color: var(--shiki-light) !important;
+  background-color: var(--shiki-light-bg) !important;
+}
+
+html.dark .shiki,
+html.dark .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
+
 @font-face {
   font-family: 'Inter';
   font-style: normal;

@@ -217,58 +217,18 @@ export function PlaygroundEditor() {
     }
   }, [compiler]);
 
-  // When compiler becomes ready, compile the initial example and register hover
+  // Keep a ref to compiler.ready so the hover provider can check it
+  const compilerReadyRef = useRef(false);
+  useEffect(() => {
+    compilerReadyRef.current = compiler.ready;
+  }, [compiler.ready]);
+
+  // When compiler becomes ready, compile the initial example
   useEffect(() => {
     if (compiler.ready) {
       setStatus({ kind: 'ready' });
       doCompile(rtsCode);
-
-      // Register hover provider
-      if (monacoRef.current && !hoverDisposableRef.current) {
-        const monaco = monacoRef.current;
-        hoverDisposableRef.current = monaco.languages.registerHoverProvider(
-          rustscriptLanguageId,
-          {
-            provideHover: async (model: monacoEditor.ITextModel, position: IPosition) => {
-              const source = model.getValue();
-              try {
-                const info = await compiler.getHover(
-                  source,
-                  position.lineNumber,
-                  position.column
-                );
-                if (info && info.trim().length > 0) {
-                  return {
-                    range: new monaco.Range(
-                      position.lineNumber,
-                      position.column,
-                      position.lineNumber,
-                      position.column
-                    ),
-                    contents: [
-                      {
-                        value: info,
-                        isTrusted: true,
-                      },
-                    ],
-                  };
-                }
-              } catch {
-                // Hover failed silently
-              }
-              return null;
-            },
-          }
-        );
-      }
     }
-
-    return () => {
-      if (hoverDisposableRef.current) {
-        hoverDisposableRef.current.dispose();
-        hoverDisposableRef.current = null;
-      }
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compiler.ready]);
 
@@ -293,6 +253,39 @@ export function PlaygroundEditor() {
     monacoRef.current = monaco;
     registerRustScriptLanguage(monaco);
     defineThemes(monaco);
+
+    // Register hover provider eagerly — checks compiler readiness per invocation
+    hoverDisposableRef.current = monaco.languages.registerHoverProvider(
+      rustscriptLanguageId,
+      {
+        provideHover: async (model: monacoEditor.ITextModel, position: IPosition) => {
+          if (!compilerReadyRef.current) return null;
+          const source = model.getValue();
+          try {
+            const info = await compiler.getHover(
+              source,
+              position.lineNumber,
+              position.column
+            );
+            if (info && info.trim().length > 0) {
+              return {
+                range: new monaco.Range(
+                  position.lineNumber,
+                  position.column,
+                  position.lineNumber,
+                  position.column
+                ),
+                contents: [{ value: info, isTrusted: true }],
+              };
+            }
+          } catch {
+            // Hover failed silently
+          }
+          return null;
+        },
+      }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleEditorMount: OnMount = useCallback((editor) => {

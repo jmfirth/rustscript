@@ -15,9 +15,16 @@ import init, {
 let ready = false;
 
 async function initialize() {
-  await init();
-  ready = true;
-  self.postMessage({ type: 'ready' });
+  try {
+    console.log('[rsc-worker] Initializing WASM...');
+    await init();
+    ready = true;
+    console.log('[rsc-worker] WASM initialized successfully');
+    self.postMessage({ type: 'ready' });
+  } catch (err) {
+    console.error('[rsc-worker] WASM initialization failed:', err);
+    self.postMessage({ type: 'error', id: -1, error: `WASM init failed: ${err}` });
+  }
 }
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {

@@ -56,6 +56,10 @@ web-wasm:
 web: web-wasm
     cd website && npm install && npm run build
 
+# Dev mode (hot reload, no static build needed)
+web-dev: web-wasm
+    cd website && npm run dev
+
 # Serve the built website locally
 web-serve: web
     cd website && npx serve out
