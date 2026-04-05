@@ -896,25 +896,6 @@ fn module_needs_serde_derives(module: &ast::Module) -> bool {
     })
 }
 
-/// Collect unique serde derive names (Serialize, Deserialize) from the module.
-fn collect_serde_derive_names(module: &ast::Module) -> Vec<String> {
-    let mut names = std::collections::BTreeSet::new();
-    for item in &module.items {
-        let derives: &[ast::Ident] = match &item.kind {
-            ast::ItemKind::TypeDef(td) => &td.derives,
-            ast::ItemKind::EnumDef(ed) => &ed.derives,
-            ast::ItemKind::Class(cls) => &cls.derives,
-            _ => continue,
-        };
-        for d in derives {
-            if d.name == "Serialize" || d.name == "Deserialize" {
-                names.insert(d.name.clone());
-            }
-        }
-    }
-    names.into_iter().collect()
-}
-
 fn is_default_literal_type(expr: &ast::Expr, ty: &RustType) -> bool {
     match &expr.kind {
         ast::ExprKind::IntLit(_) => *ty == RustType::I64,

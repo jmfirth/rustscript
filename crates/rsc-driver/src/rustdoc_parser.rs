@@ -266,7 +266,7 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
             let Some(item) = crate_data.items.get(&enum_id) else {
                 continue;
             };
-            let RustdocItemKind::Enum(e) = &item.kind else {
+            let RustdocItemKind::Enum(_) = &item.kind else {
                 continue;
             };
             // Current variants are just names from ID strings — get the actual IDs
