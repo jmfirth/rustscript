@@ -87,12 +87,20 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
         .map(|(k, v)| (k.clone(), v.return_type.clone()))
         .collect();
     let type_fields = collect_type_fields(&module);
+    let enum_variants = collect_enum_variants(&module);
 
     // Search inside function bodies for local variables and parameters.
     for item in &module.items {
-        if let Some(sig) =
-            extract_local_hover(item, token, &fn_return_types, &type_fields, &fn_info)
-        {
+        if let Some(sig) = extract_local_hover(
+            source,
+            item,
+            token,
+            line_0,
+            &fn_return_types,
+            &type_fields,
+            &fn_info,
+            &enum_variants,
+        ) {
             return sig;
         }
     }
@@ -432,16 +440,31 @@ fn extract_field_hover(item: &rustscript_syntax::ast::Item, name: &str) -> Optio
 /// Search inside a top-level item (function body) for local variable declarations
 /// and parameters matching the given name.
 fn extract_local_hover(
+    source: &str,
     item: &rustscript_syntax::ast::Item,
     name: &str,
+    cursor_line: usize,
     fn_return_types: &HashMap<String, String>,
     type_fields: &HashMap<String, Vec<(String, String)>>,
     fn_info: &HashMap<String, FnInfo>,
+    enum_variants: &HashMap<String, Vec<VariantInfo>>,
 ) -> Option<String> {
     use rustscript_syntax::ast::ItemKind;
 
     match &item.kind {
         ItemKind::Function(f) => {
+            // Check if cursor is inside a switch case arm — if so, try type narrowing
+            if let Some(narrowed) = find_narrowed_type_in_switch(
+                source,
+                &f.body.stmts,
+                name,
+                cursor_line,
+                &f.params,
+                enum_variants,
+            ) {
+                return Some(narrowed);
+            }
+
             // Check parameters
             for param in &f.params {
                 if param.name.name == name {
@@ -952,6 +975,142 @@ fn collect_type_fields(
     map
 }
 
+/// Info about a single variant in a discriminated union (data enum).
+struct VariantInfo {
+    /// The discriminant value (e.g., `"circle"`).
+    discriminant: String,
+    /// The data fields (excluding `kind`), as `(name, type)` pairs.
+    fields: Vec<(String, String)>,
+}
+
+/// Collect enum name -> variant info from discriminated unions in the module.
+fn collect_enum_variants(
+    module: &rustscript_syntax::ast::Module,
+) -> HashMap<String, Vec<VariantInfo>> {
+    use rustscript_syntax::ast::{EnumVariant, ItemKind};
+    let mut map = HashMap::new();
+    for item in &module.items {
+        if let ItemKind::EnumDef(ed) = &item.kind {
+            let variants: Vec<VariantInfo> = ed
+                .variants
+                .iter()
+                .filter_map(|v| match v {
+                    EnumVariant::Data {
+                        discriminant_value,
+                        fields,
+                        ..
+                    } => Some(VariantInfo {
+                        discriminant: discriminant_value.clone(),
+                        fields: fields
+                            .iter()
+                            .map(|f| (f.name.name.clone(), format_type_ann(&f.type_ann)))
+                            .collect(),
+                    }),
+                    EnumVariant::Simple(..) => None,
+                })
+                .collect();
+            if !variants.is_empty() {
+                map.insert(ed.name.name.clone(), variants);
+            }
+        }
+    }
+    map
+}
+
+/// Convert a byte offset to a 0-based line number in the source text.
+fn byte_offset_to_line(source: &str, offset: u32) -> usize {
+    source
+        .bytes()
+        .take(offset as usize)
+        .filter(|&b| b == b'\n')
+        .count()
+}
+
+/// Check if the cursor is inside a switch case arm, and if the hovered name
+/// matches the scrutinee variable, return a narrowed type showing only the
+/// fields for that variant.
+fn find_narrowed_type_in_switch(
+    source: &str,
+    stmts: &[rustscript_syntax::ast::Stmt],
+    name: &str,
+    cursor_line: usize,
+    params: &[rustscript_syntax::ast::Param],
+    enum_variants: &HashMap<String, Vec<VariantInfo>>,
+) -> Option<String> {
+    use rustscript_syntax::ast::{ExprKind, Stmt, SwitchPattern};
+
+    for stmt in stmts {
+        let Stmt::Switch(sw) = stmt else {
+            continue;
+        };
+
+        // Get the scrutinee variable name
+        let scrutinee_name = match &sw.scrutinee.kind {
+            ExprKind::Ident(ident) => &ident.name,
+            _ => continue,
+        };
+
+        // Only narrow if hovering the scrutinee variable
+        if scrutinee_name != name {
+            continue;
+        }
+
+        // Find the scrutinee's declared type (from params or variables)
+        let scrutinee_type = params
+            .iter()
+            .find(|p| p.name.name == *scrutinee_name)
+            .map(|p| format_type_ann(&p.type_ann));
+
+        let scrutinee_type = scrutinee_type?;
+
+        // Look up enum variants for this type
+        let variants = enum_variants.get(&scrutinee_type)?;
+
+        // Find which case arm the cursor is in
+        for (i, case) in sw.cases.iter().enumerate() {
+            let case_start = byte_offset_to_line(source, case.span.start.0);
+            // Case end: use the start of the next case, or the switch span end
+            let case_end = if i + 1 < sw.cases.len() {
+                byte_offset_to_line(source, sw.cases[i + 1].span.start.0)
+            } else {
+                byte_offset_to_line(source, sw.span.end.0)
+            };
+
+            if cursor_line < case_start || cursor_line >= case_end {
+                continue;
+            }
+
+            // Get the discriminant value from the case pattern
+            let discriminant = match &case.pattern {
+                SwitchPattern::StringLit(s) => s,
+                _ => continue,
+            };
+
+            // Find the matching variant
+            let variant = variants.iter().find(|v| v.discriminant == *discriminant)?;
+
+            // Format the narrowed type
+            let fields_str: Vec<String> = std::iter::once(format!(
+                "  kind: \"{}\"",
+                variant.discriminant
+            ))
+            .chain(
+                variant
+                    .fields
+                    .iter()
+                    .map(|(fname, ftype)| format!("  {fname}: {ftype}")),
+            )
+            .collect();
+
+            return Some(format!(
+                "```rustscript\n(parameter) {name}: {scrutinee_type} (narrowed)\n{{\n{}\n}}\n```",
+                fields_str.join(",\n")
+            ));
+        }
+    }
+    None
+}
+
 /// Extract the element type from a collection type string.
 /// e.g., `"Array<Book>"` -> `Some("Book")`, `"Map<string, i32>"` -> `None`
 fn extract_element_type(type_str: &str) -> Option<&str> {
@@ -1368,5 +1527,66 @@ mod tests {
             span: Span::dummy(),
         };
         assert_eq!(format_type_ann(&ty), "void");
+    }
+
+    #[test]
+    fn test_hover_switch_narrowing() {
+        let source = r#"type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+
+function area(shape: Shape): f64 {
+  switch (shape) {
+    case "circle":
+      return 3.14 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}"#;
+        // "shape" on line 8 (1-based), inside case "circle" arm
+        // "shape" starts at col 20 (0-based), 1-based col 21
+        let result = hover(source, 8, 21);
+        assert!(
+            result.contains("narrowed"),
+            "expected narrowed type, got: {result}"
+        );
+        assert!(
+            result.contains("radius"),
+            "expected radius field in narrowed type, got: {result}"
+        );
+        assert!(
+            !result.contains("width"),
+            "should NOT contain rect fields, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_hover_switch_narrowing_second_arm() {
+        let source = r#"type Shape =
+  | { kind: "circle", radius: f64 }
+  | { kind: "rect", width: f64, height: f64 }
+
+function area(shape: Shape): f64 {
+  switch (shape) {
+    case "circle":
+      return 3.14 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}"#;
+        // "shape" on line 10 (1-based), inside case "rect" arm
+        let result = hover(source, 10, 14);
+        assert!(
+            result.contains("narrowed"),
+            "expected narrowed type, got: {result}"
+        );
+        assert!(
+            result.contains("width"),
+            "expected width field, got: {result}"
+        );
+        assert!(
+            result.contains("height"),
+            "expected height field, got: {result}"
+        );
     }
 }
