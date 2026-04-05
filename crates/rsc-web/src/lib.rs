@@ -500,7 +500,7 @@ fn find_closure_param_inner(
             for param in &closure.params {
                 if param.name.name == name {
                     let ty = format_type_ann(&param.type_ann);
-                    if ty == "inferred" || ty.is_empty() {
+                    if ty == "(inferred)" || ty == "inferred" || ty.is_empty() {
                         // Use inferred element type from collection method if available
                         if let Some(elem_ty) = inferred_element_type {
                             return Some(format!(
