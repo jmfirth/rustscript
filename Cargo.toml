@@ -9,6 +9,7 @@ members = [
     "crates/rsc-driver",
     "crates/rsc-lsp",
     "crates/rsc-cli",
+    "crates/rsc-web",
 ]
 resolver = "2"
 
