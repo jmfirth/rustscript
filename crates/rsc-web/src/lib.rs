@@ -277,6 +277,102 @@ fn builtin_hover(token: &str) -> Option<&'static str> {
         "min" => {
             "Returns the smallest of the given numbers.\n\n```rustscript\nfunction Math.min(...values: number[]): number\n```"
         }
+        "join" => {
+            "Joins all elements of an array into a string.\n\n```rustscript\nfunction Array<T>.join(separator?: string): string\n```"
+        }
+        "split" => {
+            "Splits a string into an array of substrings.\n\n```rustscript\nfunction string.split(separator: string): Array<string>\n```"
+        }
+        "trim" => {
+            "Removes whitespace from both ends of a string.\n\n```rustscript\nfunction string.trim(): string\n```"
+        }
+        "replace" => {
+            "Replaces the first occurrence of a pattern in a string.\n\n```rustscript\nfunction string.replace(search: string, replacement: string): string\n```"
+        }
+        "replaceAll" => {
+            "Replaces all occurrences of a pattern in a string.\n\n```rustscript\nfunction string.replaceAll(search: string, replacement: string): string\n```"
+        }
+        "toUpperCase" => {
+            "Converts a string to uppercase.\n\n```rustscript\nfunction string.toUpperCase(): string\n```"
+        }
+        "toLowerCase" => {
+            "Converts a string to lowercase.\n\n```rustscript\nfunction string.toLowerCase(): string\n```"
+        }
+        "startsWith" => {
+            "Determines whether a string begins with the specified characters.\n\n```rustscript\nfunction string.startsWith(search: string): boolean\n```"
+        }
+        "endsWith" => {
+            "Determines whether a string ends with the specified characters.\n\n```rustscript\nfunction string.endsWith(search: string): boolean\n```"
+        }
+        "indexOf" => {
+            "Returns the index of the first occurrence of a value, or -1.\n\n```rustscript\nfunction Array<T>.indexOf(value: T): i64\nfunction string.indexOf(search: string): i64\n```"
+        }
+        "slice" => {
+            "Returns a shallow copy of a portion of an array or string.\n\n```rustscript\nfunction Array<T>.slice(start?: i64, end?: i64): Array<T>\nfunction string.slice(start?: i64, end?: i64): string\n```"
+        }
+        "reduce" => {
+            "Reduces an array to a single value by applying a function.\n\n```rustscript\nfunction Array<T>.reduce<U>(f: (acc: U, item: T) => U, initial: U): U\n```"
+        }
+        "findIndex" => {
+            "Returns the index of the first element that satisfies the test.\n\n```rustscript\nfunction Array<T>.findIndex(f: (item: T) => boolean): i64\n```"
+        }
+        "every" => {
+            "Tests whether all elements pass the provided function.\n\n```rustscript\nfunction Array<T>.every(f: (item: T) => boolean): boolean\n```"
+        }
+        "some" => {
+            "Tests whether at least one element passes the provided function.\n\n```rustscript\nfunction Array<T>.some(f: (item: T) => boolean): boolean\n```"
+        }
+        "sort" => {
+            "Sorts the elements of an array in place.\n\n```rustscript\nfunction Array<T>.sort(): void\n```"
+        }
+        "reverse" => {
+            "Reverses the elements of an array in place.\n\n```rustscript\nfunction Array<T>.reverse(): void\n```"
+        }
+        "concat" => {
+            "Merges two arrays or strings.\n\n```rustscript\nfunction Array<T>.concat(other: Array<T>): Array<T>\nfunction string.concat(other: string): string\n```"
+        }
+        "flat" => {
+            "Flattens nested arrays by one level.\n\n```rustscript\nfunction Array<Array<T>>.flat(): Array<T>\n```"
+        }
+        "flatMap" => {
+            "Maps each element then flattens the result by one level.\n\n```rustscript\nfunction Array<T>.flatMap<U>(f: (item: T) => Array<U>): Array<U>\n```"
+        }
+        "fill" => {
+            "Fills all elements with a static value.\n\n```rustscript\nfunction Array<T>.fill(value: T): void\n```"
+        }
+        "shift" => {
+            "Removes the first element from an array and returns it.\n\n```rustscript\nfunction Array<T>.shift(): T | null\n```"
+        }
+        "unshift" => {
+            "Adds elements to the beginning of an array.\n\n```rustscript\nfunction Array<T>.unshift(value: T): void\n```"
+        }
+        "splice" => {
+            "Changes array contents by removing/replacing elements.\n\n```rustscript\nfunction Array<T>.splice(start: i64, deleteCount: i64): Array<T>\n```"
+        }
+        "charAt" => {
+            "Returns the character at the specified index.\n\n```rustscript\nfunction string.charAt(index: i64): string\n```"
+        }
+        "repeat" => {
+            "Returns a new string repeated the specified number of times.\n\n```rustscript\nfunction string.repeat(count: i64): string\n```"
+        }
+        "padStart" => {
+            "Pads the start of a string to a given length.\n\n```rustscript\nfunction string.padStart(targetLength: i64, padString?: string): string\n```"
+        }
+        "padEnd" => {
+            "Pads the end of a string to a given length.\n\n```rustscript\nfunction string.padEnd(targetLength: i64, padString?: string): string\n```"
+        }
+        "add" => {
+            "Adds a value to a Set.\n\n```rustscript\nfunction Set<T>.add(value: T): void\n```"
+        }
+        "clear" => {
+            "Removes all elements from a Map or Set.\n\n```rustscript\nfunction Map<K, V>.clear(): void\n```"
+        }
+        "size" => {
+            "The number of elements in a Map or Set.\n\n```rustscript\nreadonly size: i64\n```"
+        }
+        "entries" => {
+            "Returns an array of [key, value] pairs.\n\n```rustscript\nfunction Map<K, V>.entries(): Array<[K, V]>\n```"
+        }
         _ => return None,
     })
 }
