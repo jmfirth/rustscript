@@ -1109,12 +1109,19 @@ impl Transform {
     }
 
     /// Register an enum definition in the type registry during the pre-pass.
-    pub(super) fn register_enum_def(&mut self, ed: &ast::EnumDef, ctx: &mut LoweringContext) {
+    pub(super) fn register_enum_def(
+        &mut self,
+        ed: &ast::EnumDef,
+        module_items: &[ast::Item],
+        ctx: &mut LoweringContext,
+    ) {
         // Determine if simple or data enum
-        let is_data = ed
-            .variants
-            .iter()
-            .any(|v| matches!(v, ast::EnumVariant::Data { .. }));
+        let is_data = ed.variants.iter().any(|v| {
+            matches!(
+                v,
+                ast::EnumVariant::Data { .. } | ast::EnumVariant::TypeRef { .. }
+            )
+        });
 
         if is_data {
             let mut diags = Vec::new();
@@ -1137,6 +1144,34 @@ impl Transform {
                             .collect();
                         Some((name.name.clone(), field_types))
                     }
+                    ast::EnumVariant::TypeRef { type_name, .. } => {
+                        if let Some((disc_value, all_fields)) =
+                            resolve_type_ref_variant(&type_name.name, module_items)
+                        {
+                            let variant_name = capitalize_first(&disc_value);
+                            let field_types: Vec<(String, rustscript_typeck::types::Type)> =
+                                all_fields
+                                    .iter()
+                                    .filter(|f| f.name.name != "kind")
+                                    .map(|f| {
+                                        let ty = resolve::resolve_type_annotation_with_generics(
+                                            &f.type_ann,
+                                            &self.type_registry,
+                                            &[],
+                                            &mut diags,
+                                        );
+                                        (f.name.name.clone(), ty)
+                                    })
+                                    .collect();
+                            Some((variant_name, field_types))
+                        } else {
+                            ctx.emit_diagnostic(Diagnostic::error(format!(
+                                "type `{}` not found or missing `kind` discriminant field",
+                                type_name.name
+                            )));
+                            None
+                        }
+                    }
                     ast::EnumVariant::Simple(..) => None,
                 })
                 .collect();
@@ -1151,7 +1186,7 @@ impl Transform {
                 .iter()
                 .filter_map(|v| match v {
                     ast::EnumVariant::Simple(ident, _) => Some(ident.name.clone()),
-                    ast::EnumVariant::Data { .. } => None,
+                    ast::EnumVariant::Data { .. } | ast::EnumVariant::TypeRef { .. } => None,
                 })
                 .collect();
             self.type_registry
@@ -1401,52 +1436,58 @@ impl Transform {
     pub(super) fn lower_enum_def(
         &self,
         ed: &ast::EnumDef,
+        module_items: &[ast::Item],
         ctx: &mut LoweringContext,
     ) -> RustEnumDef {
         let mut diags = Vec::new();
         let variants: Vec<RustEnumVariant> = ed
             .variants
             .iter()
-            .map(|v| match v {
-                ast::EnumVariant::Simple(ident, span) => RustEnumVariant {
+            .filter_map(|v| match v {
+                ast::EnumVariant::Simple(ident, span) => Some(RustEnumVariant {
                     name: ident.name.clone(),
                     fields: vec![],
                     tuple_types: vec![],
                     span: Some(*span),
-                },
+                }),
                 ast::EnumVariant::Data {
                     name, fields, span, ..
                 } => {
-                    let rust_fields = fields
-                        .iter()
-                        .map(|f| {
-                            let ty = resolve::resolve_type_annotation_with_generics(
-                                &f.type_ann,
-                                &self.type_registry,
-                                &[],
-                                &mut diags,
-                            );
-                            // Optional fields (`name?: Type`) wrap in Option<T>
-                            let ty = if f.optional {
-                                Type::Option(Box::new(ty))
-                            } else {
-                                ty
-                            };
-                            let rust_ty = rustscript_typeck::bridge::type_to_rust_type(&ty);
-                            RustFieldDef {
-                                public: true,
-                                name: f.name.name.clone(),
-                                ty: rust_ty,
-                                doc_comment: None,
-                                span: Some(f.span),
-                            }
-                        })
-                        .collect();
-                    RustEnumVariant {
+                    let rust_fields =
+                        Self::lower_variant_fields(fields, &self.type_registry, &mut diags);
+                    Some(RustEnumVariant {
                         name: name.name.clone(),
                         fields: rust_fields,
                         tuple_types: vec![],
                         span: Some(*span),
+                    })
+                }
+                ast::EnumVariant::TypeRef { type_name, span } => {
+                    if let Some((disc_value, all_fields)) =
+                        resolve_type_ref_variant(&type_name.name, module_items)
+                    {
+                        let variant_name = capitalize_first(&disc_value);
+                        let data_fields: Vec<&ast::FieldDef> = all_fields
+                            .iter()
+                            .filter(|f| f.name.name != "kind")
+                            .collect();
+                        let rust_fields = Self::lower_variant_fields(
+                            &data_fields.iter().copied().cloned().collect::<Vec<_>>(),
+                            &self.type_registry,
+                            &mut diags,
+                        );
+                        Some(RustEnumVariant {
+                            name: variant_name,
+                            fields: rust_fields,
+                            tuple_types: vec![],
+                            span: Some(*span),
+                        })
+                    } else {
+                        ctx.emit_diagnostic(Diagnostic::error(format!(
+                            "type `{}` not found or missing `kind` discriminant field",
+                            type_name.name
+                        )));
+                        None
                     }
                 }
             })
@@ -1464,6 +1505,39 @@ impl Transform {
             doc_comment: ed.doc_comment.clone(),
             span: Some(ed.span),
         }
+    }
+
+    /// Lower a slice of `FieldDef` into `RustFieldDef` for enum variant fields.
+    fn lower_variant_fields(
+        fields: &[ast::FieldDef],
+        type_registry: &rustscript_typeck::registry::TypeRegistry,
+        diags: &mut Vec<Diagnostic>,
+    ) -> Vec<RustFieldDef> {
+        fields
+            .iter()
+            .map(|f| {
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    &f.type_ann,
+                    type_registry,
+                    &[],
+                    diags,
+                );
+                // Optional fields (`name?: Type`) wrap in Option<T>
+                let ty = if f.optional {
+                    Type::Option(Box::new(ty))
+                } else {
+                    ty
+                };
+                let rust_ty = rustscript_typeck::bridge::type_to_rust_type(&ty);
+                RustFieldDef {
+                    public: true,
+                    name: f.name.name.clone(),
+                    ty: rust_ty,
+                    doc_comment: None,
+                    span: Some(f.span),
+                }
+            })
+            .collect()
     }
 }
 
@@ -1532,6 +1606,33 @@ pub(super) fn lower_type_params(type_params: Option<&ast::TypeParams>) -> Vec<Ru
             .collect(),
         None => Vec::new(),
     }
+}
+
+/// Resolve a `TypeRef` enum variant by finding the referenced `TypeDef` in the module.
+///
+/// Looks up the type by name, extracts the `kind` discriminant field (which must have a
+/// `StringLiteral` type annotation), and returns the discriminant value along with the
+/// remaining data fields (excluding `kind`).
+///
+/// Returns `None` if the type cannot be found or lacks a valid `kind` discriminant.
+fn resolve_type_ref_variant<'a>(
+    type_name: &str,
+    items: &'a [ast::Item],
+) -> Option<(String, &'a [ast::FieldDef])> {
+    // Find the TypeDef with matching name
+    for item in items {
+        if let ast::ItemKind::TypeDef(td) = &item.kind
+            && td.name.name == type_name
+        {
+            // Find the `kind` field and extract the string literal discriminant
+            let kind_field = td.fields.iter().find(|f| f.name.name == "kind")?;
+            if let ast::TypeKind::StringLiteral(ref disc_value) = kind_field.type_ann.kind {
+                return Some((disc_value.clone(), &td.fields));
+            }
+            return None;
+        }
+    }
+    None
 }
 
 /// Capitalize the first letter of a string.

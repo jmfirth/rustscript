@@ -368,6 +368,9 @@ fn extract_declaration_signature(
                 .map(|v| match v {
                     rustscript_syntax::ast::EnumVariant::Simple(ident, _) => ident.name.clone(),
                     rustscript_syntax::ast::EnumVariant::Data { name: n, .. } => n.name.clone(),
+                    rustscript_syntax::ast::EnumVariant::TypeRef { type_name, .. } => {
+                        type_name.name.clone()
+                    }
                 })
                 .collect();
             let sig = format!(
@@ -1006,6 +1009,10 @@ fn collect_enum_variants(
                             .map(|f| (f.name.name.clone(), format_type_ann(&f.type_ann)))
                             .collect(),
                     }),
+                    EnumVariant::TypeRef { type_name, .. } => {
+                        // Resolve the named type reference to extract variant info
+                        resolve_type_ref_for_hover(&type_name.name, &module.items)
+                    }
                     EnumVariant::Simple(..) => None,
                 })
                 .collect();
@@ -1015,6 +1022,36 @@ fn collect_enum_variants(
         }
     }
     map
+}
+
+/// Resolve a `TypeRef` enum variant for hover by finding the referenced `TypeDef`.
+fn resolve_type_ref_for_hover(
+    type_name: &str,
+    items: &[rustscript_syntax::ast::Item],
+) -> Option<VariantInfo> {
+    use rustscript_syntax::ast::{ItemKind, TypeKind};
+    for item in items {
+        if let ItemKind::TypeDef(td) = &item.kind {
+            if td.name.name == type_name {
+                // Find the `kind` field and extract the string literal discriminant
+                let kind_field = td.fields.iter().find(|f| f.name.name == "kind")?;
+                if let TypeKind::StringLiteral(ref disc_value) = kind_field.type_ann.kind {
+                    let fields = td
+                        .fields
+                        .iter()
+                        .filter(|f| f.name.name != "kind")
+                        .map(|f| (f.name.name.clone(), format_type_ann(&f.type_ann)))
+                        .collect();
+                    return Some(VariantInfo {
+                        discriminant: disc_value.clone(),
+                        fields,
+                    });
+                }
+                return None;
+            }
+        }
+    }
+    None
 }
 
 /// Convert a byte offset to a 0-based line number in the source text.
@@ -1090,17 +1127,15 @@ fn find_narrowed_type_in_switch(
             let variant = variants.iter().find(|v| v.discriminant == *discriminant)?;
 
             // Format the narrowed type
-            let fields_str: Vec<String> = std::iter::once(format!(
-                "  kind: \"{}\"",
-                variant.discriminant
-            ))
-            .chain(
-                variant
-                    .fields
-                    .iter()
-                    .map(|(fname, ftype)| format!("  {fname}: {ftype}")),
-            )
-            .collect();
+            let fields_str: Vec<String> =
+                std::iter::once(format!("  kind: \"{}\"", variant.discriminant))
+                    .chain(
+                        variant
+                            .fields
+                            .iter()
+                            .map(|(fname, ftype)| format!("  {fname}: {ftype}")),
+                    )
+                    .collect();
 
             return Some(format!(
                 "```rustscript\n(parameter) {name}: {scrutinee_type} (narrowed)\n{{\n{}\n}}\n```",
@@ -1587,6 +1622,40 @@ function area(shape: Shape): f64 {
         assert!(
             result.contains("height"),
             "expected height field, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_hover_switch_narrowing_with_type_ref_variants() {
+        let source = r#"type Circle = { kind: "circle", radius: f64 }
+type Rect = { kind: "rect", width: f64, height: f64 }
+
+type Shape =
+  | Circle
+  | Rect
+
+function area(shape: Shape): f64 {
+  switch (shape) {
+    case "circle":
+      return 3.14 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}"#;
+        // "shape" on line 11 (1-based), inside case "circle" arm
+        // `      return 3.14 * shape.radius` — "shape" starts at col 21
+        let result = hover(source, 11, 21);
+        assert!(
+            result.contains("narrowed"),
+            "expected narrowed type, got: {result}"
+        );
+        assert!(
+            result.contains("radius"),
+            "expected radius field in narrowed type, got: {result}"
+        );
+        assert!(
+            !result.contains("width"),
+            "should NOT contain rect fields, got: {result}"
         );
     }
 }

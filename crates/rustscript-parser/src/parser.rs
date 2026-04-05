@@ -1413,27 +1413,37 @@ impl<'src> Parser<'src> {
 
     /// Parse a data enum (discriminated union): `| { kind: "a", ... } | { kind: "b", ... }`.
     ///
+    /// Variants may be inline objects (`{ kind: "circle", radius: f64 }`) or named type
+    /// references (`Circle`) that refer to a type defined elsewhere with a `kind` discriminant.
+    ///
     /// Called after `type Name =` has been consumed, with `|` as current token.
     fn parse_data_enum(&mut self, name: Ident, start: Span) -> Option<EnumDef> {
         let mut variants = Vec::new();
 
         while self.eat(&TokenKind::Pipe) {
-            self.expect(&TokenKind::LBrace)?;
+            if self.check(&TokenKind::LBrace) {
+                // Inline variant: `| { kind: "circle", radius: f64 }`
+                self.expect(&TokenKind::LBrace)?;
 
-            // First field must be the discriminant: `kind: "value"`
-            let kind_ident = self.parse_ident()?;
-            if kind_ident.name != "kind" {
-                self.diagnostics.push(
-                    Diagnostic::error("data enum variants must start with a `kind` discriminant")
-                        .with_label(kind_ident.span, self.file_id, "expected `kind`"),
-                );
-                return None;
-            }
-            self.expect(&TokenKind::Colon)?;
+                // First field must be the discriminant: `kind: "value"`
+                let kind_ident = self.parse_ident()?;
+                if kind_ident.name != "kind" {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "data enum variants must start with a `kind` discriminant",
+                        )
+                        .with_label(
+                            kind_ident.span,
+                            self.file_id,
+                            "expected `kind`",
+                        ),
+                    );
+                    return None;
+                }
+                self.expect(&TokenKind::Colon)?;
 
-            let disc_token = self.current_token().clone();
-            let discriminant_value =
-                if let TokenKind::StringLit(value) = &disc_token.kind {
+                let disc_token = self.current_token().clone();
+                let discriminant_value = if let TokenKind::StringLit(value) = &disc_token.kind {
                     let v = value.clone();
                     self.advance();
                     v
@@ -1445,41 +1455,47 @@ impl<'src> Parser<'src> {
                     return None;
                 };
 
-            let variant_name = capitalize_first(&discriminant_value);
-            let variant_start = kind_ident.span;
+                let variant_name = capitalize_first(&discriminant_value);
+                let variant_start = kind_ident.span;
 
-            // Parse remaining data fields after comma
-            let mut fields = Vec::new();
-            while self.eat(&TokenKind::Comma) {
-                // Allow trailing comma before `}`
-                if self.check(&TokenKind::RBrace) {
-                    break;
+                // Parse remaining data fields after comma
+                let mut fields = Vec::new();
+                while self.eat(&TokenKind::Comma) {
+                    // Allow trailing comma before `}`
+                    if self.check(&TokenKind::RBrace) {
+                        break;
+                    }
+                    let field_start = self.current_token().span;
+                    let field_name = self.parse_ident()?;
+                    self.expect(&TokenKind::Colon)?;
+                    let type_ann = self.parse_type_annotation()?;
+                    let field_span = field_start.merge(type_ann.span);
+                    fields.push(FieldDef {
+                        name: field_name,
+                        type_ann,
+                        optional: false,
+                        span: field_span,
+                    });
                 }
-                let field_start = self.current_token().span;
-                let field_name = self.parse_ident()?;
-                self.expect(&TokenKind::Colon)?;
-                let type_ann = self.parse_type_annotation()?;
-                let field_span = field_start.merge(type_ann.span);
-                fields.push(FieldDef {
-                    name: field_name,
-                    type_ann,
-                    optional: false,
-                    span: field_span,
+
+                let close = self.expect(&TokenKind::RBrace)?;
+                let variant_span = variant_start.merge(close.span);
+
+                variants.push(EnumVariant::Data {
+                    discriminant_value,
+                    name: Ident {
+                        name: variant_name,
+                        span: variant_start,
+                    },
+                    fields,
+                    span: variant_span,
                 });
+            } else {
+                // Named type reference: `| Circle`
+                let type_name = self.parse_ident()?;
+                let span = type_name.span;
+                variants.push(EnumVariant::TypeRef { type_name, span });
             }
-
-            let close = self.expect(&TokenKind::RBrace)?;
-            let variant_span = variant_start.merge(close.span);
-
-            variants.push(EnumVariant::Data {
-                discriminant_value,
-                name: Ident {
-                    name: variant_name,
-                    span: variant_start,
-                },
-                fields,
-                span: variant_span,
-            });
         }
 
         let span = start.merge(self.previous_span());

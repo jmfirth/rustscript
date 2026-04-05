@@ -337,6 +337,7 @@ pub struct EnumDef {
 ///
 /// `Simple` variants come from string literal unions (`"north"`).
 /// `Data` variants come from discriminated union objects (`{ kind: "circle", radius: f64 }`).
+/// `TypeRef` variants reference a named type defined elsewhere (`Circle`).
 #[derive(Debug, Clone)]
 pub enum EnumVariant {
     /// A simple string variant: `"north"`. The `Ident` is the capitalized variant name.
@@ -352,6 +353,15 @@ pub enum EnumVariant {
         /// The data fields (excluding the `kind` discriminant).
         fields: Vec<FieldDef>,
         /// The span covering this variant.
+        span: Span,
+    },
+    /// A reference to a named type used as a variant in a discriminated union.
+    /// The type must be defined elsewhere with a `kind` discriminant field.
+    /// Example: `type Circle = { kind: "circle", radius: f64 }; type Shape = | Circle | ...`
+    TypeRef {
+        /// The referenced type name (e.g., `Circle`).
+        type_name: Ident,
+        /// The span covering this variant reference.
         span: Span,
     },
 }

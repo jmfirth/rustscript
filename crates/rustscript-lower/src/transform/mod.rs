@@ -381,7 +381,9 @@ impl Transform {
         for item in &module.items {
             match &item.kind {
                 ast::ItemKind::TypeDef(td) => self.register_type_def(td, &mut ctx),
-                ast::ItemKind::EnumDef(ed) => self.register_enum_def(ed, &mut ctx),
+                ast::ItemKind::EnumDef(ed) => {
+                    self.register_enum_def(ed, &module.items, &mut ctx);
+                }
                 ast::ItemKind::Interface(iface) => self.register_interface_def(iface, &mut ctx),
                 ast::ItemKind::Class(cls) => {
                     if cls.is_abstract {
@@ -562,7 +564,7 @@ impl Transform {
                     }
                 }
                 ast::ItemKind::EnumDef(ed) => {
-                    let mut lowered = self.lower_enum_def(ed, &mut ctx);
+                    let mut lowered = self.lower_enum_def(ed, &module.items, &mut ctx);
                     lowered.public = exported;
                     items.push(RustItem::Enum(lowered));
                 }

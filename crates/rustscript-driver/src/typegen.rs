@@ -197,7 +197,7 @@ fn emit_enum_def(enum_def: &EnumDef) -> String {
                     let variant_name = lowercase_first(&ident.name);
                     Some(format!("\"{variant_name}\""))
                 }
-                EnumVariant::Data { .. } => None,
+                EnumVariant::Data { .. } | EnumVariant::TypeRef { .. } => None,
             })
             .collect();
 
@@ -225,6 +225,10 @@ fn emit_enum_def(enum_def: &EnumDef) -> String {
                         parts.push(emit_field_inline(field));
                     }
                     format!("{{ {} }}", parts.join("; "))
+                }
+                EnumVariant::TypeRef { type_name, .. } => {
+                    // Emit as the referenced type name
+                    type_name.name.clone()
                 }
             })
             .collect();

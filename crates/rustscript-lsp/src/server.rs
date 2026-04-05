@@ -1136,6 +1136,7 @@ fn format_enum_hover(ed: &rustscript_syntax::ast::EnumDef) -> String {
                     .collect();
                 format!("{{ kind: \"{}\", {} }}", name.name, field_strs.join(", "))
             }
+            EnumVariant::TypeRef { type_name, .. } => type_name.name.clone(),
         })
         .collect();
     if variants.is_empty() {
@@ -1151,6 +1152,7 @@ fn format_enum_hover(ed: &rustscript_syntax::ast::EnumDef) -> String {
             .map(|v| match v {
                 EnumVariant::Simple(ident, _) => ident.name.clone(),
                 EnumVariant::Data { name, .. } => name.name.clone(),
+                EnumVariant::TypeRef { type_name, .. } => type_name.name.clone(),
             })
             .collect();
         format!(

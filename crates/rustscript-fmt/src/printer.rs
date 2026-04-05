@@ -644,6 +644,10 @@ impl Printer {
                         }
                         self.writeln(" }");
                     }
+                    EnumVariant::TypeRef { type_name, .. } => {
+                        self.write("| ");
+                        self.writeln(&type_name.name);
+                    }
                 }
             }
             self.dedent();

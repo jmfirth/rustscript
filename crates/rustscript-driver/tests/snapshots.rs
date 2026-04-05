@@ -907,6 +907,163 @@ fn area(shape: Shape) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Named type references in discriminated unions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_snapshot_data_enum_named_type_ref_variants() {
+    let source = r#"
+type Circle = { kind: "circle", radius: f64 }
+type Rect = { kind: "rect", width: f64, height: f64 }
+
+type Shape =
+  | Circle
+  | Rect
+"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq)]
+struct Circle {
+    pub kind: (),
+    pub radius: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Rect {
+    pub kind: (),
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Shape {
+    Circle {
+        radius: f64,
+    },
+    Rect {
+        width: f64,
+        height: f64,
+    },
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, \"{:?}\", self)
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("data_enum_named_type_ref_variants", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_data_enum_mixed_inline_and_type_ref() {
+    let source = r#"
+type Circle = { kind: "circle", radius: f64 }
+
+type Shape =
+  | Circle
+  | { kind: "rect", width: f64, height: f64 }
+"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq)]
+struct Circle {
+    pub kind: (),
+    pub radius: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Shape {
+    Circle {
+        radius: f64,
+    },
+    Rect {
+        width: f64,
+        height: f64,
+    },
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, \"{:?}\", self)
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("data_enum_mixed_inline_and_type_ref", &actual, expected);
+}
+
+#[test]
+fn test_snapshot_data_enum_type_ref_with_switch() {
+    let source = r#"
+type Circle = { kind: "circle", radius: f64 }
+type Rect = { kind: "rect", width: f64, height: f64 }
+
+type Shape =
+  | Circle
+  | Rect
+
+function area(shape: Shape): f64 {
+  switch (shape) {
+    case "circle":
+      return 3.14159 * shape.radius * shape.radius;
+    case "rect":
+      return shape.width * shape.height;
+  }
+}
+"#;
+
+    let expected = "\
+#[derive(Debug, Clone, PartialEq)]
+struct Circle {
+    pub kind: (),
+    pub radius: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Rect {
+    pub kind: (),
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Shape {
+    Circle {
+        radius: f64,
+    },
+    Rect {
+        width: f64,
+        height: f64,
+    },
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, \"{:?}\", self)
+    }
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle { radius } => {
+            return 3.14159 * radius * radius;
+        }
+        Shape::Rect { width, height } => {
+            return width * height;
+        }
+    }
+}
+";
+
+    let actual = compile_to_rust(source);
+    assert_snapshot("data_enum_type_ref_with_switch", &actual, expected);
+}
+
+// ---------------------------------------------------------------------------
 // Task 015: Enum Construction
 // ---------------------------------------------------------------------------
 
