@@ -71,11 +71,15 @@ function ItemSection({
         </span>
       </h2>
       <pre className="bg-[var(--color-code-bg)] rounded-lg p-4 overflow-x-auto text-sm font-mono leading-relaxed">
-        <code>{items.map((item) => {
+        <code dangerouslySetInnerHTML={{ __html: items.map((item) => {
           const sig = formatSignature(stripCodeFences(item.signature));
           const summary = firstSentence(item.docs);
-          return summary ? `// ${summary}\n${sig}` : sig;
-        }).join('\n\n')}</code>
+          const highlighted = highlightSignature(sig);
+          const commentHtml = summary
+            ? `<span class="crate-comment">// ${escapeHtml(summary)}</span>\n`
+            : '';
+          return `${commentHtml}${highlighted}`;
+        }).join('\n\n') }} />
       </pre>
     </section>
   );
@@ -129,6 +133,27 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
     }
     return true;
   });
+}
+
+/** Escape HTML entities */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Simple syntax highlighting for RustScript signatures */
+function highlightSignature(sig: string): string {
+  return escapeHtml(sig)
+    // Keywords
+    .replace(/\b(function|async|class|interface|enum|type|const|let|extends|implements|throws)\b/g,
+      '<span class="crate-keyword">$1</span>')
+    // Types after colon or in generics
+    .replace(/\b(string|boolean|void|never|number)\b/g,
+      '<span class="crate-type">$1</span>')
+    // Numeric types
+    .replace(/\b(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|usize|isize)\b/g,
+      '<span class="crate-type">$1</span>')
+    // String literals
+    .replace(/&quot;([^&]*)&quot;/g, '<span class="crate-string">"$1"</span>');
 }
 
 /** Extract the first sentence from docs, stripping markdown/HTML noise */

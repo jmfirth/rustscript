@@ -65,6 +65,12 @@ html.dark .shiki span {
   background-color: transparent !important;
 }
 
+/* Crate docs syntax highlighting */
+.crate-keyword { color: #CE422B; font-weight: bold; }
+.crate-type { color: #4B7BEC; }
+.crate-string { color: #16A34A; }
+.crate-comment { color: #9CA3AF; font-style: italic; }
+
 /* Shiki pre blocks fill their container */
 .shiki {
   height: 100%;
