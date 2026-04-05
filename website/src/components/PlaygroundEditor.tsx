@@ -253,40 +253,46 @@ export function PlaygroundEditor() {
     monacoRef.current = monaco;
     registerRustScriptLanguage(monaco);
     defineThemes(monaco);
-
-    // Register hover provider eagerly — checks compiler readiness per invocation
-    hoverDisposableRef.current = monaco.languages.registerHoverProvider(
-      rustscriptLanguageId,
-      {
-        provideHover: async (model: monacoEditor.ITextModel, position: IPosition) => {
-          if (!compilerReadyRef.current) return null;
-          const source = model.getValue();
-          try {
-            const info = await compiler.getHover(
-              source,
-              position.lineNumber,
-              position.column
-            );
-            if (info && info.trim().length > 0) {
-              return {
-                range: new monaco.Range(
-                  position.lineNumber,
-                  position.column,
-                  position.lineNumber,
-                  position.column
-                ),
-                contents: [{ value: info, isTrusted: true }],
-              };
-            }
-          } catch {
-            // Hover failed silently
-          }
-          return null;
-        },
-      }
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleRtsBeforeMount = useCallback((monaco: Monaco) => {
+    handleBeforeMount(monaco);
+
+    // Register hover provider only for the RustScript editor
+    if (!hoverDisposableRef.current) {
+      hoverDisposableRef.current = monaco.languages.registerHoverProvider(
+        rustscriptLanguageId,
+        {
+          provideHover: async (model: monacoEditor.ITextModel, position: IPosition) => {
+            if (!compilerReadyRef.current) return null;
+            const source = model.getValue();
+            try {
+              const info = await compiler.getHover(
+                source,
+                position.lineNumber,
+                position.column
+              );
+              if (info && info.trim().length > 0) {
+                return {
+                  range: new monaco.Range(
+                    position.lineNumber,
+                    position.column,
+                    position.lineNumber,
+                    position.column
+                  ),
+                  contents: [{ value: info, isTrusted: true }],
+                };
+              }
+            } catch {
+              // Hover failed silently
+            }
+            return null;
+          },
+        }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleBeforeMount]);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     rtsEditorRef.current = editor;
@@ -411,7 +417,7 @@ export function PlaygroundEditor() {
               value={rtsCode}
               onChange={handleCodeChange}
               theme={monacoTheme}
-              beforeMount={handleBeforeMount}
+              beforeMount={handleRtsBeforeMount}
               onMount={handleEditorMount}
               options={editorOptions}
               loading={
