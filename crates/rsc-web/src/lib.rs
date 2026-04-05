@@ -342,8 +342,15 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
         }
     }
 
-    // Fallback: just return the token.
-    format!("`{token}`")
+    // Search inside function bodies for local variables and parameters.
+    for item in &module.items {
+        if let Some(sig) = extract_local_hover(item, token) {
+            return sig;
+        }
+    }
+
+    // Fallback: return empty (no hover) rather than echoing the token.
+    String::new()
 }
 
 /// Try to extract a hover signature from a top-level item if it declares
@@ -410,6 +417,106 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
         ItemKind::Class(c) if c.name.name == name => {
             let sig = format!("```rustscript\nclass {name}\n```");
             Some(with_doc_comment(&c.doc_comment, &sig))
+        }
+        _ => None,
+    }
+}
+
+/// Search inside a top-level item (function body) for local variable declarations
+/// and parameters matching the given name.
+fn extract_local_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<String> {
+    use rsc_syntax::ast::{ItemKind, Stmt, VarBinding};
+
+    match &item.kind {
+        ItemKind::Function(f) => {
+            // Check parameters
+            for param in &f.params {
+                if param.name.name == name {
+                    let ty = format_type_ann(&param.type_ann);
+                    return Some(format!("```rustscript\n(parameter) {name}: {ty}\n```"));
+                }
+            }
+
+            // Check body statements for variable declarations
+            for stmt in &f.body.stmts {
+                if let Some(sig) = extract_var_hover(stmt, name) {
+                    return Some(sig);
+                }
+            }
+
+            None
+        }
+        // Classes, interfaces, etc. — could be extended to walk class method bodies
+        _ => None,
+        _ => None,
+    }
+}
+
+/// Extract hover info from a variable declaration statement.
+fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String> {
+    use rsc_syntax::ast::{ElseClause, Stmt, VarBinding};
+
+    match stmt {
+        Stmt::VarDecl(decl) if decl.name.name == name => {
+            let binding = match decl.binding {
+                VarBinding::Const => "const",
+                VarBinding::Let => "let",
+                VarBinding::Var => "var",
+            };
+            let ty = decl.type_ann.as_ref().map_or_else(
+                String::new,
+                |ann| format!(": {}", format_type_ann(ann)),
+            );
+            Some(format!("```rustscript\n{binding} {name}{ty}\n```"))
+        }
+        Stmt::If(if_stmt) => {
+            for s in &if_stmt.then_block.stmts {
+                if let Some(sig) = extract_var_hover(s, name) {
+                    return Some(sig);
+                }
+            }
+            if let Some(ref else_clause) = if_stmt.else_clause {
+                match else_clause {
+                    ElseClause::Block(block) => {
+                        for s in &block.stmts {
+                            if let Some(sig) = extract_var_hover(s, name) {
+                                return Some(sig);
+                            }
+                        }
+                    }
+                    ElseClause::ElseIf(nested_if) => {
+                        let nested_stmt = Stmt::If(nested_if.as_ref().clone());
+                        if let Some(sig) = extract_var_hover(&nested_stmt, name) {
+                            return Some(sig);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        Stmt::While(w) => {
+            for s in &w.body.stmts {
+                if let Some(sig) = extract_var_hover(s, name) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        Stmt::For(f) => {
+            if f.variable.name == name {
+                let binding = match f.binding {
+                    VarBinding::Const => "const",
+                    VarBinding::Let => "let",
+                    VarBinding::Var => "var",
+                };
+                return Some(format!("```rustscript\n{binding} {name} (for-of loop variable)\n```"));
+            }
+            for s in &f.body.stmts {
+                if let Some(sig) = extract_var_hover(s, name) {
+                    return Some(sig);
+                }
+            }
+            None
         }
         _ => None,
     }
