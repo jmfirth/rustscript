@@ -183,8 +183,12 @@ pub enum RustdocType {
     },
     /// A qualified path like `<T as Trait>::Assoc`.
     QualifiedPath {
-        /// The display string.
+        /// The associated type name (e.g., `Item`).
         name: String,
+        /// The self type (e.g., `Self`, `T`), if extracted.
+        self_type: Option<Box<RustdocType>>,
+        /// The trait the associated type comes from (e.g., `Iterator`).
+        trait_name: Option<String>,
     },
     /// An inferred type `_`.
     Infer,
@@ -393,41 +397,89 @@ fn parse_variant_ref(value: &serde_json::Value) -> Option<RustdocVariant> {
 }
 
 /// Parse generic parameters from a rustdoc `generics` object.
+///
+/// Parses both `params` (inline bounds like `<T: Display>`) and
+/// `where_predicates` (where clause bounds like `where T: Clone`),
+/// merging bounds from both sources into a unified parameter list.
 fn parse_generics(value: Option<&serde_json::Value>) -> Vec<RustdocGenericParam> {
     let Some(generics) = value else {
         return Vec::new();
     };
 
-    let Some(params) = generics.get("params").and_then(|p| p.as_array()) else {
-        return Vec::new();
-    };
+    let mut result: Vec<RustdocGenericParam> = generics
+        .get("params")
+        .and_then(|p| p.as_array())
+        .map(|params| {
+            params
+                .iter()
+                .filter_map(|p| {
+                    let name = p.get("name")?.as_str()?.to_owned();
+                    let kind = p.get("kind")?;
 
-    params
-        .iter()
-        .filter_map(|p| {
-            let name = p.get("name")?.as_str()?.to_owned();
-            let kind = p.get("kind")?;
+                    // Only include type parameters (not lifetime or const).
+                    let type_obj = kind.get("type")?;
 
-            // Only include type parameters (not lifetime or const).
-            let type_obj = kind.get("type")?;
-
-            let bounds = type_obj
-                .get("bounds")
-                .and_then(|b| b.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|bound| {
-                            let trait_bound = bound.get("trait_bound")?;
-                            let trait_ref = trait_bound.get("trait")?;
-                            extract_type_name(trait_ref)
+                    let bounds = type_obj
+                        .get("bounds")
+                        .and_then(|b| b.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|bound| {
+                                    let trait_bound = bound.get("trait_bound")?;
+                                    let trait_ref = trait_bound.get("trait")?;
+                                    extract_type_name(trait_ref)
+                                })
+                                .collect()
                         })
-                        .collect()
-                })
-                .unwrap_or_default();
+                        .unwrap_or_default();
 
-            Some(RustdocGenericParam { name, bounds })
+                    Some(RustdocGenericParam { name, bounds })
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+
+    // Parse where_predicates and merge bounds into existing params.
+    if let Some(where_preds) = generics.get("where_predicates").and_then(|w| w.as_array()) {
+        for pred in where_preds {
+            if let Some(bound_pred) = pred.get("bound_predicate") {
+                // Extract the type this predicate applies to.
+                let type_name = bound_pred
+                    .get("type")
+                    .and_then(|t| t.get("generic").and_then(|g| g.as_str()))
+                    .map(str::to_owned);
+
+                if let Some(name) = type_name {
+                    // Extract bounds from the predicate.
+                    let new_bounds: Vec<String> = bound_pred
+                        .get("bounds")
+                        .and_then(|b| b.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|bound| {
+                                    let trait_bound = bound.get("trait_bound")?;
+                                    let trait_ref = trait_bound.get("trait")?;
+                                    extract_type_name(trait_ref)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    // Merge into existing param or create a new one.
+                    if let Some(existing) = result.iter_mut().find(|p| p.name == name) {
+                        existing.bounds.extend(new_bounds);
+                    } else {
+                        result.push(RustdocGenericParam {
+                            name,
+                            bounds: new_bounds,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Parse a rustdoc `Type` value into our simplified representation.
@@ -551,7 +603,13 @@ fn parse_type(value: &serde_json::Value) -> RustdocType {
                 .and_then(|n| n.as_str())
                 .unwrap_or("?")
                 .to_owned();
-            RustdocType::QualifiedPath { name }
+            let self_type = inner.get("self_type").map(|st| Box::new(parse_type(st)));
+            let trait_name = inner.get("trait").and_then(|t| extract_type_name(t));
+            RustdocType::QualifiedPath {
+                name,
+                self_type,
+                trait_name,
+            }
         }
         "infer" => RustdocType::Infer,
         _ => RustdocType::Unknown(format!("{value}")),
@@ -1250,6 +1308,241 @@ mod tests {
             assert!(func.return_type.is_none()); // unit return
         } else {
             panic!("expected function");
+        }
+    }
+
+    // ----- Where clause parsing tests -----
+
+    fn sample_where_clause_function_json() -> serde_json::Value {
+        serde_json::json!({
+            "index": {
+                "0:60": {
+                    "name": "handler",
+                    "docs": "Handle a request.",
+                    "inner": {
+                        "function": {
+                            "sig": {
+                                "inputs": [
+                                    ["h", {"generic": "H"}]
+                                ],
+                                "output": {"tuple": []}
+                            },
+                            "generics": {
+                                "params": [
+                                    {
+                                        "name": "H",
+                                        "kind": {
+                                            "type": {
+                                                "bounds": []
+                                            }
+                                        }
+                                    }
+                                ],
+                                "where_predicates": [
+                                    {
+                                        "bound_predicate": {
+                                            "type": {"generic": "H"},
+                                            "bounds": [
+                                                {
+                                                    "trait_bound": {
+                                                        "trait": {
+                                                            "resolved_path": {
+                                                                "name": "Handler"
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                {
+                                                    "trait_bound": {
+                                                        "trait": {
+                                                            "resolved_path": {
+                                                                "name": "Clone"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            },
+                            "header": {
+                                "is_async": false,
+                                "is_unsafe": false
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_rustdoc_parser_where_clause_merges_bounds_into_existing_param() {
+        let crate_data = parse_rustdoc_json(&sample_where_clause_function_json()).unwrap();
+        let item = lookup_item(&crate_data, "handler").unwrap();
+        if let RustdocItemKind::Function(func) = &item.kind {
+            assert_eq!(
+                func.generics.len(),
+                1,
+                "should have exactly one generic param"
+            );
+            assert_eq!(func.generics[0].name, "H");
+            assert_eq!(
+                func.generics[0].bounds,
+                vec!["Handler", "Clone"],
+                "where clause bounds should be merged into H"
+            );
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_rustdoc_parser_where_clause_creates_new_param() {
+        // Where clause on a type not in params list.
+        let json = serde_json::json!({
+            "index": {
+                "0:70": {
+                    "name": "process",
+                    "docs": null,
+                    "inner": {
+                        "function": {
+                            "sig": {
+                                "inputs": [
+                                    ["x", {"generic": "T"}]
+                                ],
+                                "output": {"tuple": []}
+                            },
+                            "generics": {
+                                "params": [
+                                    {
+                                        "name": "T",
+                                        "kind": {
+                                            "type": {
+                                                "bounds": [
+                                                    {
+                                                        "trait_bound": {
+                                                            "trait": {
+                                                                "resolved_path": {
+                                                                    "name": "Debug"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                ],
+                                "where_predicates": [
+                                    {
+                                        "bound_predicate": {
+                                            "type": {"generic": "T"},
+                                            "bounds": [
+                                                {
+                                                    "trait_bound": {
+                                                        "trait": {
+                                                            "resolved_path": {
+                                                                "name": "Clone"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "bound_predicate": {
+                                            "type": {"generic": "U"},
+                                            "bounds": [
+                                                {
+                                                    "trait_bound": {
+                                                        "trait": {
+                                                            "resolved_path": {
+                                                                "name": "Send"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            },
+                            "header": {
+                                "is_async": false,
+                                "is_unsafe": false
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let crate_data = parse_rustdoc_json(&json).unwrap();
+        let item = lookup_item(&crate_data, "process").unwrap();
+        if let RustdocItemKind::Function(func) = &item.kind {
+            assert_eq!(
+                func.generics.len(),
+                2,
+                "should have T from params + U from where clause"
+            );
+            // T: Debug (from params) + Clone (from where clause)
+            assert_eq!(func.generics[0].name, "T");
+            assert_eq!(func.generics[0].bounds, vec!["Debug", "Clone"]);
+            // U: Send (new param from where clause)
+            assert_eq!(func.generics[1].name, "U");
+            assert_eq!(func.generics[1].bounds, vec!["Send"]);
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    // ----- Qualified path parsing tests -----
+
+    #[test]
+    fn test_rustdoc_parser_type_qualified_path_self() {
+        let ty = parse_type(&serde_json::json!({
+            "qualified_path": {
+                "name": "Item",
+                "self_type": {"generic": "Self"},
+                "trait": {"resolved_path": {"name": "Iterator"}}
+            }
+        }));
+        if let RustdocType::QualifiedPath {
+            name,
+            self_type,
+            trait_name,
+        } = &ty
+        {
+            assert_eq!(name, "Item");
+            assert!(matches!(self_type.as_deref(), Some(RustdocType::Generic(g)) if g == "Self"));
+            assert_eq!(trait_name.as_deref(), Some("Iterator"));
+        } else {
+            panic!("expected QualifiedPath, got {ty:?}");
+        }
+    }
+
+    #[test]
+    fn test_rustdoc_parser_type_qualified_path_generic() {
+        let ty = parse_type(&serde_json::json!({
+            "qualified_path": {
+                "name": "Output",
+                "self_type": {"generic": "T"},
+                "trait": {"resolved_path": {"name": "Add"}}
+            }
+        }));
+        if let RustdocType::QualifiedPath {
+            name,
+            self_type,
+            trait_name,
+        } = &ty
+        {
+            assert_eq!(name, "Output");
+            assert!(matches!(self_type.as_deref(), Some(RustdocType::Generic(g)) if g == "T"));
+            assert_eq!(trait_name.as_deref(), Some("Add"));
+        } else {
+            panic!("expected QualifiedPath, got {ty:?}");
         }
     }
 

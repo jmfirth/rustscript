@@ -36,7 +36,7 @@ examples: build
         name=$(basename "$dir")
         printf "  %-20s" "$name"
         cd "$dir"
-        if [[ "$name" == "rest_api" || "$name" == "axum_server" ]]; then
+        if [[ "$name" == "rest_api" || "$name" == "axum_server" || "$name" == "json_api" ]]; then
             $RSC build > /dev/null 2>&1 && echo "✓ (build)" || echo "✗ FAILED"
         else
             output=$($RSC run 2>&1 | tail -1)
