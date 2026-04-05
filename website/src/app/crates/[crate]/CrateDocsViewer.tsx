@@ -159,12 +159,6 @@ function DocItem({ item }: { item: TranslatedItem }) {
       <pre className="px-4 py-3 overflow-x-auto text-sm font-mono bg-[var(--color-code-bg)]">
         <code className="rustscript">{signature}</code>
       </pre>
-      {item.docs && (
-        <div
-          className="px-4 py-3 text-sm text-[var(--color-text-secondary)] border-t border-[var(--color-border)] leading-relaxed [&_code]:bg-[var(--color-code-bg)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono [&_a]:text-[var(--color-accent)] [&_a]:underline"
-          dangerouslySetInnerHTML={{ __html: item.docs }}
-        />
-      )}
     </div>
   );
 }
