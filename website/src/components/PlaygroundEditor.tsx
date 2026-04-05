@@ -408,7 +408,7 @@ export function PlaygroundEditor() {
         {/* Left: RustScript */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <div className="flex items-center px-4 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] shrink-0">
-            <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent-secondary)] mr-2" />
+            <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] mr-2" />
             RustScript (.rts)
           </div>
           <div className="flex-1 min-h-0">
@@ -436,7 +436,7 @@ export function PlaygroundEditor() {
         {/* Right: Rust output */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <div className="flex items-center px-4 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] shrink-0">
-            <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] mr-2" />
+            <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent-secondary)] mr-2" />
             Rust (generated .rs)
           </div>
           <div className="flex-1 min-h-0">
