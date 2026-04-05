@@ -432,6 +432,80 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
     }
 }
 
+/// Walk expressions to find closure parameters matching the given name.
+fn extract_closure_param_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String> {
+    use rsc_syntax::ast::Stmt;
+
+    match stmt {
+        Stmt::VarDecl(decl) => find_closure_param_in_expr(&decl.init, name),
+        Stmt::Expr(expr) => find_closure_param_in_expr(expr, name),
+        Stmt::Return(ret) => {
+            ret.value.as_ref().and_then(|e| find_closure_param_in_expr(e, name))
+        }
+        _ => None,
+    }
+}
+
+/// Recursively search an expression tree for closure parameters.
+fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+
+    match &expr.kind {
+        ExprKind::Closure(closure) => {
+            for param in &closure.params {
+                if param.name.name == name {
+                    let ty = format_type_ann(&param.type_ann);
+                    if ty == "inferred" || ty.is_empty() {
+                        return Some(format!("```rustscript\n(parameter) {name}\n```"));
+                    }
+                    return Some(format!(
+                        "```rustscript\n(parameter) {name}: {ty}\n```"
+                    ));
+                }
+            }
+            // Also recurse into closure body expressions
+            match &closure.body {
+                rsc_syntax::ast::ClosureBody::Expr(e) => find_closure_param_in_expr(e, name),
+                rsc_syntax::ast::ClosureBody::Block(block) => {
+                    for s in &block.stmts {
+                        if let Some(sig) = extract_closure_param_hover(s, name) {
+                            return Some(sig);
+                        }
+                    }
+                    None
+                }
+            }
+        }
+        ExprKind::MethodCall(mc) => {
+            // Check the receiver
+            if let Some(sig) = find_closure_param_in_expr(&mc.object, name) {
+                return Some(sig);
+            }
+            // Check arguments
+            for arg in &mc.args {
+                if let Some(sig) = find_closure_param_in_expr(arg, name) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        ExprKind::Call(call) => {
+            for arg in &call.args {
+                if let Some(sig) = find_closure_param_in_expr(arg, name) {
+                    return Some(sig);
+                }
+            }
+            None
+        }
+        ExprKind::Binary(bin) => {
+            find_closure_param_in_expr(&bin.left, name)
+                .or_else(|| find_closure_param_in_expr(&bin.right, name))
+        }
+        ExprKind::Paren(inner) => find_closure_param_in_expr(inner, name),
+        _ => None,
+    }
+}
+
 /// Search type definitions, interfaces, and classes for a field matching the token.
 fn extract_field_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<String> {
     use rsc_syntax::ast::ItemKind;
@@ -517,6 +591,13 @@ fn extract_local_hover(
             // Check body statements for variable declarations
             for stmt in &f.body.stmts {
                 if let Some(sig) = extract_var_hover(stmt, name, fn_return_types) {
+                    return Some(sig);
+                }
+            }
+
+            // Check closure parameters in expressions
+            for stmt in &f.body.stmts {
+                if let Some(sig) = extract_closure_param_hover(stmt, name) {
                     return Some(sig);
                 }
             }
