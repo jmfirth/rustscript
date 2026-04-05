@@ -79,7 +79,17 @@ function ItemSection({
   );
 }
 
+/** Strip markdown code fences from translator output */
+function stripCodeFences(sig: string): string {
+  return sig
+    .replace(/^```\w*\n?/gm, '')
+    .replace(/^```$/gm, '')
+    .trim();
+}
+
 function DocItem({ item }: { item: TranslatedItem }) {
+  const signature = stripCodeFences(item.signature);
+
   return (
     <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
       <div className="px-4 py-3 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] flex items-center gap-3">
@@ -94,7 +104,7 @@ function DocItem({ item }: { item: TranslatedItem }) {
         )}
       </div>
       <pre className="px-4 py-3 overflow-x-auto text-sm font-mono bg-[var(--color-code-bg)]">
-        <code className="rustscript">{item.signature}</code>
+        <code className="rustscript">{signature}</code>
       </pre>
       {item.docs && (
         <div className="px-4 py-3 text-sm text-[var(--color-text-secondary)] border-t border-[var(--color-border)] leading-relaxed whitespace-pre-wrap">
