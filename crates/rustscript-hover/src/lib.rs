@@ -106,6 +106,8 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
 // ---------------------------------------------------------------------------
 
 /// Builtin descriptions for well-known `RustScript` APIs.
+// Lookup table for all builtin API descriptions
+#[allow(clippy::too_many_lines)]
 fn builtin_hover(token: &str) -> Option<&'static str> {
     Some(match token {
         "console" => {
@@ -322,18 +324,18 @@ fn extract_declaration_signature(
                 .return_type
                 .as_ref()
                 .and_then(|rta| rta.type_ann.as_ref())
-                .map_or_else(|| "void".to_owned(), |ann| format_type_ann(ann));
+                .map_or_else(|| "void".to_owned(), format_type_ann);
 
             let async_prefix = if f.is_async { "async " } else { "" };
             let sig = format!(
                 "```rustscript\n{async_prefix}function {name}({}): {ret}\n```",
                 params.join(", ")
             );
-            Some(with_doc_comment(&f.doc_comment, &sig))
+            Some(with_doc_comment(f.doc_comment.as_ref(), &sig))
         }
         ItemKind::TypeDef(td) if td.name.name == name => {
             let sig = format_type_def_hover(name, td);
-            Some(with_doc_comment(&td.doc_comment, &sig))
+            Some(with_doc_comment(td.doc_comment.as_ref(), &sig))
         }
         ItemKind::Interface(iface) if iface.name.name == name => {
             let fields: Vec<String> = iface
@@ -349,7 +351,7 @@ fn extract_declaration_signature(
                     fields.join(",\n")
                 )
             };
-            Some(with_doc_comment(&iface.doc_comment, &sig))
+            Some(with_doc_comment(iface.doc_comment.as_ref(), &sig))
         }
         ItemKind::EnumDef(e) if e.name.name == name => {
             let variants: Vec<String> = e
@@ -364,11 +366,11 @@ fn extract_declaration_signature(
                 "```rustscript\nenum {name} {{ {} }}\n```",
                 variants.join(", ")
             );
-            Some(with_doc_comment(&e.doc_comment, &sig))
+            Some(with_doc_comment(e.doc_comment.as_ref(), &sig))
         }
         ItemKind::Class(c) if c.name.name == name => {
             let sig = format!("```rustscript\nclass {name}\n```");
-            Some(with_doc_comment(&c.doc_comment, &sig))
+            Some(with_doc_comment(c.doc_comment.as_ref(), &sig))
         }
         _ => None,
     }
@@ -408,13 +410,13 @@ fn extract_field_hover(item: &rustscript_syntax::ast::Item, name: &str) -> Optio
         }
         ItemKind::Class(c) => {
             for member in &c.members {
-                if let rustscript_syntax::ast::ClassMember::Field(f) = member {
-                    if f.name.name == name {
-                        return Some(format!(
-                            "```rustscript\n(property) {name}: {}\n```",
-                            format_type_ann(&f.type_ann)
-                        ));
-                    }
+                if let rustscript_syntax::ast::ClassMember::Field(f) = member
+                    && f.name.name == name
+                {
+                    return Some(format!(
+                        "```rustscript\n(property) {name}: {}\n```",
+                        format_type_ann(&f.type_ann)
+                    ));
                 }
             }
             None
@@ -530,8 +532,8 @@ fn extract_var_hover_ctx(
         Stmt::ArrayDestructure(ad) => {
             for (i, elem) in ad.elements.iter().enumerate() {
                 let ident = match elem {
-                    rustscript_syntax::ast::ArrayDestructureElement::Single(id) => id,
-                    rustscript_syntax::ast::ArrayDestructureElement::Rest(id) => id,
+                    rustscript_syntax::ast::ArrayDestructureElement::Single(id)
+                    | rustscript_syntax::ast::ArrayDestructureElement::Rest(id) => id,
                 };
                 if ident.name == name {
                     let binding = match ad.binding {
@@ -540,15 +542,14 @@ fn extract_var_hover_ctx(
                         VarBinding::Var => "var",
                     };
                     // Try to infer element type from tuple type annotation
-                    if let Some(ann) = &ad.type_ann {
-                        if let rustscript_syntax::ast::TypeKind::Tuple(types) = &ann.kind {
-                            if let Some(elem_ty) = types.get(i) {
-                                return Some(format!(
-                                    "```rustscript\n{binding} {name}: {}\n```",
-                                    format_type_ann(elem_ty)
-                                ));
-                            }
-                        }
+                    if let Some(ann) = &ad.type_ann
+                        && let rustscript_syntax::ast::TypeKind::Tuple(types) = &ann.kind
+                        && let Some(elem_ty) = types.get(i)
+                    {
+                        return Some(format!(
+                            "```rustscript\n{binding} {name}: {}\n```",
+                            format_type_ann(elem_ty)
+                        ));
                     }
                     // Try to infer from the init expression
                     // Handle: await Promise.all([f(), g()]) -> tuple of return types
@@ -566,14 +567,12 @@ fn extract_var_hover_ctx(
                 if local.name == name {
                     // Look up the type from the init expression's type fields
                     let init_type = infer_type_from_expr_ctx(&ds.init, ctx);
-                    if let Some(ref type_name) = init_type {
-                        if let Some(fields) = ctx.type_fields.get(type_name.as_str()) {
-                            if let Some((_, ty)) =
-                                fields.iter().find(|(n, _)| n == &field.field_name.name)
-                            {
-                                return Some(format!("```rustscript\nconst {name}: {ty}\n```"));
-                            }
-                        }
+                    if let Some(ref type_name) = init_type
+                        && let Some(fields) = ctx.type_fields.get(type_name.as_str())
+                        && let Some((_, ty)) =
+                            fields.iter().find(|(n, _)| n == &field.field_name.name)
+                    {
+                        return Some(format!("```rustscript\nconst {name}: {ty}\n```"));
                     }
                     return Some(format!("```rustscript\nconst {name}\n```"));
                 }
@@ -585,6 +584,7 @@ fn extract_var_hover_ctx(
 }
 
 /// Extract hover info from a variable declaration statement (legacy, without full context).
+#[allow(dead_code)] // reserved for legacy hover path
 fn extract_var_hover(
     stmt: &rustscript_syntax::ast::Stmt,
     name: &str,
@@ -685,14 +685,11 @@ fn infer_array_destructure_element(
                 && matches!(mc.object.kind, ExprKind::Ident(ref id) if id.name == "Promise") =>
         {
             // The argument should be an array literal
-            if let Some(arr_arg) = mc.args.first() {
-                if let ExprKind::ArrayLit(elements) = &arr_arg.kind {
-                    if let Some(rustscript_syntax::ast::ArrayElement::Expr(elem)) =
-                        elements.get(index)
-                    {
-                        return infer_type_from_expr_ctx(elem, ctx);
-                    }
-                }
+            if let Some(arr_arg) = mc.args.first()
+                && let ExprKind::ArrayLit(elements) = &arr_arg.kind
+                && let Some(rustscript_syntax::ast::ArrayElement::Expr(elem)) = elements.get(index)
+            {
+                return infer_type_from_expr_ctx(elem, ctx);
             }
             None
         }
@@ -851,7 +848,7 @@ fn resolve_receiver_element_type(
         // Direct variable reference: look up in var_types
         ExprKind::Ident(ident) => {
             let type_str = var_types.get(&ident.name)?;
-            extract_element_type(type_str).map(|s| s.to_owned())
+            extract_element_type(type_str).map(str::to_owned)
         }
         // Chained method that preserves element type (e.g., books.filter(...).map(...))
         ExprKind::MethodCall(mc) => {
@@ -890,23 +887,22 @@ fn collect_fn_info(module: &rustscript_syntax::ast::Module) -> HashMap<String, F
     use rustscript_syntax::ast::ItemKind;
     let mut map = HashMap::new();
     for item in &module.items {
-        if let ItemKind::Function(f) = &item.kind {
-            if let Some(rta) = &f.return_type {
-                if let Some(ann) = &rta.type_ann {
-                    let generic_params = f
-                        .type_params
-                        .as_ref()
-                        .map(|tp| tp.params.iter().map(|p| p.name.name.clone()).collect())
-                        .unwrap_or_default();
-                    map.insert(
-                        f.name.name.clone(),
-                        FnInfo {
-                            return_type: format_type_ann(ann),
-                            generic_params,
-                        },
-                    );
-                }
-            }
+        if let ItemKind::Function(f) = &item.kind
+            && let Some(rta) = &f.return_type
+            && let Some(ann) = &rta.type_ann
+        {
+            let generic_params = f
+                .type_params
+                .as_ref()
+                .map(|tp| tp.params.iter().map(|p| p.name.name.clone()).collect())
+                .unwrap_or_default();
+            map.insert(
+                f.name.name.clone(),
+                FnInfo {
+                    return_type: format_type_ann(ann),
+                    generic_params,
+                },
+            );
         }
     }
     map
@@ -926,16 +922,16 @@ fn collect_var_types(stmts: &[rustscript_syntax::ast::Stmt]) -> HashMap<String, 
     use rustscript_syntax::ast::Stmt;
     let mut map = HashMap::new();
     for stmt in stmts {
-        if let Stmt::VarDecl(decl) = stmt {
-            if let Some(ann) = &decl.type_ann {
-                map.insert(decl.name.name.clone(), format_type_ann(ann));
-            }
+        if let Stmt::VarDecl(decl) = stmt
+            && let Some(ann) = &decl.type_ann
+        {
+            map.insert(decl.name.name.clone(), format_type_ann(ann));
         }
     }
     map
 }
 
-/// Collect type name -> vec of (field_name, field_type) from module.
+/// Collect type name -> vec of (`field_name`, `field_type`) from module.
 fn collect_type_fields(
     module: &rustscript_syntax::ast::Module,
 ) -> HashMap<String, Vec<(String, String)>> {
@@ -976,6 +972,7 @@ fn extract_element_type(type_str: &str) -> Option<&str> {
 }
 
 /// Try to infer the type of an expression for hover display.
+#[allow(dead_code)] // reserved for legacy hover path
 fn infer_type_from_expr(
     expr: &rustscript_syntax::ast::Expr,
     fn_return_types: &HashMap<String, String>,
@@ -1007,23 +1004,21 @@ fn infer_type_from_expr_ctx(
 
             // If the call has explicit type arguments and the function has generic params,
             // substitute them into the return type.
-            if !call.type_args.is_empty() {
-                if let Some(info) = ctx.fn_info.get(&call.callee.name) {
-                    let mut result = raw_return.clone();
-                    for (param_name, type_arg) in info.generic_params.iter().zip(&call.type_args) {
-                        let concrete = format_type_ann(type_arg);
-                        result = result.replace(param_name.as_str(), &concrete);
-                    }
-                    return Some(result);
+            if !call.type_args.is_empty()
+                && let Some(info) = ctx.fn_info.get(&call.callee.name)
+            {
+                let mut result = raw_return.clone();
+                for (param_name, type_arg) in info.generic_params.iter().zip(&call.type_args) {
+                    let concrete = format_type_ann(type_arg);
+                    result = result.replace(param_name.as_str(), &concrete);
                 }
+                return Some(result);
             }
 
             Some(raw_return.clone())
         }
-        // String literal -> string
-        ExprKind::StringLit(_) => Some("string".to_owned()),
-        // Template literal -> string
-        ExprKind::TemplateLit(_) => Some("string".to_owned()),
+        // String / template literal -> string
+        ExprKind::StringLit(_) | ExprKind::TemplateLit(_) => Some("string".to_owned()),
         // Number literal -> i64 or f64
         ExprKind::IntLit(_) => Some("i64".to_owned()),
         ExprKind::FloatLit(_) => Some("f64".to_owned()),
@@ -1055,12 +1050,12 @@ fn infer_type_from_expr_ctx(
                 "map" => {
                     // map return type is Array<ReturnTypeOfClosure>
                     // Try to infer from the closure argument
-                    if let Some(closure_arg) = mc.args.first() {
-                        if let ExprKind::Closure(closure) = &closure_arg.kind {
-                            let closure_ret = infer_closure_return_type(closure, &mc.object, ctx);
-                            if let Some(ret) = closure_ret {
-                                return Some(format!("Array<{ret}>"));
-                            }
+                    if let Some(closure_arg) = mc.args.first()
+                        && let ExprKind::Closure(closure) = &closure_arg.kind
+                    {
+                        let closure_ret = infer_closure_return_type(closure, &mc.object, ctx);
+                        if let Some(ret) = closure_ret {
+                            return Some(format!("Array<{ret}>"));
                         }
                     }
                     Some("Array<...>".to_owned())
@@ -1071,10 +1066,8 @@ fn infer_type_from_expr_ctx(
                     extract_element_type(&receiver_type).map(|e| format!("{e} | null"))
                 }
                 "join" | "toString" => Some("string".to_owned()),
-                "length" => Some("i64".to_owned()),
-                "reduce" => None, // Too complex to infer
+                "length" | "indexOf" | "findIndex" => Some("i64".to_owned()),
                 "some" | "every" | "includes" => Some("boolean".to_owned()),
-                "indexOf" | "findIndex" => Some("i64".to_owned()),
                 "pop" | "shift" => {
                     let receiver_type = infer_type_from_expr_ctx(&mc.object, ctx)?;
                     extract_element_type(&receiver_type).map(|e| format!("{e} | null"))
@@ -1106,18 +1099,16 @@ fn infer_closure_return_type(
         let element_type = extract_element_type(&receiver_type)?;
 
         // If the body is a field access on the param, look up the field type
-        if let rustscript_syntax::ast::ExprKind::FieldAccess(fa) = &body_expr.kind {
-            if let rustscript_syntax::ast::ExprKind::Ident(ident) = &fa.object.kind {
-                // Check if this ident is the closure param
-                if closure.params.first().map(|p| &p.name.name) == Some(&ident.name) {
-                    // Look up field type on the element type
-                    let fields = ctx.type_fields.get(element_type)?;
-                    return fields
-                        .iter()
-                        .find(|(name, _)| name == &fa.field.name)
-                        .map(|(_, ty)| ty.clone());
-                }
-            }
+        if let rustscript_syntax::ast::ExprKind::FieldAccess(fa) = &body_expr.kind
+            && let rustscript_syntax::ast::ExprKind::Ident(ident) = &fa.object.kind
+            && closure.params.first().map(|p| &p.name.name) == Some(&ident.name)
+        {
+            // Look up field type on the element type
+            let fields = ctx.type_fields.get(element_type)?;
+            return fields
+                .iter()
+                .find(|(name, _)| name == &fa.field.name)
+                .map(|(_, ty)| ty.clone());
         }
     }
 
@@ -1170,7 +1161,7 @@ fn format_type_def_hover(name: &str, td: &rustscript_syntax::ast::TypeDef) -> St
 }
 
 /// Prepend a doc comment to a signature if present.
-fn with_doc_comment(doc: &Option<String>, sig: &str) -> String {
+fn with_doc_comment(doc: Option<&String>, sig: &str) -> String {
     match doc {
         Some(comment) if !comment.is_empty() => format!("{comment}\n\n---\n\n{sig}"),
         _ => sig.to_owned(),

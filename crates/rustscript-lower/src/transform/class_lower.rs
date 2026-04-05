@@ -23,6 +23,8 @@ impl Transform {
     ///
     /// Includes fields from both explicit declarations and constructor parameter
     /// properties. Registers getter/setter names for call-site transformation.
+    // Handles fields, constructor params, getter/setter registration, and type resolution
+    #[allow(clippy::too_many_lines)]
     pub(super) fn register_class_def(&mut self, cls: &ast::ClassDef, ctx: &mut LoweringContext) {
         let mut diags = Vec::new();
         let generic_names = collect_generic_param_names(cls.type_params.as_ref());

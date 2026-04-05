@@ -1,7 +1,7 @@
 //! Type lowering logic.
 //!
 //! Handles resolution and lowering of type definitions, utility types (Partial,
-//! Required, Readonly, Record, Pick, Omit, ReturnType, Parameters), mapped types,
+//! Required, Readonly, Record, Pick, Omit, `ReturnType`, Parameters), mapped types,
 //! keyof types, intersection types, enum definitions, and interface definitions.
 //! Also provides free functions for type parameter lowering, derive merging, and
 //! name capitalization used across the transform pipeline.
@@ -129,42 +129,38 @@ impl Transform {
         let generic_names = collect_generic_param_names(td.type_params.as_ref());
 
         for member in members {
-            match &member.kind {
-                ast::TypeKind::Named(ident) => {
-                    if let Some(reg_type) = self.type_registry.lookup(&ident.name) {
-                        if let Some(fields) = reg_type.struct_fields() {
-                            for (name, ty) in fields {
-                                if seen_names.insert(name.clone()) {
-                                    merged_fields.push((name.clone(), ty.clone()));
-                                }
-                            }
+            if let ast::TypeKind::Named(ident) = &member.kind {
+                if let Some(reg_type) = self.type_registry.lookup(&ident.name)
+                    && let Some(fields) = reg_type.struct_fields()
+                {
+                    for (name, ty) in fields {
+                        if seen_names.insert(name.clone()) {
+                            merged_fields.push((name.clone(), ty.clone()));
                         }
                     }
                 }
+            } else {
                 // Inline object types are not supported in type annotation position,
                 // but handle Named types with generics gracefully.
-                _ => {
-                    // Resolve the member type normally for non-named types
-                    let mut diags = Vec::new();
-                    let ty = resolve::resolve_type_annotation_with_generics(
-                        member,
-                        &self.type_registry,
-                        &generic_names,
-                        &mut diags,
-                    );
-                    for d in diags {
-                        ctx.emit_diagnostic(d);
-                    }
-                    // If this resolves to a named type, try looking it up
-                    if let Type::Named(ref name) = ty {
-                        if let Some(reg_type) = self.type_registry.lookup(name) {
-                            if let Some(fields) = reg_type.struct_fields() {
-                                for (name, ty) in fields {
-                                    if seen_names.insert(name.clone()) {
-                                        merged_fields.push((name.clone(), ty.clone()));
-                                    }
-                                }
-                            }
+                // Resolve the member type normally for non-named types
+                let mut diags = Vec::new();
+                let ty = resolve::resolve_type_annotation_with_generics(
+                    member,
+                    &self.type_registry,
+                    &generic_names,
+                    &mut diags,
+                );
+                for d in diags {
+                    ctx.emit_diagnostic(d);
+                }
+                // If this resolves to a named type, try looking it up
+                if let Type::Named(ref name) = ty
+                    && let Some(reg_type) = self.type_registry.lookup(name)
+                    && let Some(fields) = reg_type.struct_fields()
+                {
+                    for (name, ty) in fields {
+                        if seen_names.insert(name.clone()) {
+                            merged_fields.push((name.clone(), ty.clone()));
                         }
                     }
                 }
@@ -178,6 +174,7 @@ impl Transform {
     ///
     /// `type Person = Named & Aged` where Named has `name: String` and Aged has
     /// `age: i32` produces `struct Person { pub name: String, pub age: i32 }`.
+    #[allow(clippy::unused_self)] // method on Transform for API consistency with other lowering methods
     pub(super) fn lower_intersection_struct(
         &self,
         td: &ast::TypeDef,

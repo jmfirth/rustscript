@@ -63,10 +63,10 @@ impl Transform {
     /// know e.g. that a variable bound to `pair(a, b)` has a tuple type, so `p[0]`
     /// can be lowered as `p.0` instead of array indexing.
     fn infer_call_return_type(&self, init: &ast::Expr) -> Option<RustType> {
-        if let ast::ExprKind::Call(call) = &init.kind {
-            if let Some(sig) = self.fn_signatures.get(&call.callee.name) {
-                return sig.return_type.clone();
-            }
+        if let ast::ExprKind::Call(call) = &init.kind
+            && let Some(sig) = self.fn_signatures.get(&call.callee.name)
+        {
+            return sig.return_type.clone();
         }
         None
     }
@@ -264,13 +264,12 @@ impl Transform {
 
         // When the declared type is Vec<Tuple<...>> (e.g., `Array<[string, i32]>`),
         // propagate the expected element type so inner array literals are lowered as tuples.
-        if let RustType::Generic(ref base, ref args) = ty {
-            if matches!(base.as_ref(), RustType::Named(n) if n == "Vec")
-                && args.len() == 1
-                && matches!(&args[0], RustType::Tuple(_))
-            {
-                ctx.set_expected_element_type(Some(args[0].clone()));
-            }
+        if let RustType::Generic(ref base, ref args) = ty
+            && matches!(base.as_ref(), RustType::Named(n) if n == "Vec")
+            && args.len() == 1
+            && matches!(&args[0], RustType::Tuple(_))
+        {
+            ctx.set_expected_element_type(Some(args[0].clone()));
         }
 
         // Check for HashMap initialization: `const config: { [key: string]: string } = {}`

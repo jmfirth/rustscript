@@ -67,6 +67,7 @@ struct FnSignature {
     return_type: Option<RustType>,
     /// Names of generic type parameters (e.g., `["A", "B"]`).
     /// Used to detect when a return type contains unresolved type params.
+    #[allow(dead_code)] // reserved for future type-param-aware return type inference
     generic_param_names: Vec<String>,
 }
 
@@ -521,11 +522,7 @@ impl Transform {
                             // Intersection type: type X = A & B
                             // Merge fields from all constituent struct types into one struct.
                             let merged = self.collect_intersection_fields(members, td, &mut ctx);
-                            if !merged.is_empty() {
-                                let mut lowered = self.lower_intersection_struct(td, &merged);
-                                lowered.public = exported;
-                                items.push(RustItem::Struct(lowered));
-                            } else {
+                            if merged.is_empty() {
                                 // Fallback: produce a type alias to the first member
                                 let rust_ty = self.resolve_type_alias_body(alias, td, &mut ctx);
                                 self.type_alias_types
@@ -536,6 +533,10 @@ impl Transform {
                                     ty: rust_ty,
                                     span: Some(td.span),
                                 }));
+                            } else {
+                                let mut lowered = self.lower_intersection_struct(td, &merged);
+                                lowered.public = exported;
+                                items.push(RustItem::Struct(lowered));
                             }
                         } else {
                             // Non-utility type alias: type X = SomeType
@@ -876,8 +877,6 @@ fn extract_named_type(ty: &RustType) -> Option<String> {
         _ => None,
     }
 }
-
-/// Capitalize the first letter of a string.
 
 /// Check whether any type, enum, or class in the module uses `Serialize` or
 /// `Deserialize` in its explicit derives, which requires the serde crate.

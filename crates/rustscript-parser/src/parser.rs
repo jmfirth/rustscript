@@ -381,7 +381,7 @@ impl<'src> Parser<'src> {
     /// diagnostic, and skip the body so parsing can continue.
     ///
     /// TypeScript's `namespace` keyword (and the legacy `module Foo {}` form)
-    /// is a pre-module-era feature. RustScript uses standard ES module
+    /// is a pre-module-era feature. `RustScript` uses standard ES module
     /// imports/exports instead, so we reject it with a helpful message.
     fn parse_namespace_diagnostic(&mut self) -> Option<Item> {
         let keyword_token = self.advance(); // consume `namespace` or `module`
@@ -3373,7 +3373,7 @@ impl<'src> Parser<'src> {
             // Bare block scope: `{ ... }` at statement position is a block, not an object literal.
             TokenKind::LBrace => {
                 let block = self.parse_block()?;
-                return Some(Stmt::Block(block));
+                Some(Stmt::Block(block))
             }
             TokenKind::Const
                 if self
@@ -3661,6 +3661,8 @@ impl<'src> Parser<'src> {
     /// `for (const/let IDENT of EXPR) BLOCK` → `Stmt::For`
     /// `for (const/let IDENT in EXPR) BLOCK` → `Stmt::ForIn`
     /// `for (init; cond; update) BLOCK` → `Stmt::ForClassic`
+    // Handles for-of, for-in, for-await-of, and for-classic in a single pass
+    #[allow(clippy::too_many_lines)]
     fn parse_for_stmt(&mut self, label: Option<String>) -> Option<Stmt> {
         let for_token = self.advance(); // consume `for`
         let start = for_token.span;
@@ -5078,6 +5080,8 @@ impl<'src> Parser<'src> {
         Some(type_args)
     }
 
+    // Handles member access, optional chaining, calls, indexing, template literals, and non-null assertions
+    #[allow(clippy::too_many_lines)]
     fn parse_call(&mut self) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
 
@@ -5832,42 +5836,37 @@ impl<'src> Parser<'src> {
             }
             TokenKind::Import => {
                 // `import.meta` meta-property
-                if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Dot) {
-                    if let Some(next) = self.tokens.get(self.pos + 2) {
-                        if let TokenKind::Ident(name) = &next.kind {
-                            if name == "meta" {
-                                let start = self.advance(); // consume `import`
-                                self.advance(); // consume `.`
-                                let meta_token = self.advance(); // consume `meta`
-                                let span = start.span.merge(meta_token.span);
-                                return Some(Expr {
-                                    kind: ExprKind::ImportMeta,
-                                    span,
-                                });
-                            }
-                        }
-                    }
+                if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::Dot)
+                    && let Some(next) = self.tokens.get(self.pos + 2)
+                    && let TokenKind::Ident(name) = &next.kind
+                    && name == "meta"
+                {
+                    let start = self.advance(); // consume `import`
+                    self.advance(); // consume `.`
+                    let meta_token = self.advance(); // consume `meta`
+                    let span = start.span.merge(meta_token.span);
+                    return Some(Expr {
+                        kind: ExprKind::ImportMeta,
+                        span,
+                    });
                 }
                 // Dynamic import expression: `import("module")`
                 if self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&TokenKind::LParen) {
                     let start = self.advance(); // consume `import`
                     self.advance(); // consume `(`
                     let arg_token = self.current_token().clone();
-                    let module_path = match &arg_token.kind {
-                        TokenKind::StringLit(s) => s.clone(),
-                        _ => {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    "dynamic import requires a string literal argument",
-                                )
+                    let module_path = if let TokenKind::StringLit(s) = &arg_token.kind {
+                        s.clone()
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error("dynamic import requires a string literal argument")
                                 .with_label(
                                     arg_token.span,
                                     self.file_id,
                                     "expected string literal",
                                 ),
-                            );
-                            return None;
-                        }
+                        );
+                        return None;
                     };
                     self.advance(); // consume string literal
                     let close = self.expect(&TokenKind::RParen)?;
@@ -6098,20 +6097,18 @@ impl<'src> Parser<'src> {
         let start = new_token.span;
 
         // `new.target` meta-property
-        if self.check(&TokenKind::Dot) {
-            if let Some(next) = self.tokens.get(self.pos + 1) {
-                if let TokenKind::Ident(name) = &next.kind {
-                    if name == "target" {
-                        self.advance(); // consume `.`
-                        let target_token = self.advance(); // consume `target`
-                        let span = start.merge(target_token.span);
-                        return Some(Expr {
-                            kind: ExprKind::NewTarget,
-                            span,
-                        });
-                    }
-                }
-            }
+        if self.check(&TokenKind::Dot)
+            && let Some(next) = self.tokens.get(self.pos + 1)
+            && let TokenKind::Ident(name) = &next.kind
+            && name == "target"
+        {
+            self.advance(); // consume `.`
+            let target_token = self.advance(); // consume `target`
+            let span = start.merge(target_token.span);
+            return Some(Expr {
+                kind: ExprKind::NewTarget,
+                span,
+            });
         }
 
         let type_name = self.parse_ident()?;

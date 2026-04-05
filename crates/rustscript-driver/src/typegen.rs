@@ -44,16 +44,12 @@ pub fn generate_types_from_module(module: &Module) -> String {
         match &item.kind {
             ItemKind::TypeDef(type_def) => {
                 if has_serde_derive(&type_def.derives) {
-                    if let Some(decl) = emit_type_def(type_def) {
-                        declarations.push(decl);
-                    }
+                    declarations.push(emit_type_def(type_def));
                 }
             }
             ItemKind::EnumDef(enum_def) => {
                 if has_serde_derive(&enum_def.derives) {
-                    if let Some(decl) = emit_enum_def(enum_def) {
-                        declarations.push(decl);
-                    }
+                    declarations.push(emit_enum_def(enum_def));
                 }
             }
             _ => {}
@@ -141,47 +137,47 @@ fn has_serde_derive(derives: &[rustscript_syntax::ast::Ident]) -> bool {
 }
 
 /// Emit a TypeScript interface declaration from a `RustScript` type definition.
-fn emit_type_def(type_def: &TypeDef) -> Option<String> {
+fn emit_type_def(type_def: &TypeDef) -> String {
     // If it's a type alias (e.g., `type X = Partial<User>`), emit as type alias
     if let Some(type_alias) = &type_def.type_alias {
         let mut out = String::new();
         let name = &type_def.name.name;
-        let generics = emit_type_params(&type_def.type_params);
+        let generics = emit_type_params(type_def.type_params.as_ref());
         let ts_type = map_type(type_alias);
         let _ = writeln!(out, "export type {name}{generics} = {ts_type};");
-        return Some(out);
+        return out;
     }
 
     // If it has an index signature with no fields, emit as Record
-    if type_def.fields.is_empty() {
-        if let Some(idx) = &type_def.index_signature {
-            let mut out = String::new();
-            let name = &type_def.name.name;
-            let generics = emit_type_params(&type_def.type_params);
-            let key_type = map_type(&idx.key_type);
-            let value_type = map_type(&idx.value_type);
-            let _ = writeln!(
-                out,
-                "export type {name}{generics} = Record<{key_type}, {value_type}>;"
-            );
-            return Some(out);
-        }
+    if type_def.fields.is_empty()
+        && let Some(idx) = &type_def.index_signature
+    {
+        let mut out = String::new();
+        let name = &type_def.name.name;
+        let generics = emit_type_params(type_def.type_params.as_ref());
+        let key_type = map_type(&idx.key_type);
+        let value_type = map_type(&idx.value_type);
+        let _ = writeln!(
+            out,
+            "export type {name}{generics} = Record<{key_type}, {value_type}>;"
+        );
+        return out;
     }
 
     let mut out = String::new();
     let name = &type_def.name.name;
-    let generics = emit_type_params(&type_def.type_params);
+    let generics = emit_type_params(type_def.type_params.as_ref());
     let _ = writeln!(out, "export interface {name}{generics} {{");
     for field in &type_def.fields {
         let field_str = emit_field(field);
         let _ = writeln!(out, "  {field_str}");
     }
     let _ = writeln!(out, "}}");
-    Some(out)
+    out
 }
 
 /// Emit a TypeScript type declaration from a `RustScript` enum definition.
-fn emit_enum_def(enum_def: &EnumDef) -> Option<String> {
+fn emit_enum_def(enum_def: &EnumDef) -> String {
     let name = &enum_def.name.name;
 
     // Check if all variants are simple (string union)
@@ -208,7 +204,7 @@ fn emit_enum_def(enum_def: &EnumDef) -> Option<String> {
         let mut out = String::new();
         let union_str = variants.join(" | ");
         let _ = writeln!(out, "export type {name} = {union_str};");
-        Some(out)
+        out
     } else {
         // Discriminated union: emit as union of object types
         let variants: Vec<String> = enum_def
@@ -236,7 +232,7 @@ fn emit_enum_def(enum_def: &EnumDef) -> Option<String> {
         let mut out = String::new();
         let union_str = variants.join("\n  | ");
         let _ = writeln!(out, "export type {name} =\n  | {union_str};");
-        Some(out)
+        out
     }
 }
 
@@ -263,7 +259,7 @@ fn emit_field_inline(field: &FieldDef) -> String {
 }
 
 /// Emit optional generic type parameters: `<T, U>` or empty string.
-fn emit_type_params(type_params: &Option<rustscript_syntax::ast::TypeParams>) -> String {
+fn emit_type_params(type_params: Option<&rustscript_syntax::ast::TypeParams>) -> String {
     match type_params {
         Some(tp) => {
             let params: Vec<&str> = tp.params.iter().map(|p| p.name.name.as_str()).collect();

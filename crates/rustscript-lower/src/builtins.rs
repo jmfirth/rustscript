@@ -245,6 +245,8 @@ impl BuiltinRegistry {
 }
 
 /// Register default builtins.
+// Intentionally long: single registration point for all builtin methods
+#[allow(clippy::too_many_lines)]
 fn register_defaults(registry: &mut BuiltinRegistry) {
     // console.log -> println!
     registry.register_method("console", "log", lower_console_log, true);
@@ -4290,7 +4292,7 @@ fn lower_object_create(args: Vec<RustExpr>, _span: Span) -> RustExpr {
 
 /// Lower `Object.hasOwn(obj, key)` to `obj.contains_key(&key)`.
 ///
-/// For `HashMap`-based objects this checks key membership. RustScript does not
+/// For `HashMap`-based objects this checks key membership. `RustScript` does not
 /// have a prototype chain, so "own" is the only kind of property that exists.
 fn lower_object_has_own(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let mut iter = args.into_iter();
@@ -4316,9 +4318,9 @@ fn lower_object_has_own(args: Vec<RustExpr>, span: Span) -> RustExpr {
 /// Lower `Object.is(a, b)` to `a == b`.
 ///
 /// JavaScript's `Object.is` is identical to `===` for all values except NaN
-/// and ±0. In RustScript, NaN comparisons rely on the underlying `f64` `==`,
+/// and ±0. In `RustScript`, NaN comparisons rely on the underlying `f64` `==`,
 /// which follows IEEE 754 (NaN ≠ NaN). This MVP lowers to plain `==`, which
-/// is the correct behavior for all integer and string types used in RustScript.
+/// is the correct behavior for all integer and string types used in `RustScript`.
 fn lower_object_is(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let mut iter = args.into_iter();
     let a = iter
@@ -4339,7 +4341,7 @@ fn lower_object_is(args: Vec<RustExpr>, span: Span) -> RustExpr {
 
 /// Lower `Object.isFrozen(obj)` to `true`.
 ///
-/// In Rust, `let` bindings are immutable by default. Every RustScript value is
+/// In Rust, `let` bindings are immutable by default. Every `RustScript` value is
 /// effectively frozen unless declared `let mut`. This call always returns `true`.
 fn lower_object_is_frozen(_args: Vec<RustExpr>, _span: Span) -> RustExpr {
     // Always frozen in Rust — immutability is the default.
@@ -4348,7 +4350,7 @@ fn lower_object_is_frozen(_args: Vec<RustExpr>, _span: Span) -> RustExpr {
 
 /// Lower `Object.getOwnPropertyNames(obj)` to `obj.keys().cloned().collect::<Vec<_>>()`.
 ///
-/// RustScript objects are structs or `HashMap`s with no prototype chain, so
+/// `RustScript` objects are structs or `HashMap`s with no prototype chain, so
 /// every key is an own property. This is semantically identical to
 /// `Object.keys()`.
 fn lower_object_get_own_property_names(args: Vec<RustExpr>, span: Span) -> RustExpr {
@@ -4475,7 +4477,7 @@ fn lower_array_from(args: Vec<RustExpr>, span: Span) -> RustExpr {
 
 /// Lower `Array.isArray(x)` to `true`.
 ///
-/// In RustScript, arrays are always `Vec`, so this is statically known to be
+/// In `RustScript`, arrays are always `Vec`, so this is statically known to be
 /// `true` for any array argument. We emit the literal `true` directly.
 fn lower_array_is_array(_args: Vec<RustExpr>, span: Span) -> RustExpr {
     RustExpr::new(RustExprKind::BoolLit(true), span)
@@ -5636,11 +5638,11 @@ fn lower_date_now(_args: Vec<RustExpr>, span: Span) -> RustExpr {
 ///
 /// Emits a raw block that splits and parses the components, then converts
 /// to milliseconds since the Unix epoch using a civil-to-days algorithm.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let arg_code = args
         .first()
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| r#""""#.to_owned());
+        .map_or_else(|| r#""""#.to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(format!(
             "{{ \
@@ -5694,36 +5696,20 @@ fn lower_date_parse(args: Vec<RustExpr>, span: Span) -> RustExpr {
 ///
 /// Arguments: `year`, `month` (0-based), optional `day`, `hours`, `minutes`,
 /// `seconds`, `milliseconds`. Uses the civil-to-days algorithm.
+// Date component names are inherently similar (year/month/day/hour/min/sec/ms)
+#[allow(clippy::similar_names)]
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_utc(args: Vec<RustExpr>, span: Span) -> RustExpr {
     // Extract argument expressions. We need to emit them in-line.
     let yr_code = args
         .first()
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "1970".to_owned());
-    let mo_code = args
-        .get(1)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "0".to_owned());
-    let dy_code = args
-        .get(2)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "1".to_owned());
-    let hr_code = args
-        .get(3)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "0".to_owned());
-    let mi_code = args
-        .get(4)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "0".to_owned());
-    let sc_code = args
-        .get(5)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "0".to_owned());
-    let ms_code = args
-        .get(6)
-        .map(|a| emit_expr_raw(a))
-        .unwrap_or_else(|| "0".to_owned());
+        .map_or_else(|| "1970".to_owned(), emit_expr_raw);
+    let mo_code = args.get(1).map_or_else(|| "0".to_owned(), emit_expr_raw);
+    let dy_code = args.get(2).map_or_else(|| "1".to_owned(), emit_expr_raw);
+    let hr_code = args.get(3).map_or_else(|| "0".to_owned(), emit_expr_raw);
+    let mi_code = args.get(4).map_or_else(|| "0".to_owned(), emit_expr_raw);
+    let sc_code = args.get(5).map_or_else(|| "0".to_owned(), emit_expr_raw);
+    let ms_code = args.get(6).map_or_else(|| "0".to_owned(), emit_expr_raw);
 
     RustExpr::new(
         RustExprKind::Raw(format!(
@@ -5873,7 +5859,7 @@ fn date_civil_preamble(receiver_code: &str) -> String {
 
 /// Lower `.getFullYear()` on a `Date` instance to the 4-digit year (e.g. 2026).
 ///
-/// Uses the Hinnant civil_from_days algorithm to extract the year from a `SystemTime`.
+/// Uses the Hinnant `civil_from_days` algorithm to extract the year from a `SystemTime`.
 #[allow(clippy::needless_pass_by_value)]
 fn lower_date_get_full_year(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
@@ -5886,7 +5872,7 @@ fn lower_date_get_full_year(receiver: RustExpr, _args: Vec<RustExpr>, span: Span
 
 /// Lower `.getMonth()` on a `Date` instance to 0-based month (0=Jan, 11=Dec).
 ///
-/// Uses the Hinnant civil_from_days algorithm.
+/// Uses the Hinnant `civil_from_days` algorithm.
 #[allow(clippy::needless_pass_by_value)]
 fn lower_date_get_month(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
@@ -5899,7 +5885,7 @@ fn lower_date_get_month(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) ->
 
 /// Lower `.getDate()` on a `Date` instance to day of month (1-31).
 ///
-/// Uses the Hinnant civil_from_days algorithm.
+/// Uses the Hinnant `civil_from_days` algorithm.
 #[allow(clippy::needless_pass_by_value)]
 fn lower_date_get_date(receiver: RustExpr, _args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
@@ -5984,7 +5970,7 @@ fn lower_date_get_milliseconds(receiver: RustExpr, _args: Vec<RustExpr>, span: S
 
 /// Lower `.getTimezoneOffset()` on a `Date` instance to 0 (UTC).
 ///
-/// RustScript operates in UTC only; the offset is always 0 minutes.
+/// `RustScript` operates in UTC only; the offset is always 0 minutes.
 #[allow(clippy::needless_pass_by_value)]
 fn lower_date_get_timezone_offset(
     _receiver: RustExpr,
@@ -6001,10 +5987,9 @@ fn lower_date_get_timezone_offset(
 /// Lower `.setTime(ms)` — reconstruct `SystemTime` from epoch milliseconds.
 ///
 /// Emits: `std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64)`
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_time(_receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(format!(
             "std::time::UNIX_EPOCH + std::time::Duration::from_millis({arg} as u64)"
@@ -6073,11 +6058,12 @@ fn date_setter_raw(receiver_code: &str, component: &str, replacement: &str) -> S
 }
 
 /// Lower `.setFullYear(year)` — reconstruct `SystemTime` with a new year.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_full_year(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
     let arg = args
         .first()
-        .map_or_else(|| "1970".to_owned(), |a| emit_expr_raw(a));
+        .map_or_else(|| "1970".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6092,11 +6078,10 @@ fn lower_date_set_full_year(receiver: RustExpr, args: Vec<RustExpr>, span: Span)
 ///
 /// JavaScript months are 0-based (0=Jan, 11=Dec), so we add 1 for the
 /// 1-based internal representation.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_month(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6108,11 +6093,10 @@ fn lower_date_set_month(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> 
 }
 
 /// Lower `.setDate(day)` — reconstruct `SystemTime` with a new day-of-month.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_date(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "1".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "1".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6124,11 +6108,10 @@ fn lower_date_set_date(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> R
 }
 
 /// Lower `.setHours(hours)` — reconstruct `SystemTime` with new hours.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_hours(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6140,11 +6123,10 @@ fn lower_date_set_hours(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> 
 }
 
 /// Lower `.setMinutes(minutes)` — reconstruct `SystemTime` with new minutes.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_minutes(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6156,11 +6138,10 @@ fn lower_date_set_minutes(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -
 }
 
 /// Lower `.setSeconds(seconds)` — reconstruct `SystemTime` with new seconds.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_seconds(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6172,11 +6153,10 @@ fn lower_date_set_seconds(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -
 }
 
 /// Lower `.setMilliseconds(ms)` — reconstruct `SystemTime` with new milliseconds.
+#[allow(clippy::needless_pass_by_value)] // signature matches builtin callback type
 fn lower_date_set_milliseconds(receiver: RustExpr, args: Vec<RustExpr>, span: Span) -> RustExpr {
     let receiver_code = emit_receiver(&receiver);
-    let arg = args
-        .first()
-        .map_or_else(|| "0".to_owned(), |a| emit_expr_raw(a));
+    let arg = args.first().map_or_else(|| "0".to_owned(), emit_expr_raw);
     RustExpr::new(
         RustExprKind::Raw(date_setter_raw(
             &receiver_code,
@@ -6607,7 +6587,7 @@ fn lower_atob(args: Vec<RustExpr>, span: Span) -> RustExpr {
     let arg_code = emit_expr_raw(&arg);
     RustExpr::new(
         RustExprKind::Raw(format!(
-            r#"{{
+            r"{{
     let __b64d_in: &str = &({arg_code});
     let __b64d_bytes = __b64d_in.as_bytes();
     let b64d_val = |c: u8| -> u8 {{
@@ -6637,7 +6617,7 @@ fn lower_atob(args: Vec<RustExpr>, span: Span) -> RustExpr {
         __b64d_i += 4;
     }}
     String::from_utf8(__b64d_out).unwrap_or_default()
-}}"#
+}}"
         )),
         span,
     )

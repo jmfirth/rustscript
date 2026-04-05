@@ -1,7 +1,7 @@
 //! Union type handling.
 //!
 //! Manages registration and scanning of union types encountered during lowering.
-//! Union types in RustScript (e.g., `string | number`) are lowered to Rust enums
+//! Union types in `RustScript` (e.g., `string | number`) are lowered to Rust enums
 //! with `From` impls. This module handles discovering union types in annotations
 //! throughout the module, registering them in the `UnionRegistry`, and recursively
 //! scanning nested types and statement blocks for additional unions.

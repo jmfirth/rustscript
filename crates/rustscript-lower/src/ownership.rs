@@ -754,7 +754,11 @@ impl UseMap {
             | ast::ExprKind::Yield(inner)
             | ast::ExprKind::Delete(inner)
             | ast::ExprKind::Void(inner)
-            | ast::ExprKind::AsConst(inner) => {
+            | ast::ExprKind::AsConst(inner)
+            | ast::ExprKind::PostfixIncrement(inner)
+            | ast::ExprKind::PostfixDecrement(inner)
+            | ast::ExprKind::PrefixIncrement(inner)
+            | ast::ExprKind::PrefixDecrement(inner) => {
                 Self::collect_expr_uses(
                     inner,
                     stmt_index,
@@ -805,19 +809,6 @@ impl UseMap {
                 );
                 Self::collect_expr_uses(
                     else_expr,
-                    stmt_index,
-                    false,
-                    is_ref_call,
-                    callee_param_modes,
-                    uses,
-                );
-            }
-            ast::ExprKind::PostfixIncrement(inner)
-            | ast::ExprKind::PostfixDecrement(inner)
-            | ast::ExprKind::PrefixIncrement(inner)
-            | ast::ExprKind::PrefixDecrement(inner) => {
-                Self::collect_expr_uses(
-                    inner,
                     stmt_index,
                     false,
                     is_ref_call,
@@ -1734,7 +1725,11 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
         | ast::ExprKind::Yield(inner)
         | ast::ExprKind::Delete(inner)
         | ast::ExprKind::Void(inner)
-        | ast::ExprKind::AsConst(inner) => {
+        | ast::ExprKind::AsConst(inner)
+        | ast::ExprKind::PostfixIncrement(inner)
+        | ast::ExprKind::PostfixDecrement(inner)
+        | ast::ExprKind::PrefixIncrement(inner)
+        | ast::ExprKind::PrefixDecrement(inner) => {
             collect_idents_in_expr(inner, names);
         }
         ast::ExprKind::Comma(exprs) => {
@@ -1749,12 +1744,6 @@ fn collect_idents_in_expr(expr: &ast::Expr, names: &mut HashSet<String>) {
             collect_idents_in_expr(cond, names);
             collect_idents_in_expr(then_expr, names);
             collect_idents_in_expr(else_expr, names);
-        }
-        ast::ExprKind::PostfixIncrement(inner)
-        | ast::ExprKind::PostfixDecrement(inner)
-        | ast::ExprKind::PrefixIncrement(inner)
-        | ast::ExprKind::PrefixDecrement(inner) => {
-            collect_idents_in_expr(inner, names);
         }
         ast::ExprKind::Closure(_)
         | ast::ExprKind::IntLit(_)

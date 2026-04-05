@@ -1,6 +1,6 @@
 //! `rustscript.json` project manifest parsing and writing.
 //!
-//! The `rustscript.json` file is the single project manifest for RustScript
+//! The `rustscript.json` file is the single project manifest for `RustScript`
 //! projects. It replaces the previous `rsc.toml` configuration format with
 //! a JSON-based manifest that stores project metadata and dependency information.
 
@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{DriverError, Result};
 
-/// Name of the RustScript project manifest file.
+/// Name of the `RustScript` project manifest file.
 pub const MANIFEST_FILE: &str = "rustscript.json";
 
-/// A RustScript project manifest (`rustscript.json`).
+/// A `RustScript` project manifest (`rustscript.json`).
 ///
 /// Contains project metadata and dependency specifications. Dependencies
 /// can be a simple version string or an object with version and features.

@@ -47,9 +47,8 @@ pub struct AddResult {
 pub fn read_config(
     project_root: &Path,
 ) -> Result<(BTreeMap<String, DepEntry>, BTreeMap<String, DepEntry>)> {
-    let manifest = match manifest::try_read_manifest(project_root)? {
-        Some(m) => m,
-        None => return Ok((BTreeMap::new(), BTreeMap::new())),
+    let Some(manifest) = manifest::try_read_manifest(project_root)? else {
+        return Ok((BTreeMap::new(), BTreeMap::new()));
     };
 
     let deps = manifest
@@ -101,17 +100,16 @@ pub fn add_dependency(
     features: &[String],
     dev: bool,
 ) -> Result<AddResult> {
-    let mut manifest_data = match manifest::try_read_manifest(project_root)? {
-        Some(m) => m,
-        None => {
-            // Create a new manifest using the directory name as the project name
-            let name = project_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unnamed")
-                .to_owned();
-            manifest::new_manifest(&name)
-        }
+    let mut manifest_data = if let Some(m) = manifest::try_read_manifest(project_root)? {
+        m
+    } else {
+        // Create a new manifest using the directory name as the project name
+        let name = project_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_owned();
+        manifest::new_manifest(&name)
     };
 
     let resolved_version = version.unwrap_or("*").to_owned();
@@ -154,9 +152,8 @@ pub fn add_dependency(
 ///
 /// Returns [`DriverError::DependencyNotFound`] if the crate is not in `rustscript.json`.
 pub fn remove_dependency(project_root: &Path, crate_name: &str) -> Result<()> {
-    let mut manifest_data = match manifest::try_read_manifest(project_root)? {
-        Some(m) => m,
-        None => return Err(DriverError::DependencyNotFound(crate_name.to_owned())),
+    let Some(mut manifest_data) = manifest::try_read_manifest(project_root)? else {
+        return Err(DriverError::DependencyNotFound(crate_name.to_owned()));
     };
 
     let found_in_deps = manifest_data.dependencies.remove(crate_name).is_some();

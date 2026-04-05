@@ -60,8 +60,7 @@ impl Transform {
         let is_string_type = scrutinee_var_name
             .as_ref()
             .and_then(|name| ctx.lookup_variable(name))
-            .map(|info| matches!(info.ty, RustType::String))
-            .unwrap_or(false);
+            .is_some_and(|info| matches!(info.ty, RustType::String));
 
         match switch_kind {
             SwitchKind::Integer => {
@@ -90,7 +89,7 @@ impl Transform {
                 ast::SwitchPattern::IntLit(_) => return SwitchKind::Integer,
                 ast::SwitchPattern::EnumMember(_, _) => return SwitchKind::EnumMember,
                 ast::SwitchPattern::StringLit(_) => return SwitchKind::StringEnum,
-                ast::SwitchPattern::Default => continue,
+                ast::SwitchPattern::Default => {}
             }
         }
         // All-default or empty: default to string enum for backwards compat
@@ -113,7 +112,6 @@ impl Transform {
             .map(|case| {
                 let pattern = match &case.pattern {
                     ast::SwitchPattern::IntLit(v) => RustPattern::IntLiteral(*v),
-                    ast::SwitchPattern::Default => RustPattern::Wildcard,
                     _ => RustPattern::Wildcard,
                 };
                 let body = self.lower_switch_case_body(
@@ -155,7 +153,6 @@ impl Transform {
                     ast::SwitchPattern::EnumMember(enum_name, variant) => {
                         RustPattern::EnumVariant(enum_name.clone(), variant.clone())
                     }
-                    ast::SwitchPattern::Default => RustPattern::Wildcard,
                     _ => RustPattern::Wildcard,
                 };
                 let body = self.lower_switch_case_body(
@@ -214,7 +211,6 @@ impl Transform {
             .map(|case| {
                 let pattern = match &case.pattern {
                     ast::SwitchPattern::StringLit(s) => RustPattern::StringLiteral(s.clone()),
-                    ast::SwitchPattern::Default => RustPattern::Wildcard,
                     _ => RustPattern::Wildcard,
                 };
                 let body = self.lower_switch_case_body(
@@ -252,6 +248,7 @@ impl Transform {
 
     /// Lower a switch with string literal patterns (original enum-based behavior).
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::needless_pass_by_value)] // scrutinee_var_name used by ref but API consistency
     fn lower_string_enum_switch(
         &self,
         switch: &ast::SwitchStmt,
@@ -279,80 +276,59 @@ impl Transform {
             .cases
             .iter()
             .map(|case| {
-                match &case.pattern {
-                    ast::SwitchPattern::Default => {
-                        let body = self.lower_switch_case_body(
-                            &case.body,
-                            ctx,
-                            use_map,
-                            stmt_index,
-                            reassigned,
-                            scrutinee_var_name.as_deref(),
-                            &[],
-                            &enum_name,
-                        );
-                        RustMatchArm {
-                            pattern: RustPattern::Wildcard,
-                            body,
+                if let ast::SwitchPattern::StringLit(pat) = &case.pattern {
+                    let variant_name = capitalize_first(pat);
+
+                    let (pattern, bound_fields) = match td.map(|t| &t.kind) {
+                        Some(rustscript_typeck::registry::TypeDefKind::DataEnum(variants)) => {
+                            let field_names: Vec<String> = variants
+                                .iter()
+                                .find(|(vn, _)| *vn == variant_name)
+                                .map(|(_, fields)| fields.iter().map(|(n, _)| n.clone()).collect())
+                                .unwrap_or_default();
+                            (
+                                RustPattern::EnumVariantFields(
+                                    enum_name.clone(),
+                                    variant_name.clone(),
+                                    field_names.clone(),
+                                ),
+                                field_names,
+                            )
                         }
-                    }
-                    ast::SwitchPattern::StringLit(pat) => {
-                        let variant_name = capitalize_first(pat);
+                        _ => (
+                            RustPattern::EnumVariant(enum_name.clone(), variant_name),
+                            Vec::new(),
+                        ),
+                    };
 
-                        let (pattern, bound_fields) = match td.map(|t| &t.kind) {
-                            Some(rustscript_typeck::registry::TypeDefKind::DataEnum(variants)) => {
-                                let field_names: Vec<String> = variants
-                                    .iter()
-                                    .find(|(vn, _)| *vn == variant_name)
-                                    .map(|(_, fields)| {
-                                        fields.iter().map(|(n, _)| n.clone()).collect()
-                                    })
-                                    .unwrap_or_default();
-                                (
-                                    RustPattern::EnumVariantFields(
-                                        enum_name.clone(),
-                                        variant_name.clone(),
-                                        field_names.clone(),
-                                    ),
-                                    field_names,
-                                )
-                            }
-                            _ => (
-                                RustPattern::EnumVariant(enum_name.clone(), variant_name),
-                                Vec::new(),
-                            ),
-                        };
+                    let body = self.lower_switch_case_body(
+                        &case.body,
+                        ctx,
+                        use_map,
+                        stmt_index,
+                        reassigned,
+                        scrutinee_var_name.as_deref(),
+                        &bound_fields,
+                        &enum_name,
+                    );
 
-                        let body = self.lower_switch_case_body(
-                            &case.body,
-                            ctx,
-                            use_map,
-                            stmt_index,
-                            reassigned,
-                            scrutinee_var_name.as_deref(),
-                            &bound_fields,
-                            &enum_name,
-                        );
-
-                        RustMatchArm { pattern, body }
-                    }
+                    RustMatchArm { pattern, body }
+                } else {
                     // Non-string patterns in a string-enum switch are unexpected;
                     // treat as wildcard to avoid panics.
-                    _ => {
-                        let body = self.lower_switch_case_body(
-                            &case.body,
-                            ctx,
-                            use_map,
-                            stmt_index,
-                            reassigned,
-                            scrutinee_var_name.as_deref(),
-                            &[],
-                            &enum_name,
-                        );
-                        RustMatchArm {
-                            pattern: RustPattern::Wildcard,
-                            body,
-                        }
+                    let body = self.lower_switch_case_body(
+                        &case.body,
+                        ctx,
+                        use_map,
+                        stmt_index,
+                        reassigned,
+                        scrutinee_var_name.as_deref(),
+                        &[],
+                        &enum_name,
+                    );
+                    RustMatchArm {
+                        pattern: RustPattern::Wildcard,
+                        body,
                     }
                 }
             })

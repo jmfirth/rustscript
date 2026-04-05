@@ -24,6 +24,8 @@ use super::{FnSignature, Transform};
 
 impl Transform {
     /// Register a function signature in the pre-pass for throws and parameter type detection.
+    // Handles throws, params, defaults, rest params, generics, and return type inference
+    #[allow(clippy::too_many_lines)]
     pub(super) fn register_fn_signature(&mut self, f: &ast::FnDecl, ctx: &mut LoweringContext) {
         let throws = f
             .return_type

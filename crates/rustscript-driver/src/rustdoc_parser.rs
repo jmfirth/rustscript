@@ -47,6 +47,7 @@ pub enum RustdocItemKind {
 
 /// A parsed function signature.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // mirrors rustdoc JSON schema fields directly
 pub struct RustdocFunction {
     /// Generic type parameters with optional bounds.
     pub generics: Vec<RustdocGenericParam>,
@@ -208,7 +209,9 @@ pub enum RustdocType {
 /// Extracts functions, structs, traits, and enums from the `index` map.
 ///
 /// Returns `None` if the JSON is not a valid rustdoc format (missing `index`).
+// Walks the entire rustdoc JSON index resolving functions, structs, enums, and trait impls
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
     let index = json.get("index")?.as_object()?;
     let paths = json.get("paths").and_then(|v| v.as_object());
@@ -245,10 +248,10 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
         .collect();
 
     for method_id in &trait_method_ids {
-        if let Some(item) = crate_data.items.get_mut(method_id) {
-            if let RustdocItemKind::Function(func) = &mut item.kind {
-                func.is_trait_impl = true;
-            }
+        if let Some(item) = crate_data.items.get_mut(method_id)
+            && let RustdocItemKind::Function(func) = &mut item.kind
+        {
+            func.is_trait_impl = true;
         }
     }
 
@@ -303,9 +306,9 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
                     .get("inner")
                     .and_then(|i| i.get("variant"))
                     .and_then(|v| v.get("kind"))
-                    .and_then(|k| {
+                    .map_or(RustdocVariantKind::Plain, |k| {
                         if k.get("plain").is_some() || k.as_str() == Some("plain") {
-                            Some(RustdocVariantKind::Plain)
+                            RustdocVariantKind::Plain
                         } else if let Some(tuple_ids) = k.get("tuple").and_then(|t| t.as_array()) {
                             let types: Vec<RustdocType> = tuple_ids
                                 .iter()
@@ -321,7 +324,7 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
                                     Some(parse_type(ty_value))
                                 })
                                 .collect();
-                            Some(RustdocVariantKind::Tuple(types))
+                            RustdocVariantKind::Tuple(types)
                         } else if let Some(struct_data) = k.get("struct") {
                             let field_ids = struct_data
                                 .get("fields")
@@ -340,20 +343,18 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
                                     let f_ty = field_item
                                         .get("inner")
                                         .and_then(|i| i.get("struct_field"))
-                                        .map(parse_type)
-                                        .unwrap_or(RustdocType::Unknown("?".to_owned()));
+                                        .map_or(RustdocType::Unknown("?".to_owned()), parse_type);
                                     Some(RustdocField {
                                         name: f_name,
                                         ty: f_ty,
                                     })
                                 })
                                 .collect();
-                            Some(RustdocVariantKind::Struct(fields))
+                            RustdocVariantKind::Struct(fields)
                         } else {
-                            Some(RustdocVariantKind::Plain)
+                            RustdocVariantKind::Plain
                         }
-                    })
-                    .unwrap_or(RustdocVariantKind::Plain);
+                    });
                 resolved_variants.push(RustdocVariant {
                     name: v_name.to_owned(),
                     kind: v_kind,
@@ -361,12 +362,11 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
             }
         }
 
-        if !resolved_variants.is_empty() {
-            if let Some(item) = crate_data.items.get_mut(&enum_id) {
-                if let RustdocItemKind::Enum(e) = &mut item.kind {
-                    e.variants = resolved_variants;
-                }
-            }
+        if !resolved_variants.is_empty()
+            && let Some(item) = crate_data.items.get_mut(&enum_id)
+            && let RustdocItemKind::Enum(e) = &mut item.kind
+        {
+            e.variants = resolved_variants;
         }
     }
 
@@ -833,7 +833,7 @@ fn parse_type(value: &serde_json::Value) -> RustdocType {
                 .unwrap_or("?")
                 .to_owned();
             let self_type = inner.get("self_type").map(|st| Box::new(parse_type(st)));
-            let trait_name = inner.get("trait").and_then(|t| extract_type_name(t));
+            let trait_name = inner.get("trait").and_then(extract_type_name);
             RustdocType::QualifiedPath {
                 name,
                 self_type,

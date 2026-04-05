@@ -1214,6 +1214,7 @@ impl Transform {
     /// Lower a single argument at a call site, handling enum resolution and borrow transforms.
     #[allow(clippy::too_many_arguments)]
     // Parameters mirror the call-site context needed for enum resolution and borrow transforms
+    #[allow(clippy::too_many_lines)]
     fn lower_single_arg(
         &self,
         a: &ast::Expr,
@@ -1291,16 +1292,15 @@ impl Transform {
         // When the argument is an untyped struct literal and the parameter type
         // is a named struct, propagate the type name so `lower_struct_lit` can
         // resolve the struct type instead of emitting "cannot infer struct type".
-        if matches!(&a.kind, ast::ExprKind::StructLit(slit) if slit.type_name.is_none()) {
-            if let Some(param_ty) = sig.and_then(|s| s.param_types.get(i)) {
-                if let Some(type_name) = extract_named_type(param_ty) {
-                    let prev = ctx.current_struct_type_name().map(String::from);
-                    ctx.set_struct_type_name(Some(type_name));
-                    let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
-                    ctx.set_struct_type_name(prev);
-                    return lowered;
-                }
-            }
+        if matches!(&a.kind, ast::ExprKind::StructLit(slit) if slit.type_name.is_none())
+            && let Some(param_ty) = sig.and_then(|s| s.param_types.get(i))
+            && let Some(type_name) = extract_named_type(param_ty)
+        {
+            let prev = ctx.current_struct_type_name().map(String::from);
+            ctx.set_struct_type_name(Some(type_name));
+            let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
+            ctx.set_struct_type_name(prev);
+            return lowered;
         }
 
         let lowered = self.lower_expr(a, ctx, use_map, stmt_index);
@@ -1365,6 +1365,8 @@ impl Transform {
     /// Lower a closure / arrow function expression.
     ///
     /// Maps `(x: i32): i32 => x * 2` to `|x: i32| -> i32 { x * 2 }`.
+    // Handles params, return type inference, body lowering, and captures
+    #[allow(clippy::too_many_lines)]
     fn lower_closure(
         &self,
         closure: &ast::ClosureExpr,
@@ -1450,10 +1452,10 @@ impl Transform {
         // If the closure has a named return type, set struct context so struct
         // literals in the body know their type.
         let prev_struct_name = ctx.current_struct_type_name().map(String::from);
-        if let Some(ref rt) = return_type {
-            if let Some(name) = extract_named_type(rt) {
-                ctx.set_struct_type_name(Some(name));
-            }
+        if let Some(ref rt) = return_type
+            && let Some(name) = extract_named_type(rt)
+        {
+            ctx.set_struct_type_name(Some(name));
         }
 
         // Lower body
@@ -2151,20 +2153,20 @@ impl Transform {
                 .iter()
                 .map(|e| match e {
                     ast::ArrayElement::Expr(expr) => {
-                        if is_tuple_element {
-                            if let ast::ExprKind::ArrayLit(inner_elements) = &expr.kind {
-                                // Lower inner array literal as a tuple constructor
-                                let tuple_parts: Vec<RustExpr> = inner_elements
-                                    .iter()
-                                    .map(|ie| match ie {
-                                        ast::ArrayElement::Expr(inner_expr)
-                                        | ast::ArrayElement::Spread(inner_expr) => {
-                                            self.lower_expr(inner_expr, ctx, use_map, stmt_index)
-                                        }
-                                    })
-                                    .collect();
-                                return RustExpr::new(RustExprKind::Tuple(tuple_parts), expr.span);
-                            }
+                        if is_tuple_element
+                            && let ast::ExprKind::ArrayLit(inner_elements) = &expr.kind
+                        {
+                            // Lower inner array literal as a tuple constructor
+                            let tuple_parts: Vec<RustExpr> = inner_elements
+                                .iter()
+                                .map(|ie| match ie {
+                                    ast::ArrayElement::Expr(inner_expr)
+                                    | ast::ArrayElement::Spread(inner_expr) => {
+                                        self.lower_expr(inner_expr, ctx, use_map, stmt_index)
+                                    }
+                                })
+                                .collect();
+                            return RustExpr::new(RustExprKind::Tuple(tuple_parts), expr.span);
                         }
                         self.lower_expr(expr, ctx, use_map, stmt_index)
                     }
@@ -2331,6 +2333,8 @@ impl Transform {
     /// `new Error("msg")` → `"msg".to_string()` (error as string).
     /// `new TypeError("msg")` → `"TypeError: msg".to_string()` (prefixed error string).
     /// `new ClassName(args)` → `ClassName::new(args)` (class constructor).
+    // Handles Map, Set, Date, RegExp, Error, Promise, Array, and generic class constructors
+    #[allow(clippy::too_many_lines)]
     fn lower_new_expr(
         &self,
         new_expr: &ast::NewExpr,
@@ -2368,61 +2372,53 @@ impl Transform {
         //     rx
         // }
         // ```
-        if type_name == "Promise" {
-            if let Some(executor) = new_expr.args.first() {
-                if let ast::ExprKind::Closure(closure) = &executor.kind {
-                    let resolve_name = closure
-                        .params
-                        .first()
-                        .map_or("resolve", |p| p.name.name.as_str());
-                    let reject_name = closure.params.get(1).map(|p| p.name.name.as_str());
+        if type_name == "Promise"
+            && let Some(executor) = new_expr.args.first()
+            && let ast::ExprKind::Closure(closure) = &executor.kind
+        {
+            let resolve_name = closure
+                .params
+                .first()
+                .map_or("resolve", |p| p.name.name.as_str());
+            let reject_name = closure.params.get(1).map(|p| p.name.name.as_str());
 
-                    let mut stmts = vec![
-                        RustStmt::RawRust(
-                            "let (tx, rx) = tokio::sync::oneshot::channel();".to_owned(),
-                        ),
-                        RustStmt::RawRust(format!(
-                            "let {resolve_name} = move |val| {{ let _ = tx.send(val); }};"
-                        )),
-                    ];
+            let mut stmts = vec![
+                RustStmt::RawRust("let (tx, rx) = tokio::sync::oneshot::channel();".to_owned()),
+                RustStmt::RawRust(format!(
+                    "let {resolve_name} = move |val| {{ let _ = tx.send(val); }};"
+                )),
+            ];
 
-                    if let Some(reject) = reject_name {
-                        stmts.push(RustStmt::RawRust(format!(
-                            "let {reject} = move |_err| {{}};"
-                        )));
-                    }
+            if let Some(reject) = reject_name {
+                stmts.push(RustStmt::RawRust(format!(
+                    "let {reject} = move |_err| {{}};"
+                )));
+            }
 
-                    // Lower the executor body
-                    let empty_reassigned = std::collections::HashSet::new();
-                    match &closure.body {
-                        ast::ClosureBody::Block(block) => {
-                            let lowered_block = self.lower_block(
-                                block,
-                                ctx,
-                                use_map,
-                                stmt_index,
-                                &empty_reassigned,
-                            );
-                            stmts.extend(lowered_block.stmts);
-                        }
-                        ast::ClosureBody::Expr(expr) => {
-                            let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
-                            stmts.push(RustStmt::Semi(lowered));
-                        }
-                    }
-
-                    // Trailing expression: `rx` (the receiver)
-                    let rx_expr = RustExpr::synthetic(RustExprKind::Raw("rx".to_owned()));
-
-                    return RustExpr::new(
-                        RustExprKind::BlockExpr(rustscript_syntax::rust_ir::RustBlock {
-                            stmts,
-                            expr: Some(Box::new(rx_expr)),
-                        }),
-                        span,
-                    );
+            // Lower the executor body
+            let empty_reassigned = std::collections::HashSet::new();
+            match &closure.body {
+                ast::ClosureBody::Block(block) => {
+                    let lowered_block =
+                        self.lower_block(block, ctx, use_map, stmt_index, &empty_reassigned);
+                    stmts.extend(lowered_block.stmts);
+                }
+                ast::ClosureBody::Expr(expr) => {
+                    let lowered = self.lower_expr(expr, ctx, use_map, stmt_index);
+                    stmts.push(RustStmt::Semi(lowered));
                 }
             }
+
+            // Trailing expression: `rx` (the receiver)
+            let rx_expr = RustExpr::synthetic(RustExprKind::Raw("rx".to_owned()));
+
+            return RustExpr::new(
+                RustExprKind::BlockExpr(rustscript_syntax::rust_ir::RustBlock {
+                    stmts,
+                    expr: Some(Box::new(rx_expr)),
+                }),
+                span,
+            );
         }
 
         let rust_type_name =
@@ -2548,24 +2544,19 @@ impl Transform {
                         let mo = crate::builtins::emit_expr_raw_pub(&args[1]);
                         let dy = args
                             .get(2)
-                            .map(|a| crate::builtins::emit_expr_raw_pub(a))
-                            .unwrap_or_else(|| "1".to_owned());
+                            .map_or_else(|| "1".to_owned(), crate::builtins::emit_expr_raw_pub);
                         let hr = args
                             .get(3)
-                            .map(|a| crate::builtins::emit_expr_raw_pub(a))
-                            .unwrap_or_else(|| "0".to_owned());
+                            .map_or_else(|| "0".to_owned(), crate::builtins::emit_expr_raw_pub);
                         let mi = args
                             .get(4)
-                            .map(|a| crate::builtins::emit_expr_raw_pub(a))
-                            .unwrap_or_else(|| "0".to_owned());
+                            .map_or_else(|| "0".to_owned(), crate::builtins::emit_expr_raw_pub);
                         let sc = args
                             .get(5)
-                            .map(|a| crate::builtins::emit_expr_raw_pub(a))
-                            .unwrap_or_else(|| "0".to_owned());
+                            .map_or_else(|| "0".to_owned(), crate::builtins::emit_expr_raw_pub);
                         let ms = args
                             .get(6)
-                            .map(|a| crate::builtins::emit_expr_raw_pub(a))
-                            .unwrap_or_else(|| "0".to_owned());
+                            .map_or_else(|| "0".to_owned(), crate::builtins::emit_expr_raw_pub);
 
                         RustExpr::new(
                             RustExprKind::Raw(format!(

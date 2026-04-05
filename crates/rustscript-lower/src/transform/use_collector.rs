@@ -519,6 +519,8 @@ fn scan_block_for_collections(
 }
 
 /// Scan a statement for `HashMap` or `HashSet` usage.
+// Recursively walks all statement variants checking for HashMap/HashSet usage
+#[allow(clippy::too_many_lines)]
 fn scan_stmt_for_collections(stmt: &RustStmt, needs_hashmap: &mut bool, needs_hashset: &mut bool) {
     match stmt {
         RustStmt::Let(let_stmt) => {
