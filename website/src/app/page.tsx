@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { CodeBlock } from '@/components/CodeBlock';
 
-const rtsCode = `type Book = {
+const rtsCode = `import { Serialize } from "serde";
+
+type Book = {
   title: string,
   author: string,
   rating: f64,
@@ -17,7 +19,9 @@ function main() {
   console.log(JSON.stringify(top));
 }`;
 
-const rsCode = `#[derive(Debug, Clone, Serialize)]
+const rsCode = `use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
 struct Book {
     pub title: String,
     pub author: String,
