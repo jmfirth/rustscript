@@ -158,7 +158,7 @@ export default function HomePage() {
           <div className="max-w-3xl">
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight">
               Ship <span className="text-[var(--color-accent-secondary)]">Rust</span>.{' '}
-              Write <span className="text-[var(--color-accent)]">Type</span><span className="text-[var(--color-accent)] font-extrabold">Script</span>.
+              Write <span className="text-[var(--color-accent)]">TypeScript</span>.
             </h1>
             <p className="mt-6 text-lg sm:text-xl text-[var(--color-text-secondary)] leading-relaxed">
               A complete development ecosystem for building native applications
