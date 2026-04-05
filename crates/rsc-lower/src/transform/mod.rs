@@ -599,7 +599,9 @@ impl Transform {
                         // Remove use declarations just added for decorator-only names.
                         let new_uses = import_uses.split_off(uses_before);
                         import_uses.extend(new_uses.into_iter().filter(|u| {
-                            !decorator_names.iter().any(|d| u.path.ends_with(&format!("::{d}")))
+                            !decorator_names
+                                .iter()
+                                .any(|d| u.path.ends_with(&format!("::{d}")))
                         }));
                         // Track imported names so method calls on types can be
                         // recognized as static calls (`Type.method()` → `Type::method()`).

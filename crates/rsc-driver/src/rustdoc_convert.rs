@@ -131,7 +131,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
 
         let info = convert_function("my_crate", "do_thing", &func);
@@ -174,7 +175,8 @@ mod tests {
             is_async: true,
             is_unsafe: false,
             has_self: true,
-            parent_type: Some("Server".to_owned()), is_trait_impl: false,
+            parent_type: Some("Server".to_owned()),
+            is_trait_impl: false,
         };
 
         let info = convert_function("axum", "serve", &func);
@@ -199,7 +201,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
 
         let info = convert_function("std", "find", &func);
@@ -215,7 +218,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
 
         let info = convert_function("test", "noop", &func);
@@ -237,7 +241,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
 
         let info = convert_function("test", "take", &func);
@@ -271,7 +276,8 @@ mod tests {
                 is_async: false,
                 is_unsafe: false,
                 has_self: false,
-                parent_type: None, is_trait_impl: false,
+                parent_type: None,
+                is_trait_impl: false,
             }),
         };
         crate_data.items.insert("0:1".to_owned(), func_item);
@@ -291,7 +297,8 @@ mod tests {
                 is_async: false,
                 is_unsafe: false,
                 has_self: true,
-                parent_type: Some("Router".to_owned()), is_trait_impl: false,
+                parent_type: Some("Router".to_owned()),
+                is_trait_impl: false,
             }),
         };
         crate_data.items.insert("0:2".to_owned(), method_item);

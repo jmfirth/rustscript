@@ -1,6 +1,6 @@
 //! Template-to-compilation pipeline tests (Phase 3 integration).
 //!
-//! Verifies that each project template's generated `index.rts` compiles
+//! Verifies that each project template's generated `main.rts` compiles
 //! successfully through the RustScript pipeline and, where applicable,
 //! builds with `cargo build`.
 //!

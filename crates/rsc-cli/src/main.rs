@@ -371,13 +371,13 @@ fn cmd_fmt(check: bool, files: &[PathBuf]) -> Result<i32> {
     }
 }
 
-/// Add a crate dependency to the project's `rsc.toml`.
+/// Add a crate dependency to the project's `rustscript.json`.
 fn cmd_add(crate_name: &str, version: Option<&str>, features: &[String], dev: bool) -> Result<i32> {
     let project = open_project()?;
     match rsc_driver::deps::add_dependency(&project.root, crate_name, version, features, dev) {
         Ok(result) => {
             let section = if result.dev {
-                "dev-dependencies"
+                "devDependencies"
             } else {
                 "dependencies"
             };
@@ -413,16 +413,16 @@ fn cmd_add(crate_name: &str, version: Option<&str>, features: &[String], dev: bo
     }
 }
 
-/// Remove a crate dependency from the project's `rsc.toml`.
+/// Remove a crate dependency from the project's `rustscript.json`.
 fn cmd_remove(crate_name: &str) -> Result<i32> {
     let project = open_project()?;
     match rsc_driver::deps::remove_dependency(&project.root, crate_name) {
         Ok(()) => {
-            println!("Removed {crate_name} from rsc.toml");
+            println!("Removed {crate_name} from rustscript.json");
             Ok(0)
         }
         Err(rsc_driver::error::DriverError::DependencyNotFound(_)) => {
-            eprintln!("error: dependency '{crate_name}' not found in rsc.toml");
+            eprintln!("error: dependency '{crate_name}' not found in rustscript.json");
             Ok(EXIT_USER_ERROR)
         }
         Err(e) => {
@@ -508,18 +508,14 @@ fn cmd_dev(release: bool) -> Result<i32> {
         }
     }
 
-    // Set up file watcher
+    // Set up file watcher — only watch src/ for .rts changes
+    // (in-place compilation means passthrough files are already in place)
     let (tx, rx) = mpsc::channel();
     let mut watcher =
         notify::recommended_watcher(tx).context("failed to create filesystem watcher")?;
     watcher
         .watch(&src_dir, RecursiveMode::Recursive)
         .with_context(|| format!("failed to watch {}", src_dir.display()))?;
-    // Also watch the project root (non-recursive) for passthrough files
-    // like build.rs, tauri.conf.json, icons/, etc.
-    watcher
-        .watch(&project.root, RecursiveMode::NonRecursive)
-        .with_context(|| format!("failed to watch {}", project.root.display()))?;
 
     // Event loop with debounce
     while running.load(Ordering::SeqCst) {
@@ -560,6 +556,8 @@ fn cmd_dev(release: bool) -> Result<i32> {
 }
 
 /// Check whether a notify event concerns a `.rts` file change.
+///
+/// In-place compilation only needs to watch for `.rts` source file changes.
 fn is_relevant_change(event: &std::result::Result<notify::Event, notify::Error>) -> bool {
     match event {
         Ok(ev) => {
@@ -568,12 +566,7 @@ fn is_relevant_change(event: &std::result::Result<notify::Event, notify::Error>)
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => ev
                     .paths
                     .iter()
-                    .any(|p| {
-                        // .rts source files
-                        p.extension().is_some_and(|ext| ext == "rts")
-                        // Passthrough files (build.rs, configs, etc.)
-                        || p.extension().is_some_and(|ext| ext == "rs" || ext == "json" || ext == "toml")
-                    }),
+                    .any(|p| p.extension().is_some_and(|ext| ext == "rts")),
                 _ => false,
             }
         }
@@ -675,7 +668,7 @@ fn open_project() -> Result<Project> {
     Project::open(&cwd).map_err(|e| match e {
         DriverError::ProjectNotFound(path) => {
             anyhow::anyhow!(
-                "no RustScript project found (looked for cargo.toml or src/ starting from {})",
+                "no RustScript project found (looked for rustscript.json or src/ starting from {})",
                 path.display()
             )
         }
@@ -734,6 +727,40 @@ mod tests {
                 notify::event::DataChange::Any,
             )),
             vec![PathBuf::from("src/readme.md")],
+        );
+        assert!(!is_relevant_change(&event));
+    }
+
+    #[test]
+    fn test_is_relevant_change_rs_file_returns_false() {
+        // In-place compilation: .rs files are generated output, not watched
+        let event = make_event(
+            notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            vec![PathBuf::from("src/main.rs")],
+        );
+        assert!(!is_relevant_change(&event));
+    }
+
+    #[test]
+    fn test_is_relevant_change_json_file_returns_false() {
+        let event = make_event(
+            notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            vec![PathBuf::from("rustscript.json")],
+        );
+        assert!(!is_relevant_change(&event));
+    }
+
+    #[test]
+    fn test_is_relevant_change_toml_file_returns_false() {
+        let event = make_event(
+            notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            vec![PathBuf::from("Cargo.toml")],
         );
         assert!(!is_relevant_change(&event));
     }

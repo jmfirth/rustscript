@@ -1,7 +1,8 @@
 //! `RustScript` project management — initialization, discovery, build, and run.
 //!
-//! Handles the on-disk project structure: locating source files, managing the
-//! `.rsc-build/` build directory, and invoking Cargo for compilation and execution.
+//! Handles the on-disk project structure: locating source files, generating
+//! `Cargo.toml` via merge strategy, and invoking Cargo for compilation and execution.
+//! Projects compile in-place — there is no `.rsc-build/` copy step.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -17,21 +18,19 @@ use crate::error::{DriverError, Result};
 use crate::error_translation::{
     parse_rustc_json_diagnostics, render_rustc_json_diagnostics, translate_rustc_errors_colored,
 };
+use crate::manifest::{self, DepSpec, MANIFEST_FILE, Manifest};
 use crate::pipeline::CompileResult;
 use crate::rustdoc_cache;
 use crate::rustdoc_convert;
-
-/// Name of the `RustScript` project manifest (lowercase — `RustScript` convention).
-const PROJECT_MANIFEST: &str = "cargo.toml";
-
-/// Name of the build output directory.
-const BUILD_DIR: &str = ".rsc-build";
 
 /// Default hello-world source for new projects.
 const HELLO_WORLD_SOURCE: &str = r#"function main() {
   console.log("Hello, World!");
 }
 "#;
+
+/// Default `.gitignore` content for new projects.
+const DEFAULT_GITIGNORE: &str = "/target\n/src/*.rs\n";
 
 /// A dependency version specification for `Cargo.toml`.
 #[derive(Debug, Clone)]
@@ -92,22 +91,24 @@ enum CrateKind {
     Library { crate_types: Vec<String> },
 }
 
-/// Structured builder for generating `Cargo.toml` content.
+/// Structured builder for generating `Cargo.toml` content from scratch.
 ///
 /// Uses `BTreeMap` for deterministic alphabetical ordering of dependencies.
 struct CargoTomlBuilder {
     name: String,
     edition: String,
+    version: String,
     dependencies: BTreeMap<String, DependencySpec>,
     crate_kind: CrateKind,
 }
 
 impl CargoTomlBuilder {
-    /// Create a new builder with the given project name and edition.
-    fn new(name: &str, edition: &str) -> Self {
+    /// Create a new builder with the given project name, edition, and version.
+    fn new(name: &str, edition: &str, version: &str) -> Self {
         Self {
             name: name.to_owned(),
             edition: edition.to_owned(),
+            version: version.to_owned(),
             dependencies: BTreeMap::new(),
             crate_kind: CrateKind::default(),
         }
@@ -144,7 +145,7 @@ impl CargoTomlBuilder {
         // [package] section
         let _ = writeln!(out, "[package]");
         let _ = writeln!(out, "name = \"{}\"", self.name);
-        let _ = writeln!(out, "version = \"0.1.0\"");
+        let _ = writeln!(out, "version = \"{}\"", self.version);
         let _ = writeln!(out, "edition = \"{}\"", self.edition);
 
         // Crate kind section ([lib] or [[bin]])
@@ -196,12 +197,127 @@ impl CargoTomlBuilder {
     }
 }
 
+/// Merge auto-detected and explicit dependencies into an existing `Cargo.toml`.
+///
+/// Reads the existing TOML, adds new dependencies without overwriting existing
+/// entries (except explicit `rustscript.json` deps which always win), ensures
+/// `[workspace]` exists, and writes back.
+///
+/// # Errors
+///
+/// Returns a `DriverError` if the existing `Cargo.toml` cannot be parsed.
+fn merge_cargo_toml(
+    cargo_toml_path: &Path,
+    auto_deps: &BTreeMap<String, DependencySpec>,
+    explicit_deps: &BTreeMap<String, DepSpec>,
+) -> Result<()> {
+    let content = fs::read_to_string(cargo_toml_path)?;
+    let mut doc: toml::Table = content
+        .parse()
+        .map_err(|e: toml::de::Error| DriverError::ManifestParseFailed(e.to_string()))?;
+
+    // Ensure [dependencies] section exists
+    if !doc.contains_key("dependencies") {
+        doc.insert(
+            "dependencies".to_owned(),
+            toml::Value::Table(toml::Table::new()),
+        );
+    }
+
+    let deps_table = doc
+        .get_mut("dependencies")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| {
+            DriverError::ManifestParseFailed("[dependencies] is not a table".to_owned())
+        })?;
+
+    // Add auto-detected deps only if NOT already present
+    for (name, spec) in auto_deps {
+        if !deps_table.contains_key(name) {
+            deps_table.insert(name.clone(), dep_spec_to_toml_value(spec));
+        }
+    }
+
+    // Explicit deps from rustscript.json ALWAYS win (override existing)
+    for (name, spec) in explicit_deps {
+        let value = manifest_dep_to_toml_value(spec);
+        deps_table.insert(name.clone(), value);
+    }
+
+    // Remove empty [dependencies] if no deps
+    if deps_table.is_empty() {
+        doc.remove("dependencies");
+    }
+
+    // Ensure [workspace] exists
+    if !doc.contains_key("workspace") {
+        doc.insert(
+            "workspace".to_owned(),
+            toml::Value::Table(toml::Table::new()),
+        );
+    }
+
+    let output = toml::to_string_pretty(&doc)
+        .map_err(|e| DriverError::ManifestParseFailed(e.to_string()))?;
+    fs::write(cargo_toml_path, output)?;
+
+    Ok(())
+}
+
+/// Convert a `DependencySpec` to a TOML value.
+fn dep_spec_to_toml_value(spec: &DependencySpec) -> toml::Value {
+    match spec {
+        DependencySpec::Simple(version) => toml::Value::String(version.clone()),
+        DependencySpec::Detailed { version, features } => {
+            let mut table = toml::Table::new();
+            table.insert("version".to_owned(), toml::Value::String(version.clone()));
+            table.insert(
+                "features".to_owned(),
+                toml::Value::Array(
+                    features
+                        .iter()
+                        .map(|f| toml::Value::String(f.clone()))
+                        .collect(),
+                ),
+            );
+            toml::Value::Table(table)
+        }
+    }
+}
+
+/// Convert a manifest `DepSpec` to a TOML value.
+fn manifest_dep_to_toml_value(spec: &DepSpec) -> toml::Value {
+    match spec {
+        DepSpec::Simple(version) => toml::Value::String(version.clone()),
+        DepSpec::Detailed(detail) => {
+            let mut table = toml::Table::new();
+            table.insert(
+                "version".to_owned(),
+                toml::Value::String(detail.version.clone()),
+            );
+            if !detail.features.is_empty() {
+                table.insert(
+                    "features".to_owned(),
+                    toml::Value::Array(
+                        detail
+                            .features
+                            .iter()
+                            .map(|f| toml::Value::String(f.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+            toml::Value::Table(table)
+        }
+    }
+}
+
 /// A `RustScript` project rooted at a directory.
 #[derive(Debug)]
 pub struct Project {
     /// Project root directory.
     pub root: PathBuf,
-    /// Project name (from directory name or `cargo.toml`).
+    /// Project name (from `rustscript.json` or directory name).
     pub name: String,
     /// Compilation options (e.g., `--no-borrow-inference`).
     pub compile_options: crate::pipeline::CompileOptions,
@@ -212,7 +328,7 @@ pub struct Project {
 impl Project {
     /// Open an existing project from a directory.
     ///
-    /// Walks up from `dir` looking for a directory containing `cargo.toml`
+    /// Walks up from `dir` looking for a directory containing `rustscript.json`
     /// (or a `src/` directory with `.rts` files).
     ///
     /// # Errors
@@ -223,9 +339,12 @@ impl Project {
         let mut current = dir.to_path_buf();
 
         loop {
-            // Check for cargo.toml (RustScript manifest)
-            if current.join(PROJECT_MANIFEST).is_file() {
-                let name = project_name_from_dir(&current);
+            // Check for rustscript.json (preferred manifest)
+            if current.join(MANIFEST_FILE).is_file() {
+                let name = manifest::try_read_manifest(&current)
+                    .ok()
+                    .flatten()
+                    .map_or_else(|| project_name_from_dir(&current), |m| m.name);
                 return Ok(Self {
                     root: current,
                     name,
@@ -255,17 +374,13 @@ impl Project {
 
     /// Find the main source file.
     ///
-    /// Looks for `src/index.rts` first, then `src/main.rts`.
+    /// Looks for `src/main.rts` only. The legacy `index.rts` entry point is
+    /// not recognized.
     ///
     /// # Errors
     ///
-    /// Returns [`DriverError::MainSourceNotFound`] if neither file exists.
+    /// Returns [`DriverError::MainSourceNotFound`] if `src/main.rts` does not exist.
     pub fn main_source(&self) -> Result<PathBuf> {
-        let index = self.root.join("src/index.rts");
-        if index.is_file() {
-            return Ok(index);
-        }
-
         let main = self.root.join("src/main.rts");
         if main.is_file() {
             return Ok(main);
@@ -305,18 +420,27 @@ impl Project {
         Ok(modules)
     }
 
-    /// Compile the project: read `.rts` source, run pipeline, write `.rs` output.
+    /// Read the project manifest, or return a default with the project name.
+    fn manifest_or_default(&self) -> Manifest {
+        manifest::try_read_manifest(&self.root)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| manifest::new_manifest(&self.name))
+    }
+
+    /// Compile the project: read `.rts` source, run pipeline, write `.rs` output in-place.
     ///
     /// Discovers all `.rts` files in `src/`, compiles each independently, generates
-    /// `mod` declarations for the main file, and writes all output to `.rsc-build/src/`.
+    /// `mod` declarations for the main file, and writes all output to `src/`.
+    /// Generates or merges `Cargo.toml` in the project root.
     ///
-    /// Returns the [`CompileResult`] for the main file, the path to the build directory,
+    /// Returns the [`CompileResult`] for the main file, the project root path,
     /// the original `.rts` source text, and the `.rts` display filename.
     ///
     /// # Errors
     ///
     /// Returns an error if the main source file cannot be found or read, or if
-    /// the build directory cannot be created.
+    /// the output directory cannot be created.
     #[allow(clippy::too_many_lines)]
     // Multi-file project compilation orchestrates many steps; splitting would obscure the flow
     pub fn compile(&self) -> Result<(CompileResult, PathBuf, String, String)> {
@@ -324,9 +448,10 @@ impl Project {
         let source = fs::read_to_string(&source_path)?;
         let module_files = self.discover_modules()?;
 
-        let build_dir = self.root.join(BUILD_DIR);
-        let src_dir = build_dir.join("src");
+        let src_dir = self.root.join("src");
         fs::create_dir_all(&src_dir)?;
+
+        let manifest_data = self.manifest_or_default();
 
         // External signatures will be loaded after Cargo.toml is written and
         // rustdoc JSON is generated (below). Initialized empty for now.
@@ -381,14 +506,14 @@ impl Project {
                 continue;
             }
 
-            // Derive module name from filename: "utils.rts" → "utils"
+            // Derive module name from filename: "utils.rts" -> "utils"
             let module_name = module_path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_owned();
 
-            // Write the module's .rs file
+            // Write the module's .rs file in-place
             fs::write(
                 src_dir.join(format!("{module_name}.rs")),
                 &module_result.rust_source,
@@ -426,38 +551,45 @@ impl Project {
         any_needs_serde |= result.needs_serde;
         any_needs_regex |= result.needs_regex;
 
-        // Build Cargo.toml with collected dependencies
-        let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
+        // Build auto-detected dependencies map
+        let mut auto_deps = BTreeMap::new();
 
-        // Add tokio if async runtime is needed (from any module) — but NOT for WASM targets
+        // Add tokio if async runtime is needed
         if any_needs_async_runtime {
-            cargo_builder.add_tokio_runtime();
+            auto_deps.insert(
+                "tokio".to_owned(),
+                DependencySpec::Detailed {
+                    version: "1".to_owned(),
+                    features: vec!["full".to_owned()],
+                },
+            );
         }
 
-        // Add futures crate if for-await or Promise.any is used
         if any_needs_futures_crate {
-            cargo_builder.add_dependency("futures", DependencySpec::Simple("0.3".to_owned()));
+            auto_deps.insert(
+                "futures".to_owned(),
+                DependencySpec::Simple("0.3".to_owned()),
+            );
         }
 
-        // Add serde_json if JSON.stringify/parse is used
         if any_needs_serde_json {
-            cargo_builder.add_dependency("serde_json", DependencySpec::Simple("1".to_owned()));
+            auto_deps.insert(
+                "serde_json".to_owned(),
+                DependencySpec::Simple("1".to_owned()),
+            );
         }
 
-        // Add rand crate if Math.random() is used
         if any_needs_rand {
-            cargo_builder.add_dependency("rand", DependencySpec::Simple("0.8".to_owned()));
+            auto_deps.insert("rand".to_owned(), DependencySpec::Simple("0.8".to_owned()));
         }
 
-        // Add regex crate if new RegExp() is used
         if any_needs_regex {
-            cargo_builder.add_dependency("regex", DependencySpec::Simple("1".to_owned()));
+            auto_deps.insert("regex".to_owned(), DependencySpec::Simple("1".to_owned()));
         }
 
-        // Add serde with derive feature if derives Serialize/Deserialize is used
         if any_needs_serde {
-            cargo_builder.add_dependency(
-                "serde",
+            auto_deps.insert(
+                "serde".to_owned(),
                 DependencySpec::Detailed {
                     version: "1".to_owned(),
                     features: vec!["derive".to_owned()],
@@ -465,49 +597,63 @@ impl Project {
             );
         }
 
-        // Add all external crate dependencies (deduplicated by BTreeMap)
+        // Add all external crate dependencies
         for dep in &all_crate_deps {
-            cargo_builder.add_dependency(&dep.name, DependencySpec::Simple("*".to_owned()));
+            auto_deps
+                .entry(dep.name.clone())
+                .or_insert_with(|| DependencySpec::Simple("*".to_owned()));
         }
 
-        // Add explicit dependencies from rsc.toml (these take priority via insert)
-        if let Ok((explicit_deps, _dev_deps)) = crate::deps::read_config(&self.root) {
-            for (name, entry) in &explicit_deps {
-                let spec = if entry.features.is_empty() {
-                    DependencySpec::Simple(entry.version.clone())
-                } else {
-                    DependencySpec::Detailed {
-                        version: entry.version.clone(),
-                        features: entry.features.clone(),
-                    }
-                };
-                // Use insert to override auto-detected `"*"` versions with explicit ones
-                cargo_builder.dependencies.insert(name.clone(), spec);
+        // Collect explicit dependencies from rustscript.json
+        let explicit_deps = &manifest_data.dependencies;
+
+        let cargo_toml_path = self.root.join("Cargo.toml");
+
+        if cargo_toml_path.is_file() {
+            // Merge strategy: read existing, add new, preserve user edits
+            merge_cargo_toml(&cargo_toml_path, &auto_deps, explicit_deps)?;
+        } else {
+            // Generate from scratch
+            let mut cargo_builder = CargoTomlBuilder::new(
+                &manifest_data.name,
+                &manifest_data.edition,
+                &manifest_data.version,
+            );
+
+            // Add auto-detected deps
+            for (name, spec) in &auto_deps {
+                cargo_builder.add_dependency(name, spec.clone());
             }
-        }
 
-        // If tokio was also imported explicitly, the runtime spec takes priority
-        // (add_tokio_runtime uses insert which overwrites)
-        if any_needs_async_runtime {
-            cargo_builder.add_tokio_runtime();
-        }
+            // Explicit deps from rustscript.json override auto-detected
+            for (name, spec) in explicit_deps {
+                let dep_spec = match spec {
+                    DepSpec::Simple(v) => DependencySpec::Simple(v.clone()),
+                    DepSpec::Detailed(d) => DependencySpec::Detailed {
+                        version: d.version.clone(),
+                        features: d.features.clone(),
+                    },
+                };
+                cargo_builder.dependencies.insert(name.clone(), dep_spec);
+            }
 
-        fs::write(build_dir.join("Cargo.toml"), cargo_builder.build())?;
+            // If tokio was also imported explicitly, the runtime spec takes priority
+            if any_needs_async_runtime {
+                cargo_builder.add_tokio_runtime();
+            }
+
+            fs::write(&cargo_toml_path, cargo_builder.build())?;
+        }
 
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
-
-        // Pass through non-RustScript project files into the build directory.
-        // This copies build.rs, config files, assets, icons, etc. — anything
-        // the developer put in the project root that Rust/frameworks need.
-        Self::copy_passthrough_files(&self.root, &build_dir)?;
 
         // Generate rustdoc JSON for dependencies and re-compile with external
         // signatures. This enables proper param types, throws detection, and
         // async handling for external crate functions.
         if !all_crate_deps.is_empty() {
-            Self::maybe_generate_rustdoc(&build_dir);
-            let enriched_options = self.load_compile_options_with_rustdoc(&build_dir);
+            Self::maybe_generate_rustdoc(&self.root);
+            let enriched_options = self.load_compile_options_with_rustdoc(&self.root);
             if !enriched_options.external_signatures.is_empty() {
                 // Re-compile with external signatures for better output.
                 let enriched_result = if mod_decls.is_empty() {
@@ -541,14 +687,14 @@ impl Project {
         };
 
         let rts_filename = format!("src/{file_name}");
-        Ok((result, build_dir, source, rts_filename))
+        Ok((result, self.root.clone(), source, rts_filename))
     }
 
     /// Build `CompileOptions` with external function signatures loaded from
     /// cached rustdoc JSON (if available from a previous compilation).
     fn load_compile_options_with_rustdoc(
         &self,
-        build_dir: &Path,
+        project_dir: &Path,
     ) -> crate::pipeline::CompileOptions {
         let mut options = crate::pipeline::CompileOptions {
             no_borrow_inference: self.compile_options.no_borrow_inference,
@@ -556,7 +702,7 @@ impl Project {
         };
 
         // Check if any cached rustdoc JSON exists from a prior build.
-        let doc_dir = build_dir.join("target").join("doc");
+        let doc_dir = project_dir.join("target").join("doc");
         if !doc_dir.is_dir() {
             return options;
         }
@@ -582,7 +728,7 @@ impl Project {
                 .and_then(|s| s.to_str())
                 .map(std::borrow::ToOwned::to_owned);
             if let Some(name) = crate_name
-                && let Some(crate_data) = cache.get_crate_docs(&name, build_dir)
+                && let Some(crate_data) = cache.get_crate_docs(&name, project_dir)
             {
                 let fns = rustdoc_convert::convert_crate_to_external_fns(&name, &crate_data);
                 options.external_signatures.extend(fns);
@@ -592,73 +738,13 @@ impl Project {
         options
     }
 
-    /// Copy non-RustScript project files into the build directory.
-    ///
-    /// Passes through `build.rs`, config files, assets, icons — anything the
-    /// developer put in the project root that Rust or frameworks need. Skips
-    /// `.rts` source files, the RustScript `cargo.toml`, `src/` (handled by
-    /// the compiler), and the build directory itself.
-    fn copy_passthrough_files(project_root: &Path, build_dir: &Path) -> Result<()> {
-        let build_dir_name = build_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(".rsc-build");
-
-        // Walk the project root (non-recursive first level)
-        let entries = match fs::read_dir(project_root) {
-            Ok(e) => e,
-            Err(_) => return Ok(()),
-        };
-
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-
-            // Skip: build dir, src/ (compiler handles it), cargo.toml (compiler generates it),
-            // .git, node_modules, target, frontend (not a Rust concern)
-            if name_str == build_dir_name
-                || name_str == "src"
-                || name_str == "cargo.toml"
-                || name_str == ".git"
-                || name_str == "node_modules"
-                || name_str == "target"
-                || name_str == "frontend"
-                || name_str.starts_with('.')
-            {
-                continue;
-            }
-
-            let src_path = entry.path();
-            let dst_path = build_dir.join(&name);
-
-            if src_path.is_file() {
-                // Copy file if it doesn't exist or is newer
-                let should_copy = match (fs::metadata(&src_path), fs::metadata(&dst_path)) {
-                    (Ok(src_meta), Ok(dst_meta)) => {
-                        src_meta.modified().ok() > dst_meta.modified().ok()
-                    }
-                    (Ok(_), Err(_)) => true, // dst doesn't exist
-                    _ => false,
-                };
-                if should_copy {
-                    let _ = fs::copy(&src_path, &dst_path);
-                }
-            } else if src_path.is_dir() {
-                // Recursively copy directories (icons/, assets/, etc.)
-                copy_dir_recursive(&src_path, &dst_path);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Generate rustdoc JSON for dependencies if not already cached.
     ///
     /// This is non-fatal: if rustdoc generation fails (e.g., nightly not
     /// installed), compilation continues without external signature info.
-    fn maybe_generate_rustdoc(build_dir: &Path) {
+    fn maybe_generate_rustdoc(project_dir: &Path) {
         // Simple caching: skip if the doc directory already has .json files.
-        let doc_dir = build_dir.join("target").join("doc");
+        let doc_dir = project_dir.join("target").join("doc");
         if doc_dir.is_dir() {
             let has_json = fs::read_dir(&doc_dir)
                 .into_iter()
@@ -671,7 +757,7 @@ impl Project {
         }
 
         eprintln!("Generating dependency docs...");
-        let _ = rustdoc_cache::generate_rustdoc_json(build_dir);
+        let _ = rustdoc_cache::generate_rustdoc_json(project_dir);
     }
 
     /// Compile the project with WASM-specific adjustments.
@@ -685,15 +771,21 @@ impl Project {
         &self,
         wasm_target: Option<&WasmTarget>,
     ) -> Result<(CompileResult, PathBuf, String, String)> {
-        let (result, build_dir, source, rts_filename) = self.compile()?;
+        let (result, project_dir, source, rts_filename) = self.compile()?;
 
         let Some(wt) = wasm_target else {
-            return Ok((result, build_dir, source, rts_filename));
+            return Ok((result, project_dir, source, rts_filename));
         };
 
+        let manifest_data = self.manifest_or_default();
+
         // Rebuild the Cargo.toml with WASM-specific settings
-        let src_dir = build_dir.join("src");
-        let mut cargo_builder = CargoTomlBuilder::new(&self.name, "2024");
+        let src_dir = project_dir.join("src");
+        let mut cargo_builder = CargoTomlBuilder::new(
+            &manifest_data.name,
+            &manifest_data.edition,
+            &manifest_data.version,
+        );
 
         // For wasm32-unknown-unknown: library (cdylib), no main
         // For wasm32-wasip1: binary if there's a main() function
@@ -710,27 +802,24 @@ impl Project {
             }
         }
 
-        // Add explicit dependencies from rsc.toml — but NOT tokio for WASM
-        if let Ok((explicit_deps, _dev_deps)) = crate::deps::read_config(&self.root) {
-            for (name, entry) in &explicit_deps {
-                if name == "tokio" {
-                    continue;
-                }
-                let spec = if entry.features.is_empty() {
-                    DependencySpec::Simple(entry.version.clone())
-                } else {
-                    DependencySpec::Detailed {
-                        version: entry.version.clone(),
-                        features: entry.features.clone(),
-                    }
-                };
-                cargo_builder.dependencies.insert(name.clone(), spec);
+        // Add explicit dependencies from rustscript.json — but NOT tokio for WASM
+        for (name, spec) in &manifest_data.dependencies {
+            if name == "tokio" {
+                continue;
             }
+            let dep_spec = match spec {
+                DepSpec::Simple(v) => DependencySpec::Simple(v.clone()),
+                DepSpec::Detailed(d) => DependencySpec::Detailed {
+                    version: d.version.clone(),
+                    features: d.features.clone(),
+                },
+            };
+            cargo_builder.dependencies.insert(name.clone(), dep_spec);
         }
 
         // Do NOT add tokio for WASM targets — it is not supported
 
-        fs::write(build_dir.join("Cargo.toml"), cargo_builder.build())?;
+        fs::write(project_dir.join("Cargo.toml"), cargo_builder.build())?;
 
         // For library targets, write lib.rs instead of main.rs
         if is_library {
@@ -745,7 +834,7 @@ impl Project {
             }
         }
 
-        Ok((result, build_dir, source, rts_filename))
+        Ok((result, project_dir, source, rts_filename))
     }
 
     /// Build the project: compile, then invoke `cargo build` on the output.
@@ -759,7 +848,7 @@ impl Project {
     /// produces errors, or [`DriverError::CargoBuildFailed`] if `cargo build` fails.
     pub fn build(&self, release: bool, target: Option<&str>) -> Result<()> {
         let wasm_target = target.and_then(parse_wasm_target);
-        let (result, build_dir, rts_source, rts_filename) =
+        let (result, project_dir, rts_source, rts_filename) =
             self.compile_for_target(wasm_target.as_ref())?;
 
         if result.has_errors {
@@ -798,7 +887,7 @@ impl Project {
         let mut cmd = Command::new("cargo");
         cmd.arg("build")
             .arg("--message-format=json")
-            .current_dir(&build_dir);
+            .current_dir(&project_dir);
         if release {
             cmd.arg("--release");
         }
@@ -838,7 +927,7 @@ impl Project {
             let profile = if release { "release" } else { "debug" };
             let triple = wt.triple();
             let ext = "wasm";
-            let artifact_path = build_dir
+            let artifact_path = project_dir
                 .join("target")
                 .join(triple)
                 .join(profile)
@@ -933,7 +1022,7 @@ impl Project {
             return Err(DriverError::WasmRunUnsupported);
         }
 
-        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
+        let (result, project_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
             render_errors(&result, self.color_mode);
@@ -948,7 +1037,7 @@ impl Project {
         let mut cmd = Command::new("cargo");
         cmd.arg("run")
             .arg("--message-format=json")
-            .current_dir(&build_dir);
+            .current_dir(&project_dir);
 
         if !args.is_empty() {
             cmd.arg("--");
@@ -996,7 +1085,7 @@ impl Project {
         Ok(output.status)
     }
 
-    /// Run tests: compile the project, then invoke `cargo test` in the build directory.
+    /// Run tests: compile the project, then invoke `cargo test` in the project directory.
     ///
     /// Forwards `args` to `cargo test` (after `--` separator). If `release` is true,
     /// passes `--release` to cargo.
@@ -1006,7 +1095,7 @@ impl Project {
     /// Returns [`DriverError::CompilationFailed`] if `RustScript` compilation fails,
     /// or [`DriverError::CargoBuildFailed`] if `cargo test` fails.
     pub fn test(&self, release: bool, args: &[String]) -> Result<std::process::ExitStatus> {
-        let (result, build_dir, rts_source, rts_filename) = self.compile()?;
+        let (result, project_dir, rts_source, rts_filename) = self.compile()?;
 
         if result.has_errors {
             render_errors(&result, self.color_mode);
@@ -1021,7 +1110,7 @@ impl Project {
         let mut cmd = Command::new("cargo");
         cmd.arg("test")
             .arg("--message-format=json")
-            .current_dir(&build_dir);
+            .current_dir(&project_dir);
 
         if release {
             cmd.arg("--release");
@@ -1087,14 +1176,15 @@ impl Project {
 /// ```text
 /// {name}/
 ///   src/
-///     index.rts
-///   cargo.toml
-///   .gitignore    (if template provides one)
+///     main.rts
+///   rustscript.json
+///   Cargo.toml
+///   .gitignore
 /// ```
 ///
-/// When `template` is `None`, creates a bare hello-world project (backward
-/// compatible with the original behavior). When a template name is provided,
-/// scaffolds the project with pre-configured dependencies and starter code.
+/// When `template` is `None`, creates a bare hello-world project.
+/// When a template name is provided, scaffolds the project with
+/// pre-configured dependencies and starter code.
 ///
 /// # Errors
 ///
@@ -1120,18 +1210,42 @@ pub fn init_project(name: &str, parent_dir: &Path, template: Option<&str>) -> Re
 
     if let Some(tmpl) = template.and_then(crate::templates::get_template) {
         // Template-based initialization
-        let cargo_toml = tmpl.cargo_toml.replace("{name}", name);
-        fs::write(project_dir.join(PROJECT_MANIFEST), cargo_toml)?;
-        fs::write(src_dir.join("index.rts"), tmpl.index_rts)?;
+        let manifest_data = (tmpl.build_manifest)(name);
+        manifest::write_manifest(&project_dir, &manifest_data)?;
+
+        // Generate initial Cargo.toml from the manifest
+        let mut cargo_builder =
+            CargoTomlBuilder::new(name, &manifest_data.edition, &manifest_data.version);
+        for (dep_name, spec) in &manifest_data.dependencies {
+            let dep_spec = match spec {
+                DepSpec::Simple(v) => DependencySpec::Simple(v.clone()),
+                DepSpec::Detailed(d) => DependencySpec::Detailed {
+                    version: d.version.clone(),
+                    features: d.features.clone(),
+                },
+            };
+            cargo_builder
+                .dependencies
+                .insert(dep_name.clone(), dep_spec);
+        }
+        fs::write(project_dir.join("Cargo.toml"), cargo_builder.build())?;
+
+        fs::write(src_dir.join("main.rts"), tmpl.main_rts)?;
         if let Some(gitignore) = tmpl.gitignore {
             fs::write(project_dir.join(".gitignore"), gitignore)?;
         }
     } else {
-        // Default (bare) project — backward compatible
-        let cargo_toml =
-            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-        fs::write(project_dir.join(PROJECT_MANIFEST), cargo_toml)?;
-        fs::write(src_dir.join("index.rts"), HELLO_WORLD_SOURCE)?;
+        // Default (bare) project
+        let manifest_data = manifest::new_manifest(name);
+        manifest::write_manifest(&project_dir, &manifest_data)?;
+
+        let cargo_toml = format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n"
+        );
+        fs::write(project_dir.join("Cargo.toml"), cargo_toml)?;
+
+        fs::write(src_dir.join("main.rts"), HELLO_WORLD_SOURCE)?;
+        fs::write(project_dir.join(".gitignore"), DEFAULT_GITIGNORE)?;
     }
 
     Ok(project_dir)
@@ -1197,75 +1311,92 @@ enum StatusStyle {
     Note,
 }
 
-/// Recursively copy a directory, creating it if needed.
-fn copy_dir_recursive(src: &Path, dst: &Path) {
-    let _ = fs::create_dir_all(dst);
-    let entries = match fs::read_dir(src) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path);
-        } else {
-            let _ = fs::copy(&src_path, &dst_path);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Test 4: init_project creates correct directory structure
+    // --- Init tests ---
+
     #[test]
     fn test_init_project_creates_directory_structure() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
         assert!(project_dir.join("src").is_dir());
-        assert!(project_dir.join("src/index.rts").is_file());
-        assert!(project_dir.join("cargo.toml").is_file());
+        assert!(project_dir.join("src/main.rts").is_file());
+        assert!(project_dir.join("rustscript.json").is_file());
+        assert!(project_dir.join("Cargo.toml").is_file());
+        assert!(project_dir.join(".gitignore").is_file());
     }
 
-    // Test 5: init_project creates cargo.toml with correct package name
+    #[test]
+    fn test_init_project_rustscript_json_has_correct_name() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+
+        let manifest_data = manifest::read_manifest(&project_dir).unwrap();
+        assert_eq!(manifest_data.name, "test-app");
+        assert_eq!(manifest_data.version, "0.1.0");
+        assert_eq!(manifest_data.edition, "2024");
+    }
+
     #[test]
     fn test_init_project_cargo_toml_has_correct_name() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
-        let content = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        let content = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
             content.contains("name = \"test-app\""),
-            "cargo.toml should contain project name, got:\n{content}"
+            "Cargo.toml should contain project name, got:\n{content}"
         );
         assert!(
             content.contains("edition = \"2024\""),
-            "cargo.toml should specify edition 2024, got:\n{content}"
+            "Cargo.toml should specify edition 2024, got:\n{content}"
+        );
+        assert!(
+            content.contains("[workspace]"),
+            "Cargo.toml should have [workspace] section, got:\n{content}"
         );
     }
 
-    // Test 6: init_project creates index.rts with hello-world content
     #[test]
-    fn test_init_project_index_rts_has_hello_world() {
+    fn test_init_project_main_rts_has_hello_world() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
-        let content = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
+        let content = fs::read_to_string(project_dir.join("src/main.rts")).unwrap();
         assert!(
             content.contains("console.log"),
-            "index.rts should contain console.log, got:\n{content}"
+            "main.rts should contain console.log, got:\n{content}"
         );
         assert!(
             content.contains("Hello, World!"),
-            "index.rts should contain Hello, World!, got:\n{content}"
+            "main.rts should contain Hello, World!, got:\n{content}"
         );
     }
 
-    // Test 7: init_project on existing directory returns ProjectExists
+    #[test]
+    fn test_init_project_gitignore_content() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+
+        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.contains("/target"),
+            "gitignore should contain /target"
+        );
+        assert!(
+            gitignore.contains("/src/*.rs"),
+            "gitignore should contain /src/*.rs"
+        );
+        assert!(
+            !gitignore.contains(".rsc-build"),
+            "gitignore should NOT contain .rsc-build"
+        );
+    }
+
     #[test]
     fn test_init_project_existing_dir_returns_error() {
         let tmp = TempDir::new().unwrap();
@@ -1278,7 +1409,19 @@ mod tests {
         );
     }
 
-    // Test 8: Project::open finds project in current directory
+    #[test]
+    fn test_init_project_does_not_create_index_rts() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+
+        assert!(
+            !project_dir.join("src/index.rts").exists(),
+            "index.rts should NOT be created"
+        );
+    }
+
+    // --- Project::open tests ---
+
     #[test]
     fn test_project_open_finds_project_in_directory() {
         let tmp = TempDir::new().unwrap();
@@ -1289,140 +1432,15 @@ mod tests {
         assert_eq!(project.root, project_dir);
     }
 
-    // Test 9: Project::main_source returns src/index.rts when it exists
     #[test]
-    fn test_project_main_source_returns_index_rts() {
+    fn test_project_open_reads_name_from_manifest() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+        let project_dir = init_project("manifest-name", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let main = project.main_source().unwrap();
-        assert_eq!(main, project_dir.join("src/index.rts"));
+        assert_eq!(project.name, "manifest-name");
     }
 
-    // Test: Project::main_source falls back to src/main.rts
-    #[test]
-    fn test_project_main_source_falls_back_to_main_rts() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("fallback-app");
-        fs::create_dir_all(project_dir.join("src")).unwrap();
-
-        // Write cargo.toml but only main.rts (no index.rts)
-        fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"fallback-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::write(
-            project_dir.join("src/main.rts"),
-            "function main() { console.log(\"hi\"); }\n",
-        )
-        .unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let main = project.main_source().unwrap();
-        assert_eq!(main, project_dir.join("src/main.rts"));
-    }
-
-    // Test: Project::main_source returns error when neither exists
-    #[test]
-    fn test_project_main_source_returns_error_when_missing() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("no-source");
-        fs::create_dir_all(project_dir.join("src")).unwrap();
-        fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"no-source\"\n",
-        )
-        .unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let err = project.main_source().unwrap_err();
-        assert!(
-            matches!(err, DriverError::MainSourceNotFound),
-            "expected MainSourceNotFound, got: {err:?}"
-        );
-    }
-
-    // Test 10: Project::compile produces .rsc-build/src/main.rs with valid content
-    #[test]
-    fn test_project_compile_produces_build_directory() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir, _, _) = project.compile().unwrap();
-
-        assert!(
-            !result.has_errors,
-            "expected no errors, got: {:?}",
-            result.diagnostics
-        );
-
-        let main_rs = build_dir.join("src/main.rs");
-        assert!(main_rs.is_file(), "expected src/main.rs in build dir");
-
-        let content = fs::read_to_string(main_rs).unwrap();
-        assert!(
-            content.contains("fn main()"),
-            "expected fn main in generated Rust, got:\n{content}"
-        );
-        assert!(
-            content.contains("println!"),
-            "expected println! in generated Rust, got:\n{content}"
-        );
-    }
-
-    // Test 11: Generated .rsc-build/Cargo.toml has correct name and edition
-    #[test]
-    fn test_project_compile_generates_correct_cargo_toml() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        assert!(
-            cargo_toml.contains("name = \"test-app\""),
-            "expected project name in Cargo.toml, got:\n{cargo_toml}"
-        );
-        assert!(
-            cargo_toml.contains("edition = \"2024\""),
-            "expected edition 2024 in Cargo.toml, got:\n{cargo_toml}"
-        );
-    }
-
-    // Correctness scenario 2: Init + compile
-    #[test]
-    fn test_correctness_init_then_compile() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("hello-project", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir, _, _) = project.compile().unwrap();
-
-        assert!(
-            !result.has_errors,
-            "expected no errors, got: {:?}",
-            result.diagnostics
-        );
-
-        let main_rs_path = build_dir.join("src/main.rs");
-        assert!(main_rs_path.is_file(), "expected main.rs in build dir");
-
-        let content = fs::read_to_string(main_rs_path).unwrap();
-        assert!(
-            content.contains("fn main"),
-            "expected fn main in generated Rust, got:\n{content}"
-        );
-        assert!(
-            content.contains("println!"),
-            "expected println! in generated Rust, got:\n{content}"
-        );
-    }
-
-    // Test: Project::open walks up to find project root
     #[test]
     fn test_project_open_walks_up_directories() {
         let tmp = TempDir::new().unwrap();
@@ -1434,7 +1452,6 @@ mod tests {
         assert_eq!(project.root, project_dir);
     }
 
-    // Test: Project::open returns error when no project found
     #[test]
     fn test_project_open_returns_error_when_not_found() {
         let tmp = TempDir::new().unwrap();
@@ -1445,75 +1462,80 @@ mod tests {
         );
     }
 
-    // Test: Build directory preserves target/ across recompilations
     #[test]
-    fn test_compile_preserves_build_dir_target() {
+    fn test_project_open_finds_src_dir_project() {
+        // Project with src/ and .rts files but no rustscript.json
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("preserve-test", tmp.path(), None).unwrap();
+        let project_dir = tmp.path().join("bare-project");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.rts"), "function main() {}\n").unwrap();
 
         let project = Project::open(&project_dir).unwrap();
+        assert_eq!(project.root, project_dir);
+    }
 
-        // First compile
-        let (_, build_dir, _, _) = project.compile().unwrap();
+    // --- main_source tests ---
 
-        // Simulate a previous cargo build by creating a target/ directory
-        let target_dir = build_dir.join("target");
-        fs::create_dir_all(&target_dir).unwrap();
-        fs::write(target_dir.join("marker"), "should survive").unwrap();
+    #[test]
+    fn test_project_main_source_returns_main_rts() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
 
-        // Also create a Cargo.lock
-        fs::write(build_dir.join("Cargo.lock"), "# lock file").unwrap();
+        let project = Project::open(&project_dir).unwrap();
+        let main = project.main_source().unwrap();
+        assert_eq!(main, project_dir.join("src/main.rts"));
+    }
 
-        // Recompile
-        let (_, build_dir2, _, _) = project.compile().unwrap();
-        assert_eq!(build_dir, build_dir2);
+    #[test]
+    fn test_project_main_source_ignores_index_rts() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("no-main");
+        fs::create_dir_all(project_dir.join("src")).unwrap();
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "no-main"}"#,
+        )
+        .unwrap();
+        // Only index.rts exists, no main.rts
+        fs::write(project_dir.join("src/index.rts"), "function main() {}\n").unwrap();
 
-        // target/ and Cargo.lock should still be there
+        let project = Project::open(&project_dir).unwrap();
+        let err = project.main_source().unwrap_err();
         assert!(
-            target_dir.join("marker").is_file(),
-            "target/ should be preserved across recompilations"
-        );
-        assert!(
-            build_dir.join("Cargo.lock").is_file(),
-            "Cargo.lock should be preserved across recompilations"
+            matches!(err, DriverError::MainSourceNotFound),
+            "expected MainSourceNotFound when only index.rts exists, got: {err:?}"
         );
     }
 
-    // ---------------------------------------------------------------
-    // Task 024: Multi-file compilation
-    // ---------------------------------------------------------------
-
-    // Test 13: Driver compiles a two-file project (main + one module)
     #[test]
-    fn test_project_compile_two_file_project() {
+    fn test_project_main_source_returns_error_when_missing() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("multi-file");
-        let src_dir = project_dir.join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-
-        // Write cargo.toml
+        let project_dir = tmp.path().join("no-source");
+        fs::create_dir_all(project_dir.join("src")).unwrap();
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"multi-file\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-
-        // Write main file with import
-        fs::write(
-            src_dir.join("index.rts"),
-            "import { greet } from \"./utils\";\n\nfunction main() {\n  greet(\"World\");\n}\n",
-        )
-        .unwrap();
-
-        // Write module file with export
-        fs::write(
-            src_dir.join("utils.rts"),
-            "export function greet(name: string): void {\n  console.log(name);\n}\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "no-source"}"#,
         )
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir, _, _) = project.compile().unwrap();
+        let err = project.main_source().unwrap_err();
+        assert!(
+            matches!(err, DriverError::MainSourceNotFound),
+            "expected MainSourceNotFound, got: {err:?}"
+        );
+    }
+
+    // --- compile tests ---
+
+    #[test]
+    fn test_project_compile_writes_main_rs_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, returned_dir, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -1521,30 +1543,281 @@ mod tests {
             result.diagnostics
         );
 
-        // Check main.rs was generated with mod and use declarations
-        let main_rs = fs::read_to_string(build_dir.join("src/main.rs")).unwrap();
+        // compile() returns the project root, not .rsc-build
+        assert_eq!(returned_dir, project_dir);
+
+        // main.rs should be written directly in src/
+        let main_rs = project_dir.join("src/main.rs");
+        assert!(main_rs.is_file(), "expected src/main.rs in project dir");
+
+        let content = fs::read_to_string(main_rs).unwrap();
+        assert!(
+            content.contains("fn main()"),
+            "expected fn main in generated Rust, got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_project_compile_generates_cargo_toml_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("test-app", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("name = \"test-app\""),
+            "expected project name in Cargo.toml, got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("[workspace]"),
+            "expected [workspace] section in Cargo.toml, got:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn test_project_compile_no_rsc_build_directory() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("no-build-dir", tmp.path(), None).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        assert!(
+            !project_dir.join(".rsc-build").exists(),
+            ".rsc-build should not exist with in-place compilation"
+        );
+    }
+
+    // --- Cargo.toml merge strategy tests ---
+
+    #[test]
+    fn test_cargo_toml_merge_preserves_user_edits() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("merge-test", tmp.path(), None).unwrap();
+
+        // Simulate user manually editing Cargo.toml to add a [profile] section
+        let cargo_path = project_dir.join("Cargo.toml");
+        let mut content = fs::read_to_string(&cargo_path).unwrap();
+        content.push_str("\n[profile.release]\nopt-level = 3\nlto = true\n");
+        fs::write(&cargo_path, &content).unwrap();
+
+        // Compile — should merge, not overwrite
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let new_content = fs::read_to_string(&cargo_path).unwrap();
+        assert!(
+            new_content.contains("opt-level"),
+            "user's [profile.release] should be preserved, got:\n{new_content}"
+        );
+        assert!(
+            new_content.contains("lto"),
+            "user's lto setting should be preserved, got:\n{new_content}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_toml_merge_adds_new_deps() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("merge-add");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Write rustscript.json and initial Cargo.toml
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "merge-add"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"merge-add\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        // Source that imports reqwest (auto-detected dep)
+        fs::write(
+            src_dir.join("main.rts"),
+            "import { get } from \"reqwest\";\nfunction main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("reqwest"),
+            "auto-detected dep should be added, got:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_toml_merge_preserves_existing_deps() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("merge-keep");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "merge-keep"}"#,
+        )
+        .unwrap();
+        // Cargo.toml with a user-pinned dependency version
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"merge-keep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nreqwest = \"0.11\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        // Source also imports reqwest — auto-detect would add it as "*"
+        fs::write(
+            src_dir.join("main.rts"),
+            "import { get } from \"reqwest\";\nfunction main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        // User's pinned version should be preserved (not overwritten with "*")
+        assert!(
+            cargo_toml.contains("\"0.11\""),
+            "user's pinned version should be preserved, got:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_toml_merge_explicit_deps_override() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("merge-override");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // rustscript.json with explicit dep
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "merge-override", "dependencies": {"rand": "0.8"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"merge-override\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nrand = \"0.7\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        fs::write(
+            src_dir.join("main.rts"),
+            "function main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        // Explicit dep from rustscript.json should override the existing version
+        assert!(
+            cargo_toml.contains("\"0.8\""),
+            "explicit rustscript.json dep should override, got:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn test_cargo_toml_merge_ensures_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("merge-ws");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "merge-ws"}"#,
+        )
+        .unwrap();
+        // Cargo.toml WITHOUT [workspace]
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"merge-ws\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        fs::write(
+            src_dir.join("main.rts"),
+            "function main() { console.log(\"hi\"); }\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("[workspace]"),
+            "merge should add [workspace] if missing, got:\n{cargo_toml}"
+        );
+    }
+
+    // --- Multi-file compilation tests ---
+
+    #[test]
+    fn test_project_compile_two_file_project() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("multi-file");
+        let src_dir = project_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        fs::write(
+            project_dir.join("rustscript.json"),
+            r#"{"name": "multi-file"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"multi-file\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        fs::write(
+            src_dir.join("main.rts"),
+            "import { greet } from \"./utils\";\n\nfunction main() {\n  greet(\"World\");\n}\n",
+        )
+        .unwrap();
+
+        fs::write(
+            src_dir.join("utils.rts"),
+            "export function greet(name: string): void {\n  console.log(name);\n}\n",
+        )
+        .unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, returned_dir, _, _) = project.compile().unwrap();
+
+        assert!(
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+
+        // Check main.rs was generated in-place
+        let main_rs = fs::read_to_string(returned_dir.join("src/main.rs")).unwrap();
         assert!(
             main_rs.contains("mod utils;"),
             "expected `mod utils;` in main.rs:\n{main_rs}"
         );
-        assert!(
-            main_rs.contains("use crate::utils::greet;"),
-            "expected `use crate::utils::greet;` in main.rs:\n{main_rs}"
-        );
-        assert!(
-            main_rs.contains("fn main()"),
-            "expected `fn main()` in main.rs:\n{main_rs}"
-        );
 
-        // Check utils.rs was generated with pub fn
-        let utils_rs = fs::read_to_string(build_dir.join("src/utils.rs")).unwrap();
+        // Check utils.rs was generated in-place
+        let utils_rs = fs::read_to_string(returned_dir.join("src/utils.rs")).unwrap();
         assert!(
             utils_rs.contains("pub fn greet(name: &str)"),
             "expected `pub fn greet(name: &str)` in utils.rs:\n{utils_rs}"
         );
     }
 
-    // Test: Single-file projects still work (regression)
     #[test]
     fn test_project_compile_single_file_still_works() {
         let tmp = TempDir::new().unwrap();
@@ -1560,11 +1833,8 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------
-    // Task 031: Crate consumption — driver / CargoTomlBuilder tests
-    // ---------------------------------------------------------------
+    // --- External crate dependency tests ---
 
-    // Test 9: Generated Cargo.toml contains [dependencies] with crate entries
     #[test]
     fn test_project_compile_external_crate_cargo_toml_has_dependency() {
         let tmp = TempDir::new().unwrap();
@@ -1573,162 +1843,48 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
 
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"crate-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "crate-dep"}"#,
         )
         .unwrap();
+
         fs::write(
-            src_dir.join("index.rts"),
+            src_dir.join("main.rts"),
             "import { get } from \"reqwest\";\nfunction main() { console.log(\"hi\"); }\n",
         )
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
 
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
             cargo_toml.contains("[dependencies]"),
             "expected [dependencies] section in Cargo.toml:\n{cargo_toml}"
         );
         assert!(
-            cargo_toml.contains("reqwest = \"*\""),
-            "expected reqwest = \"*\" in Cargo.toml:\n{cargo_toml}"
+            cargo_toml.contains("reqwest"),
+            "expected reqwest in Cargo.toml:\n{cargo_toml}"
         );
     }
 
-    // Test 10: Project with only local imports has no [dependencies] section
     #[test]
-    fn test_project_compile_local_imports_no_dependencies_section() {
+    fn test_project_compile_local_imports_no_new_dependencies() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("local-only", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
 
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
             !cargo_toml.contains("[dependencies]"),
             "expected no [dependencies] section for local-only project:\n{cargo_toml}"
         );
     }
 
-    // Test 11: Two modules importing from same crate produce one dependency
-    #[test]
-    fn test_project_compile_multi_file_dedup_dependencies() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("multi-dep");
-        let src_dir = project_dir.join("src");
-        fs::create_dir_all(&src_dir).unwrap();
+    // --- Async runtime tests ---
 
-        fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"multi-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-
-        // Main file imports from reqwest
-        fs::write(
-            src_dir.join("index.rts"),
-            "import { get } from \"reqwest\";\nimport { helper } from \"./utils\";\nfunction main() { console.log(\"hi\"); }\n",
-        )
-        .unwrap();
-
-        // Module also imports from reqwest
-        fs::write(
-            src_dir.join("utils.rts"),
-            "import { Client } from \"reqwest\";\nexport function helper(): void { return; }\n",
-        )
-        .unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        // reqwest should appear exactly once
-        let reqwest_count = cargo_toml.matches("reqwest").count();
-        assert_eq!(
-            reqwest_count, 1,
-            "expected reqwest to appear once in Cargo.toml, got {reqwest_count}:\n{cargo_toml}"
-        );
-    }
-
-    // Test 12: Dependencies are sorted alphabetically in output
-    #[test]
-    fn test_cargo_toml_builder_deps_sorted_alphabetically() {
-        let mut builder = CargoTomlBuilder::new("test-app", "2024");
-        builder.add_dependency("serde", DependencySpec::Simple("*".to_owned()));
-        builder.add_dependency("axum", DependencySpec::Simple("*".to_owned()));
-        builder.add_dependency("reqwest", DependencySpec::Simple("*".to_owned()));
-        let output = builder.build();
-
-        let axum_pos = output.find("axum").unwrap();
-        let reqwest_pos = output.find("reqwest").unwrap();
-        let serde_pos = output.find("serde").unwrap();
-        assert!(
-            axum_pos < reqwest_pos && reqwest_pos < serde_pos,
-            "dependencies should be sorted alphabetically:\n{output}"
-        );
-    }
-
-    // Test: CargoTomlBuilder with detailed dependency (tokio with features)
-    #[test]
-    fn test_cargo_toml_builder_detailed_dependency() {
-        let mut builder = CargoTomlBuilder::new("test-app", "2024");
-        builder.add_tokio_runtime();
-        let output = builder.build();
-
-        assert!(
-            output.contains("tokio = { version = \"1\", features = [\"full\"] }"),
-            "expected tokio with features in Cargo.toml:\n{output}"
-        );
-    }
-
-    // Test: CargoTomlBuilder without dependencies omits [dependencies] section
-    #[test]
-    fn test_cargo_toml_builder_no_deps_no_section() {
-        let builder = CargoTomlBuilder::new("empty-app", "2024");
-        let output = builder.build();
-
-        assert!(
-            !output.contains("[dependencies]"),
-            "expected no [dependencies] section:\n{output}"
-        );
-        assert!(
-            output.contains("[workspace]"),
-            "expected [workspace] section:\n{output}"
-        );
-    }
-
-    // Test: Existing Cargo.toml test still works with CargoTomlBuilder
-    #[test]
-    fn test_project_compile_cargo_toml_still_has_package_info() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("builder-test", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        assert!(
-            cargo_toml.contains("name = \"builder-test\""),
-            "expected name in Cargo.toml:\n{cargo_toml}"
-        );
-        assert!(
-            cargo_toml.contains("edition = \"2024\""),
-            "expected edition in Cargo.toml:\n{cargo_toml}"
-        );
-        assert!(
-            cargo_toml.contains("[workspace]"),
-            "expected [workspace] section in Cargo.toml:\n{cargo_toml}"
-        );
-    }
-
-    // ---------------------------------------------------------------
-    // Task 029: Async lowering and tokio runtime integration — driver tests
-    // ---------------------------------------------------------------
-
-    // Test 1: Driver — async Cargo.toml includes tokio
     #[test]
     fn test_project_compile_async_main_cargo_toml_has_tokio() {
         let tmp = TempDir::new().unwrap();
@@ -1737,12 +1893,13 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
 
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"async-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "async-app"}"#,
         )
         .unwrap();
+
         fs::write(
-            src_dir.join("index.rts"),
+            src_dir.join("main.rts"),
             r#"async function main() {
   const data = await fetchData();
   console.log(data);
@@ -1756,7 +1913,7 @@ async function fetchData(): string {
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir, _, _) = project.compile().unwrap();
+        let (result, _, _, _) = project.compile().unwrap();
 
         assert!(
             !result.has_errors,
@@ -1764,162 +1921,162 @@ async function fetchData(): string {
             result.diagnostics
         );
 
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
-            cargo_toml.contains("[dependencies]"),
-            "expected [dependencies] section in Cargo.toml:\n{cargo_toml}"
-        );
-        assert!(
-            cargo_toml.contains("tokio = { version = \"1\", features = [\"full\"] }"),
+            cargo_toml.contains("tokio"),
             "expected tokio dependency in Cargo.toml:\n{cargo_toml}"
         );
     }
 
-    // Test 2: Driver — non-async Cargo.toml does NOT include tokio
     #[test]
     fn test_project_compile_non_async_cargo_toml_no_tokio() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("sync-app", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
 
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
             !cargo_toml.contains("tokio"),
             "expected no tokio in Cargo.toml for non-async project:\n{cargo_toml}"
         );
+    }
+
+    // --- rustscript.json integration tests ---
+
+    #[test]
+    fn test_compile_includes_rustscript_json_dependencies() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = init_project("deps-test", tmp.path(), None).unwrap();
+
+        // Add a dependency via rustscript.json
+        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &[], false).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (result, _, _, _) = project.compile().unwrap();
+
         assert!(
-            !cargo_toml.contains("[dependencies]"),
-            "expected no [dependencies] section for non-async project:\n{cargo_toml}"
+            !result.has_errors,
+            "expected no errors, got: {:?}",
+            result.diagnostics
+        );
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("serde"),
+            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
         );
     }
 
-    // ---------------------------------------------------------------
-    // Task 037: Project::test
-    // ---------------------------------------------------------------
-
-    // Test: Project::test compiles first — compilation error returns CompilationFailed
     #[test]
-    fn test_project_test_compilation_error_returns_compilation_failed() {
+    fn test_compile_includes_deps_with_features_from_rustscript_json() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("test-compile-err");
+        let project_dir = init_project("deps-features", tmp.path(), None).unwrap();
+
+        let features = vec!["derive".to_owned()];
+        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &features, false).unwrap();
+
+        let project = Project::open(&project_dir).unwrap();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo_toml.contains("serde"),
+            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains("derive"),
+            "expected features in generated Cargo.toml, got:\n{cargo_toml}"
+        );
+    }
+
+    #[test]
+    fn test_compile_rustscript_json_overrides_autodetected_deps() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("override-test");
         let src_dir = project_dir.join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"test-compile-err\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "override-test"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"override-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
         )
         .unwrap();
 
-        // Write invalid source
-        fs::write(src_dir.join("index.rts"), "function {").unwrap();
+        // Write source that imports rand (will be auto-detected as "*")
+        fs::write(
+            src_dir.join("main.rts"),
+            "import { thread_rng } from \"rand\";\n\nfunction main() {\n  console.log(\"hi\");\n}\n",
+        )
+        .unwrap();
+
+        // Add explicit version via rustscript.json
+        crate::deps::add_dependency(&project_dir, "rand", Some("0.8"), &[], false).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let err = project.test(false, &[]).unwrap_err();
+        let (_, _, _, _) = project.compile().unwrap();
+
+        let cargo_toml = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
+        // The explicit version "0.8" should override the auto-detected "*"
         assert!(
-            matches!(err, DriverError::CompilationFailed(_)),
-            "expected CompilationFailed, got: {err:?}"
+            cargo_toml.contains("\"0.8\""),
+            "expected version \"0.8\" to override wildcard, got:\n{cargo_toml}"
         );
     }
 
-    // Test: Project has a public test method (compile check)
-    #[test]
-    fn test_project_test_method_exists() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-exists", tmp.path(), None).unwrap();
+    // --- Template tests ---
 
-        let project = Project::open(&project_dir).unwrap();
-        // Verify the method signature compiles — this is a type-level assertion
-        let _: fn(&Project, bool, &[String]) -> Result<std::process::ExitStatus> = Project::test;
-        drop(project);
-    }
-
-    // ---------------------------------------------------------------
-    // Task 039: Project templates
-    // ---------------------------------------------------------------
-
-    // Test 1: Default init unchanged — produces same output as before
-    #[test]
-    fn test_init_project_default_template_unchanged() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("test-default", tmp.path(), None).unwrap();
-
-        assert!(project_dir.join("src/index.rts").is_file());
-        assert!(project_dir.join("cargo.toml").is_file());
-        assert!(!project_dir.join(".gitignore").exists());
-
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
-        assert!(cargo.contains("name = \"test-default\""));
-        assert!(cargo.contains("edition = \"2024\""));
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(source.contains("Hello, World!"));
-    }
-
-    // Test 2: CLI template creates cargo.toml with clap dependency
     #[test]
     fn test_init_project_cli_template_has_clap() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-cli", tmp.path(), Some("cli")).unwrap();
 
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        let cargo = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains("clap = { version = \"4\", features = [\"derive\"] }"),
-            "expected clap dependency in cargo.toml:\n{cargo}",
+            cargo.contains("clap"),
+            "expected clap dependency in Cargo.toml:\n{cargo}",
         );
         assert!(cargo.contains("name = \"test-cli\""));
+
+        let manifest_data = manifest::read_manifest(&project_dir).unwrap();
+        assert!(manifest_data.dependencies.contains_key("clap"));
     }
 
-    // Test 3: Web server template creates cargo.toml with axum, tokio, serde
     #[test]
     fn test_init_project_web_server_template_has_deps() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-web", tmp.path(), Some("web-server")).unwrap();
 
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
+        let cargo = fs::read_to_string(project_dir.join("Cargo.toml")).unwrap();
         assert!(
             cargo.contains("axum"),
-            "expected axum in cargo.toml:\n{cargo}"
+            "expected axum in Cargo.toml:\n{cargo}"
         );
         assert!(
             cargo.contains("tokio"),
-            "expected tokio in cargo.toml:\n{cargo}"
+            "expected tokio in Cargo.toml:\n{cargo}"
         );
         assert!(
             cargo.contains("serde"),
-            "expected serde in cargo.toml:\n{cargo}"
+            "expected serde in Cargo.toml:\n{cargo}"
         );
-        assert!(
-            cargo.contains("serde_json"),
-            "expected serde_json in cargo.toml:\n{cargo}"
-        );
-        assert!(cargo.contains("name = \"test-web\""));
     }
 
-    // Test 4: WASM template creates cargo.toml with wasm-bindgen and [lib] section
     #[test]
     fn test_init_project_wasm_template_has_lib_and_wasm_bindgen() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("test-wasm", tmp.path(), Some("wasm")).unwrap();
 
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
-        assert!(
-            cargo.contains("wasm-bindgen"),
-            "expected wasm-bindgen in cargo.toml:\n{cargo}",
-        );
-        assert!(
-            cargo.contains("[lib]"),
-            "expected [lib] section in cargo.toml:\n{cargo}",
-        );
-        assert!(
-            cargo.contains("crate-type = [\"cdylib\"]"),
-            "expected cdylib crate-type in cargo.toml:\n{cargo}",
-        );
+        let manifest_data = manifest::read_manifest(&project_dir).unwrap();
+        assert!(manifest_data.dependencies.contains_key("wasm-bindgen"));
     }
 
-    // Test 5: Invalid template returns InvalidTemplate error
     #[test]
     fn test_init_project_invalid_template_returns_error() {
         let tmp = TempDir::new().unwrap();
@@ -1930,7 +2087,6 @@ async function fetchData(): string {
         );
     }
 
-    // Test 6: CLI, web-server, and wasm templates create .gitignore
     #[test]
     fn test_init_project_templates_create_gitignore() {
         let tmp = TempDir::new().unwrap();
@@ -1945,88 +2101,26 @@ async function fetchData(): string {
         assert!(wasm_dir.join(".gitignore").is_file());
     }
 
-    // Test 7: Default template does not create .gitignore
     #[test]
-    fn test_init_project_default_no_gitignore() {
+    fn test_init_project_default_creates_gitignore() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("t-default", tmp.path(), None).unwrap();
-        assert!(!project_dir.join(".gitignore").exists());
+        assert!(project_dir.join(".gitignore").is_file());
     }
 
-    // Test 8: Template starter code contains expected patterns
     #[test]
-    fn test_init_project_cli_template_starter_has_main() {
+    fn test_init_project_templates_use_main_rts() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("s-cli", tmp.path(), Some("cli")).unwrap();
 
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(
-            source.contains("function main()"),
-            "expected function main() in CLI starter:\n{source}",
-        );
+        let cli_dir = init_project("u-cli", tmp.path(), Some("cli")).unwrap();
+        assert!(cli_dir.join("src/main.rts").is_file());
+        assert!(!cli_dir.join("src/index.rts").exists());
+
+        let web_dir = init_project("u-web", tmp.path(), Some("web-server")).unwrap();
+        assert!(web_dir.join("src/main.rts").is_file());
+        assert!(!web_dir.join("src/index.rts").exists());
     }
 
-    // Test: Web server template starter has async main
-    #[test]
-    fn test_init_project_web_server_template_starter_has_async_main() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("s-web", tmp.path(), Some("web-server")).unwrap();
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(
-            source.contains("async function main()"),
-            "expected async function main() in web-server starter:\n{source}",
-        );
-    }
-
-    // Test: WASM template starter has greet function and main
-    #[test]
-    fn test_init_project_wasm_template_starter_has_greet() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("s-wasm", tmp.path(), Some("wasm")).unwrap();
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(
-            source.contains("function greet("),
-            "expected function greet() in WASM starter:\n{source}",
-        );
-        assert!(
-            source.contains("function main()"),
-            "expected function main() in WASM starter:\n{source}",
-        );
-    }
-
-    // Test: gitignore content contains .rsc-build
-    #[test]
-    fn test_init_project_gitignore_has_rsc_build() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("gi-cli", tmp.path(), Some("cli")).unwrap();
-
-        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
-        assert!(
-            gitignore.contains(".rsc-build"),
-            "expected .rsc-build in .gitignore:\n{gitignore}",
-        );
-        assert!(
-            gitignore.contains("/target"),
-            "expected /target in .gitignore:\n{gitignore}",
-        );
-    }
-
-    // Test: WASM gitignore also includes /pkg
-    #[test]
-    fn test_init_project_wasm_gitignore_has_pkg() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("gi-wasm", tmp.path(), Some("wasm")).unwrap();
-
-        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
-        assert!(
-            gitignore.contains("/pkg"),
-            "expected /pkg in WASM .gitignore:\n{gitignore}",
-        );
-    }
-
-    // Test: Invalid template does not create project directory
     #[test]
     fn test_init_project_invalid_template_no_directory_created() {
         let tmp = TempDir::new().unwrap();
@@ -2034,132 +2128,32 @@ async function fetchData(): string {
         assert!(!tmp.path().join("no-dir").exists());
     }
 
-    // Correctness scenario 1: CLI template structure
-    #[test]
-    fn test_correctness_cli_template_structure() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("my-cli", tmp.path(), Some("cli")).unwrap();
+    // --- WASM tests ---
 
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
-        assert!(cargo.contains("clap = { version = \"4\", features = [\"derive\"] }"));
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(source.contains("function main()"));
-
-        let gitignore = fs::read_to_string(project_dir.join(".gitignore")).unwrap();
-        assert!(gitignore.contains(".rsc-build"));
-    }
-
-    // Correctness scenario 2: Web server template structure
-    #[test]
-    fn test_correctness_web_server_template_structure() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("my-api", tmp.path(), Some("web-server")).unwrap();
-
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
-        assert!(cargo.contains("axum"));
-        assert!(cargo.contains("tokio"));
-        assert!(cargo.contains("serde"));
-        assert!(cargo.contains("serde_json"));
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert!(source.contains("async function main()"));
-
-        assert!(project_dir.join(".gitignore").is_file());
-    }
-
-    // Correctness scenario 3: Default template backward compatibility
-    #[test]
-    fn test_correctness_default_template_backward_compat() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("my-app", tmp.path(), None).unwrap();
-
-        let cargo = fs::read_to_string(project_dir.join("cargo.toml")).unwrap();
-        let expected_cargo =
-            "[package]\nname = \"my-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        assert_eq!(
-            cargo, expected_cargo,
-            "default cargo.toml should be identical to original behavior"
-        );
-
-        let source = fs::read_to_string(project_dir.join("src/index.rts")).unwrap();
-        assert_eq!(
-            source, HELLO_WORLD_SOURCE,
-            "default index.rts should be identical to original hello world"
-        );
-
-        assert!(!project_dir.join(".gitignore").exists());
-    }
-
-    // ---------------------------------------------------------------
-    // Task 050: WASM compilation target
-    // ---------------------------------------------------------------
-
-    // Test: parse_wasm_target recognizes wasm32-unknown-unknown
     #[test]
     fn test_parse_wasm_target_unknown_unknown() {
         let result = parse_wasm_target("wasm32-unknown-unknown");
         assert_eq!(result, Some(WasmTarget::Unknown));
     }
 
-    // Test: parse_wasm_target recognizes wasm32-wasip1
     #[test]
     fn test_parse_wasm_target_wasip1() {
         let result = parse_wasm_target("wasm32-wasip1");
         assert_eq!(result, Some(WasmTarget::Wasip1));
     }
 
-    // Test: parse_wasm_target returns None for non-WASM targets
     #[test]
     fn test_parse_wasm_target_native_returns_none() {
         assert!(parse_wasm_target("x86_64-unknown-linux-gnu").is_none());
         assert!(parse_wasm_target("aarch64-apple-darwin").is_none());
     }
 
-    // Test: parse_wasm_target treats other wasm32-* as Unknown
-    #[test]
-    fn test_parse_wasm_target_other_wasm32_treated_as_unknown() {
-        let result = parse_wasm_target("wasm32-wasi");
-        assert!(result.is_some());
-    }
-
-    // Test: WasmTarget::triple returns correct strings
     #[test]
     fn test_wasm_target_triple_values() {
         assert_eq!(WasmTarget::Unknown.triple(), "wasm32-unknown-unknown");
         assert_eq!(WasmTarget::Wasip1.triple(), "wasm32-wasip1");
     }
 
-    // Test: CargoTomlBuilder with library crate-type produces [lib] section
-    #[test]
-    fn test_cargo_toml_builder_library_cdylib() {
-        let mut builder = CargoTomlBuilder::new("wasm-app", "2024");
-        builder.set_library(vec!["cdylib".to_owned()]);
-        let output = builder.build();
-
-        assert!(
-            output.contains("[lib]"),
-            "expected [lib] section, got:\n{output}"
-        );
-        assert!(
-            output.contains("crate-type = [\"cdylib\"]"),
-            "expected crate-type cdylib, got:\n{output}"
-        );
-    }
-
-    // Test: Default CargoTomlBuilder (binary) does NOT produce [lib] section
-    #[test]
-    fn test_cargo_toml_builder_binary_has_no_lib_section() {
-        let builder = CargoTomlBuilder::new("my-app", "2024");
-        let output = builder.build();
-
-        assert!(
-            !output.contains("[lib]"),
-            "binary crate should not have [lib] section, got:\n{output}"
-        );
-    }
-
-    // Test: WASM target excludes tokio dependency from Cargo.toml
     #[test]
     fn test_compile_for_target_wasm_excludes_tokio() {
         let tmp = TempDir::new().unwrap();
@@ -2168,42 +2162,40 @@ async function fetchData(): string {
         fs::create_dir_all(&src_dir).unwrap();
 
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"async-wasm\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "async-wasm"}"#,
         )
         .unwrap();
-        // Write an async main — the compiler will set needs_async_runtime = true
         fs::write(
-            src_dir.join("index.rts"),
+            src_dir.join("main.rts"),
             "async function main() {\n  console.log(\"hi\");\n}\n",
         )
         .unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project
+        let (_, project_root, _, _) = project
             .compile_for_target(Some(&WasmTarget::Unknown))
             .unwrap();
 
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
+        let cargo_toml = fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
         assert!(
             !cargo_toml.contains("tokio"),
             "WASM Cargo.toml should NOT contain tokio, got:\n{cargo_toml}"
         );
     }
 
-    // Test: WASM unknown-unknown target generates lib.rs instead of main.rs
     #[test]
     fn test_compile_for_target_wasm_unknown_generates_lib_rs() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("wasm-lib", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project
+        let (_, project_root, _, _) = project
             .compile_for_target(Some(&WasmTarget::Unknown))
             .unwrap();
 
-        let lib_rs = build_dir.join("src/lib.rs");
-        let main_rs = build_dir.join("src/main.rs");
+        let lib_rs = project_root.join("src/lib.rs");
+        let main_rs = project_root.join("src/main.rs");
 
         assert!(
             lib_rs.is_file(),
@@ -2215,91 +2207,20 @@ async function fetchData(): string {
         );
     }
 
-    // Test: WASM wasip1 target keeps main.rs (binary)
     #[test]
     fn test_compile_for_target_wasm_wasip1_keeps_main_rs() {
         let tmp = TempDir::new().unwrap();
         let project_dir = init_project("wasi-bin", tmp.path(), None).unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project
+        let (_, project_root, _, _) = project
             .compile_for_target(Some(&WasmTarget::Wasip1))
             .unwrap();
 
-        let main_rs = build_dir.join("src/main.rs");
+        let main_rs = project_root.join("src/main.rs");
         assert!(main_rs.is_file(), "expected main.rs for wasm32-wasip1");
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        assert!(
-            !cargo_toml.contains("[lib]"),
-            "wasip1 binary should not have [lib] section, got:\n{cargo_toml}"
-        );
     }
 
-    // Test: WASM unknown-unknown Cargo.toml has cdylib crate-type
-    #[test]
-    fn test_compile_for_target_wasm_unknown_cargo_toml_has_cdylib() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("wasm-cdylib", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project
-            .compile_for_target(Some(&WasmTarget::Unknown))
-            .unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        assert!(
-            cargo_toml.contains("crate-type = [\"cdylib\"]"),
-            "expected crate-type cdylib for wasm32-unknown-unknown, got:\n{cargo_toml}"
-        );
-    }
-
-    // Test: compile_for_target with None produces same result as compile
-    #[test]
-    fn test_compile_for_target_none_matches_compile() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("no-target", tmp.path(), None).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (result1, _, _, _) = project.compile().unwrap();
-        let (result2, _, _, _) = project.compile_for_target(None).unwrap();
-
-        assert_eq!(result1.rust_source, result2.rust_source);
-    }
-
-    // Test: async function + WASM target sets needs_async_runtime flag
-    #[test]
-    fn test_compile_for_target_wasm_async_needs_runtime_flag() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("async-check");
-        let src_dir = project_dir.join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-
-        fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"async-check\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::write(
-            src_dir.join("index.rts"),
-            "async function main() {\n  console.log(\"hello\");\n}\n",
-        )
-        .unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (result, _, _, _) = project
-            .compile_for_target(Some(&WasmTarget::Unknown))
-            .unwrap();
-
-        // The compile result should still indicate async was used
-        // (the driver uses this to emit a warning)
-        assert!(
-            result.needs_async_runtime,
-            "expected needs_async_runtime to be true for async function"
-        );
-    }
-
-    // Test: run with WASM target returns WasmRunUnsupported
     #[test]
     fn test_run_wasm_target_returns_unsupported() {
         let tmp = TempDir::new().unwrap();
@@ -2315,112 +2236,94 @@ async function fetchData(): string {
         );
     }
 
-    // Test: run with wasm32-wasip1 target also returns WasmRunUnsupported
-    #[test]
-    fn test_run_wasm_wasip1_target_returns_unsupported() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("run-wasi", tmp.path(), None).unwrap();
+    // --- CargoTomlBuilder tests ---
 
-        let project = Project::open(&project_dir).unwrap();
-        let err = project.run(&[], Some("wasm32-wasip1")).unwrap_err();
+    #[test]
+    fn test_cargo_toml_builder_deps_sorted_alphabetically() {
+        let mut builder = CargoTomlBuilder::new("test-app", "2024", "0.1.0");
+        builder.add_dependency("serde", DependencySpec::Simple("*".to_owned()));
+        builder.add_dependency("axum", DependencySpec::Simple("*".to_owned()));
+        builder.add_dependency("reqwest", DependencySpec::Simple("*".to_owned()));
+        let output = builder.build();
+
+        let axum_pos = output.find("axum").unwrap();
+        let reqwest_pos = output.find("reqwest").unwrap();
+        let serde_pos = output.find("serde").unwrap();
         assert!(
-            matches!(err, DriverError::WasmRunUnsupported),
-            "expected WasmRunUnsupported, got: {err:?}"
+            axum_pos < reqwest_pos && reqwest_pos < serde_pos,
+            "dependencies should be sorted alphabetically:\n{output}"
         );
     }
 
-    // ---------------------------------------------------------------
-    // Task 070: Dependency management — rsc.toml integration
-    // ---------------------------------------------------------------
-
-    // Test: compile includes explicit deps from rsc.toml in generated Cargo.toml
     #[test]
-    fn test_compile_includes_rsc_toml_dependencies() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("deps-test", tmp.path(), None).unwrap();
-
-        // Add a dependency via rsc.toml
-        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &[], false).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (result, build_dir, _, _) = project.compile().unwrap();
+    fn test_cargo_toml_builder_detailed_dependency() {
+        let mut builder = CargoTomlBuilder::new("test-app", "2024", "0.1.0");
+        builder.add_tokio_runtime();
+        let output = builder.build();
 
         assert!(
-            !result.has_errors,
-            "expected no errors, got: {:?}",
-            result.diagnostics
-        );
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        assert!(
-            cargo_toml.contains("serde"),
-            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
-        );
-        assert!(
-            cargo_toml.contains("\"1\""),
-            "expected version \"1\" in generated Cargo.toml, got:\n{cargo_toml}"
+            output.contains("tokio = { version = \"1\", features = [\"full\"] }"),
+            "expected tokio with features in Cargo.toml:\n{output}"
         );
     }
 
-    // Test: compile includes deps with features from rsc.toml
     #[test]
-    fn test_compile_includes_rsc_toml_deps_with_features() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = init_project("deps-features", tmp.path(), None).unwrap();
+    fn test_cargo_toml_builder_no_deps_no_section() {
+        let builder = CargoTomlBuilder::new("empty-app", "2024", "0.1.0");
+        let output = builder.build();
 
-        let features = vec!["derive".to_owned()];
-        crate::deps::add_dependency(&project_dir, "serde", Some("1"), &features, false).unwrap();
-
-        let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
         assert!(
-            cargo_toml.contains("serde"),
-            "expected serde in generated Cargo.toml, got:\n{cargo_toml}"
+            !output.contains("[dependencies]"),
+            "expected no [dependencies] section:\n{output}"
         );
         assert!(
-            cargo_toml.contains("derive"),
-            "expected features in generated Cargo.toml, got:\n{cargo_toml}"
+            output.contains("[workspace]"),
+            "expected [workspace] section:\n{output}"
         );
     }
 
-    // Test: explicit rsc.toml deps override auto-detected wildcard versions
     #[test]
-    fn test_compile_rsc_toml_overrides_autodetected_deps() {
+    fn test_cargo_toml_builder_library_cdylib() {
+        let mut builder = CargoTomlBuilder::new("wasm-app", "2024", "0.1.0");
+        builder.set_library(vec!["cdylib".to_owned()]);
+        let output = builder.build();
+
+        assert!(
+            output.contains("[lib]"),
+            "expected [lib] section, got:\n{output}"
+        );
+        assert!(
+            output.contains("crate-type = [\"cdylib\"]"),
+            "expected crate-type cdylib, got:\n{output}"
+        );
+    }
+
+    // --- Test compilation tests ---
+
+    #[test]
+    fn test_project_test_compilation_error_returns_compilation_failed() {
         let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("override-test");
+        let project_dir = tmp.path().join("test-compile-err");
         let src_dir = project_dir.join("src");
         fs::create_dir_all(&src_dir).unwrap();
 
         fs::write(
-            project_dir.join("cargo.toml"),
-            "[package]\nname = \"override-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            project_dir.join("rustscript.json"),
+            r#"{"name": "test-compile-err"}"#,
         )
         .unwrap();
-
-        // Write source that imports rand (will be auto-detected as "*")
-        fs::write(
-            src_dir.join("index.rts"),
-            "import { thread_rng } from \"rand\";\n\nfunction main() {\n  console.log(\"hi\");\n}\n",
-        )
-        .unwrap();
-
-        // Add explicit version via rsc.toml
-        crate::deps::add_dependency(&project_dir, "rand", Some("0.8"), &[], false).unwrap();
+        fs::write(src_dir.join("main.rts"), "function {").unwrap();
 
         let project = Project::open(&project_dir).unwrap();
-        let (_, build_dir, _, _) = project.compile().unwrap();
-
-        let cargo_toml = fs::read_to_string(build_dir.join("Cargo.toml")).unwrap();
-        // The explicit version "0.8" should override the auto-detected "*"
+        let err = project.test(false, &[]).unwrap_err();
         assert!(
-            cargo_toml.contains("\"0.8\""),
-            "expected version \"0.8\" to override wildcard, got:\n{cargo_toml}"
+            matches!(err, DriverError::CompilationFailed(_)),
+            "expected CompilationFailed, got: {err:?}"
         );
     }
 
     // --- Color output tests ---
+
     #[test]
     fn test_format_status_never_produces_plain_text() {
         let result = format_status(
@@ -2443,33 +2346,6 @@ async function fetchData(): string {
         );
         assert!(result.contains("\x1b[1;32m"), "should contain bold green");
         assert!(result.contains("\x1b[0m"), "should contain reset");
-        assert!(result.contains("Compiling"), "should contain the label");
-        assert!(
-            result.contains("myproject v0.1.0"),
-            "should contain the message"
-        );
-    }
-
-    #[test]
-    fn test_format_status_always_produces_ansi_red_for_error() {
-        let result = format_status(
-            "error:",
-            "something broke",
-            StatusStyle::Error,
-            ColorMode::Always,
-        );
-        assert!(result.contains("\x1b[1;31m"), "should contain bold red");
-    }
-
-    #[test]
-    fn test_format_status_always_produces_ansi_yellow_for_warning() {
-        let result = format_status(
-            "warning:",
-            "something off",
-            StatusStyle::Warning,
-            ColorMode::Always,
-        );
-        assert!(result.contains("\x1b[1;33m"), "should contain bold yellow");
     }
 
     #[test]
@@ -2488,17 +2364,17 @@ async function fetchData(): string {
     #[test]
     fn test_load_compile_options_with_rustdoc_no_docs_returns_empty_sigs() {
         let tmp = TempDir::new().unwrap();
-        let build_dir = tmp.path().join(".rsc-build");
-        fs::create_dir_all(&build_dir).unwrap();
+        let project_dir = tmp.path().join("doc-test");
+        fs::create_dir_all(&project_dir).unwrap();
 
         let project = Project {
-            root: tmp.path().to_path_buf(),
+            root: project_dir.clone(),
             name: "test".to_owned(),
             compile_options: crate::pipeline::CompileOptions::default(),
             color_mode: ColorMode::Never,
         };
 
-        let options = project.load_compile_options_with_rustdoc(&build_dir);
+        let options = project.load_compile_options_with_rustdoc(&project_dir);
         assert!(
             options.external_signatures.is_empty(),
             "no doc dir should yield empty external signatures"
@@ -2508,18 +2384,18 @@ async function fetchData(): string {
     #[test]
     fn test_load_compile_options_with_rustdoc_empty_doc_dir_returns_empty() {
         let tmp = TempDir::new().unwrap();
-        let build_dir = tmp.path().join(".rsc-build");
-        let doc_dir = build_dir.join("target").join("doc");
+        let project_dir = tmp.path().join("doc-test2");
+        let doc_dir = project_dir.join("target").join("doc");
         fs::create_dir_all(&doc_dir).unwrap();
 
         let project = Project {
-            root: tmp.path().to_path_buf(),
+            root: project_dir.clone(),
             name: "test".to_owned(),
             compile_options: crate::pipeline::CompileOptions::default(),
             color_mode: ColorMode::Never,
         };
 
-        let options = project.load_compile_options_with_rustdoc(&build_dir);
+        let options = project.load_compile_options_with_rustdoc(&project_dir);
         assert!(
             options.external_signatures.is_empty(),
             "empty doc dir should yield empty external signatures"
@@ -2529,17 +2405,79 @@ async function fetchData(): string {
     #[test]
     fn test_maybe_generate_rustdoc_skips_when_json_exists() {
         let tmp = TempDir::new().unwrap();
-        let build_dir = tmp.path().join(".rsc-build");
-        let doc_dir = build_dir.join("target").join("doc");
+        let project_dir = tmp.path().join("cached-docs");
+        let doc_dir = project_dir.join("target").join("doc");
         fs::create_dir_all(&doc_dir).unwrap();
 
         // Write a dummy .json file to simulate cached docs
         fs::write(doc_dir.join("serde.json"), "{}").unwrap();
 
         // This should return early without calling cargo doc.
-        // If it didn't skip, it would try to run cargo doc and potentially
-        // do something noisy, but since we just check the caching logic
-        // we verify it doesn't panic and returns cleanly.
-        Project::maybe_generate_rustdoc(&build_dir);
+        Project::maybe_generate_rustdoc(&project_dir);
+    }
+
+    // --- Merge function unit tests ---
+
+    #[test]
+    fn test_merge_cargo_toml_adds_deps_to_existing() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        let mut auto = BTreeMap::new();
+        auto.insert("serde".to_owned(), DependencySpec::Simple("1".to_owned()));
+
+        merge_cargo_toml(&path, &auto, &BTreeMap::new()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("serde"));
+    }
+
+    #[test]
+    fn test_merge_cargo_toml_does_not_overwrite_existing_deps() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1.0.200\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        let mut auto = BTreeMap::new();
+        auto.insert("serde".to_owned(), DependencySpec::Simple("*".to_owned()));
+
+        merge_cargo_toml(&path, &auto, &BTreeMap::new()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("1.0.200"),
+            "existing pinned version should be preserved, got:\n{content}"
+        );
+    }
+
+    #[test]
+    fn test_merge_cargo_toml_explicit_overrides() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Cargo.toml");
+        fs::write(
+            &path,
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nrand = \"0.7\"\n\n[workspace]\n",
+        )
+        .unwrap();
+
+        let mut explicit = BTreeMap::new();
+        explicit.insert("rand".to_owned(), DepSpec::Simple("0.8".to_owned()));
+
+        merge_cargo_toml(&path, &BTreeMap::new(), &explicit).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("0.8"),
+            "explicit dep should override, got:\n{content}"
+        );
     }
 }

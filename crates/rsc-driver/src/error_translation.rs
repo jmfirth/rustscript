@@ -274,7 +274,7 @@ static ENRICHMENT_PATTERNS: LazyLock<EnrichmentPatterns> = LazyLock::new(|| Enri
 /// When `source_map` is `None`, only type name translation is performed (Phase 2 behavior).
 /// The `rts_source` parameter is the original `.rts` source text, used to convert byte
 /// offsets in spans to line numbers. The `rts_filename` is the display name for the `.rts`
-/// file (e.g., `"src/index.rts"`).
+/// file (e.g., `"src/main.rts"`).
 #[must_use]
 pub fn translate_rustc_errors(
     stderr: &str,
@@ -431,7 +431,7 @@ fn remap_file_references(
     rts_source: Option<&str>,
     rts_filename: Option<&str>,
 ) -> String {
-    let rts_file = rts_filename.unwrap_or("src/index.rts");
+    let rts_file = rts_filename.unwrap_or("src/main.rts");
     let pattern = &PATTERNS.file_reference;
 
     pattern
@@ -1479,16 +1479,16 @@ mod tests {
             stderr,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
         );
         assert!(
-            result.contains("src/index.rts:4:10"),
-            "expected src/index.rts:4:10 in output, got:\n{result}"
+            result.contains("src/main.rts:4:10"),
+            "expected src/main.rts:4:10 in output, got:\n{result}"
         );
     }
 
     // Task 040 Test 5: File name translation —
-    // src/main.rs is replaced with src/index.rts.
+    // src/main.rs is replaced with src/main.rts.
     #[test]
     fn test_translate_file_name_remapped_to_rts() {
         use rsc_syntax::span::Span;
@@ -1499,11 +1499,11 @@ mod tests {
             stderr,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
         );
         assert!(
-            result.contains("src/index.rts"),
-            "expected src/index.rts in output, got:\n{result}"
+            result.contains("src/main.rts"),
+            "expected src/main.rts in output, got:\n{result}"
         );
         assert!(
             !result.contains("src/main.rs"),
@@ -1518,12 +1518,8 @@ mod tests {
         use rsc_syntax::span::Span;
         let source_map: Vec<Option<Span>> = vec![None, Some(Span::new(0, 5))];
         let stderr = "error: expected String at src/main.rs:2:5\n";
-        let result = translate_rustc_errors(
-            stderr,
-            Some(&source_map),
-            Some("x\n"),
-            Some("src/index.rts"),
-        );
+        let result =
+            translate_rustc_errors(stderr, Some(&source_map), Some("x\n"), Some("src/main.rts"));
         assert!(
             result.contains("expected string"),
             "String should be translated to string, got:\n{result}"
@@ -1554,12 +1550,8 @@ mod tests {
         // Source map has 2 entries, but .rs line 5 is out of bounds.
         let source_map: Vec<Option<Span>> = vec![None, Some(Span::new(0, 5))];
         let stderr = " --> src/main.rs:5:10\n";
-        let result = translate_rustc_errors(
-            stderr,
-            Some(&source_map),
-            Some("x\n"),
-            Some("src/index.rts"),
-        );
+        let result =
+            translate_rustc_errors(stderr, Some(&source_map), Some("x\n"), Some("src/main.rts"));
         assert!(
             result.contains("src/main.rs:5:10"),
             "unmapped line should keep .rs reference, got:\n{result}"
@@ -1592,10 +1584,10 @@ mod tests {
             stderr,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
         );
         assert!(
-            result.contains("src/index.rts:1:5"),
+            result.contains("src/main.rts:1:5"),
             "correctness scenario 1: expected line 1, got:\n{result}"
         );
     }
@@ -1619,15 +1611,15 @@ mod tests {
             stderr,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
         );
         assert!(
             result.contains("expected string"),
             "String should be translated to string, got:\n{result}"
         );
         assert!(
-            result.contains("src/index.rts:3:10"),
-            "expected src/index.rts:3:10, got:\n{result}"
+            result.contains("src/main.rts:3:10"),
+            "expected src/main.rts:3:10, got:\n{result}"
         );
     }
 
@@ -1902,11 +1894,11 @@ mod tests {
             &diagnostics,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
             ColorMode::Never,
         );
         assert!(
-            rendered.contains("src/index.rts:4:10"),
+            rendered.contains("src/main.rts:4:10"),
             "should remap to rts file and line, got: {rendered}"
         );
     }
@@ -2189,7 +2181,7 @@ mod tests {
             stderr,
             Some(&source_map),
             Some(rts_source),
-            Some("src/index.rts"),
+            Some("src/main.rts"),
         );
         assert!(
             result.contains("generated by the RustScript compiler"),

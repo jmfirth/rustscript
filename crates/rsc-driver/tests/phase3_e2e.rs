@@ -23,7 +23,7 @@ fn test_e2e_p3_template_format_build_pipeline() {
     init_project("fmt-pipe", tmp.path(), Some("cli")).expect("init_project failed");
 
     let project_dir = tmp.path().join("fmt-pipe");
-    let source_path = project_dir.join("src/index.rts");
+    let source_path = project_dir.join("src/main.rts");
 
     // Read the template source
     let original = std::fs::read_to_string(&source_path).expect("read source");
@@ -105,11 +105,11 @@ fn test_e2e_p3_init_break_check_catches_error() {
     let project_dir = tmp.path().join("check-test");
 
     // Overwrite source with broken code
-    std::fs::write(project_dir.join("src/index.rts"), "function {").expect("write broken source");
+    std::fs::write(project_dir.join("src/main.rts"), "function {").expect("write broken source");
 
     // Open project and compile — should fail
-    let source = std::fs::read_to_string(project_dir.join("src/index.rts")).expect("read source");
-    let result = compile_source(&source, "index.rts");
+    let source = std::fs::read_to_string(project_dir.join("src/main.rts")).expect("read source");
+    let result = compile_source(&source, "main.rts");
 
     assert!(
         result.has_errors,
@@ -209,7 +209,7 @@ fn test_e2e_p3_error_translation_integration() {
         rustc_stderr,
         Some(&source_map),
         Some(rts_source),
-        Some("src/index.rts"),
+        Some("src/main.rts"),
     );
 
     // Should use RustScript type names
@@ -220,7 +220,7 @@ fn test_e2e_p3_error_translation_integration() {
 
     // Should reference .rts file
     assert!(
-        translated.contains("src/index.rts"),
+        translated.contains("src/main.rts"),
         "should reference .rts file, got: {translated}"
     );
 }

@@ -8,6 +8,7 @@
 pub mod deps;
 pub mod error;
 pub mod error_translation;
+pub mod manifest;
 mod pipeline;
 mod project;
 pub mod rustdoc_cache;

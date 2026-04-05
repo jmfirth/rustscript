@@ -355,7 +355,7 @@ function main() {
 fn test_e2e_two_file_module_import() {
     let stdout = compile_multi_file_and_run(&[
         (
-            "index.rts",
+            "main.rts",
             "\
 import { greet } from \"./utils\";
 
@@ -520,7 +520,7 @@ function main() {
 fn test_e2e_p1_integration_multi_file_math() {
     let stdout = compile_multi_file_and_run(&[
         (
-            "index.rts",
+            "main.rts",
             "\
 import { add, multiply } from \"./math\";
 

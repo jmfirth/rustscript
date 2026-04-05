@@ -6,11 +6,11 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
     /// No project found walking up from the given directory.
-    #[error("project not found (looked for cargo.toml or src/ starting from {0})")]
+    #[error("project not found (looked for rustscript.json or src/ starting from {0})")]
     ProjectNotFound(PathBuf),
 
-    /// Neither `src/index.rts` nor `src/main.rts` exists.
-    #[error("main source file not found (expected src/index.rts or src/main.rts)")]
+    /// `src/main.rts` does not exist.
+    #[error("main source file not found (expected src/main.rts)")]
     MainSourceNotFound,
 
     /// Compilation produced error-level diagnostics.
@@ -39,11 +39,19 @@ pub enum DriverError {
     #[error("cargo add failed for crate '{0}'")]
     CargoAddFailed(String),
 
-    /// The specified dependency was not found in `rsc.toml`.
-    #[error("dependency '{0}' not found in rsc.toml")]
+    /// The specified dependency was not found in `rustscript.json`.
+    #[error("dependency '{0}' not found in rustscript.json")]
     DependencyNotFound(String),
 
-    /// Failed to parse `rsc.toml`.
+    /// Failed to parse `rustscript.json`.
+    #[error("failed to parse rustscript.json: {0}")]
+    ManifestParseFailed(String),
+
+    /// `rustscript.json` not found at project root.
+    #[error("rustscript.json not found in {0}")]
+    ManifestNotFound(PathBuf),
+
+    /// Failed to parse `rsc.toml` (legacy, kept for backward compat during migration).
     #[error("failed to parse rsc.toml: {0}")]
     ConfigParseFailed(String),
 

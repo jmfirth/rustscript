@@ -1220,7 +1220,7 @@ function main() {
 
     let result = compile_source_with_mods(
         source,
-        "index.rts",
+        "main.rts",
         vec![RustModDecl {
             name: "utils".to_owned(),
             public: false,

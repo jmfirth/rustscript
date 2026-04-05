@@ -263,19 +263,28 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
 
     for enum_id in enum_ids {
         let variant_ids: Vec<String> = {
-            let Some(item) = crate_data.items.get(&enum_id) else { continue };
-            let RustdocItemKind::Enum(e) = &item.kind else { continue };
+            let Some(item) = crate_data.items.get(&enum_id) else {
+                continue;
+            };
+            let RustdocItemKind::Enum(e) = &item.kind else {
+                continue;
+            };
             // Current variants are just names from ID strings — get the actual IDs
             // from the enum data in the raw index
             if let Some(raw_item) = index.get(&enum_id) {
-                if let Some(variants) = raw_item.get("inner")
+                if let Some(variants) = raw_item
+                    .get("inner")
                     .and_then(|i| i.get("enum"))
                     .and_then(|e| e.get("variants"))
                     .and_then(|v| v.as_array())
                 {
-                    variants.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned)
-                            .or_else(|| v.as_u64().map(|n| n.to_string())))
+                    variants
+                        .iter()
+                        .filter_map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .or_else(|| v.as_u64().map(|n| n.to_string()))
+                        })
                         .collect()
                 } else {
                     continue;
@@ -290,40 +299,53 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
         for vid in &variant_ids {
             if let Some(v_item) = index.get(vid.as_str()) {
                 let v_name = v_item.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                let v_kind = v_item.get("inner")
+                let v_kind = v_item
+                    .get("inner")
                     .and_then(|i| i.get("variant"))
                     .and_then(|v| v.get("kind"))
                     .and_then(|k| {
                         if k.get("plain").is_some() || k.as_str() == Some("plain") {
                             Some(RustdocVariantKind::Plain)
                         } else if let Some(tuple_ids) = k.get("tuple").and_then(|t| t.as_array()) {
-                            let types: Vec<RustdocType> = tuple_ids.iter()
+                            let types: Vec<RustdocType> = tuple_ids
+                                .iter()
                                 .filter_map(|tid| {
-                                    let tid_str = tid.as_str().map(str::to_owned)
+                                    let tid_str = tid
+                                        .as_str()
+                                        .map(str::to_owned)
                                         .or_else(|| tid.as_u64().map(|n| n.to_string()))?;
                                     let field_item = index.get(&tid_str)?;
-                                    let ty_value = field_item.get("inner")
+                                    let ty_value = field_item
+                                        .get("inner")
                                         .and_then(|i| i.get("struct_field"))?;
                                     Some(parse_type(ty_value))
                                 })
                                 .collect();
                             Some(RustdocVariantKind::Tuple(types))
                         } else if let Some(struct_data) = k.get("struct") {
-                            let field_ids = struct_data.get("fields")
+                            let field_ids = struct_data
+                                .get("fields")
                                 .and_then(|f| f.as_array())
                                 .unwrap_or(&Vec::new())
                                 .clone();
-                            let fields: Vec<RustdocField> = field_ids.iter()
+                            let fields: Vec<RustdocField> = field_ids
+                                .iter()
                                 .filter_map(|fid| {
-                                    let fid_str = fid.as_str().map(str::to_owned)
+                                    let fid_str = fid
+                                        .as_str()
+                                        .map(str::to_owned)
                                         .or_else(|| fid.as_u64().map(|n| n.to_string()))?;
                                     let field_item = index.get(&fid_str)?;
                                     let f_name = field_item.get("name")?.as_str()?.to_owned();
-                                    let f_ty = field_item.get("inner")
+                                    let f_ty = field_item
+                                        .get("inner")
                                         .and_then(|i| i.get("struct_field"))
                                         .map(parse_type)
                                         .unwrap_or(RustdocType::Unknown("?".to_owned()));
-                                    Some(RustdocField { name: f_name, ty: f_ty })
+                                    Some(RustdocField {
+                                        name: f_name,
+                                        ty: f_ty,
+                                    })
                                 })
                                 .collect();
                             Some(RustdocVariantKind::Struct(fields))
@@ -353,7 +375,9 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
     // are considered public API. This filters out internal trait methods,
     // impl details, and submodule internals.
     if let Some(root_id) = json.get("root") {
-        let root_str = root_id.as_str().map(str::to_owned)
+        let root_str = root_id
+            .as_str()
+            .map(str::to_owned)
             .or_else(|| root_id.as_u64().map(|n| n.to_string()));
         if let Some(root_str) = root_str {
             collect_public_api(index, &root_str, &mut crate_data.public_api_ids);
@@ -369,23 +393,39 @@ fn collect_public_api(
     module_id: &str,
     public_ids: &mut std::collections::HashSet<String>,
 ) {
-    let Some(module_item) = index.get(module_id) else { return };
-    let Some(inner) = module_item.get("inner") else { return };
-    let Some(mod_data) = inner.get("module") else { return };
-    let Some(items) = mod_data.get("items").and_then(|i| i.as_array()) else { return };
+    let Some(module_item) = index.get(module_id) else {
+        return;
+    };
+    let Some(inner) = module_item.get("inner") else {
+        return;
+    };
+    let Some(mod_data) = inner.get("module") else {
+        return;
+    };
+    let Some(items) = mod_data.get("items").and_then(|i| i.as_array()) else {
+        return;
+    };
 
     for item_id_val in items {
-        let item_id = item_id_val.as_str().map(str::to_owned)
+        let item_id = item_id_val
+            .as_str()
+            .map(str::to_owned)
             .or_else(|| item_id_val.as_u64().map(|n| n.to_string()));
         let Some(item_id) = item_id else { continue };
 
-        let Some(child) = index.get(&item_id) else { continue };
-        let Some(child_inner) = child.get("inner") else { continue };
+        let Some(child) = index.get(&item_id) else {
+            continue;
+        };
+        let Some(child_inner) = child.get("inner") else {
+            continue;
+        };
 
         if let Some(use_data) = child_inner.get("use") {
             // Re-export: follow to the target item
             if let Some(target_id) = use_data.get("id") {
-                let target_str = target_id.as_str().map(str::to_owned)
+                let target_str = target_id
+                    .as_str()
+                    .map(str::to_owned)
                     .or_else(|| target_id.as_u64().map(|n| n.to_string()));
                 if let Some(target_str) = target_str {
                     public_ids.insert(target_str);

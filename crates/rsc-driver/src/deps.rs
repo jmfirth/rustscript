@@ -1,17 +1,15 @@
 //! Dependency management for `RustScript` projects.
 //!
-//! Handles reading and writing `rsc.toml` configuration, adding/removing
+//! Handles reading and writing dependencies via `rustscript.json`, adding/removing
 //! dependencies, and providing import suggestions for common crates.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::error::{DriverError, Result};
+use crate::manifest::{self, DepSpec, DetailedDep};
 
-/// Name of the `RustScript` project config file.
-const RSC_CONFIG: &str = "rsc.toml";
-
-/// A dependency entry in `rsc.toml`.
+/// A dependency entry (used for the public API).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepEntry {
     /// The crate version (e.g., `"1"`, `"0.8"`).
@@ -37,100 +35,64 @@ pub struct AddResult {
     pub import_suggestion: Option<String>,
 }
 
-/// Read all dependencies from `rsc.toml` at the given project root.
+/// Read all dependencies from `rustscript.json` at the given project root.
 ///
 /// Returns two maps: regular dependencies and dev dependencies.
-/// If `rsc.toml` does not exist, returns empty maps (not an error).
+/// If `rustscript.json` does not exist, returns empty maps (not an error).
 ///
 /// # Errors
 ///
-/// Returns [`DriverError::ConfigParseFailed`] if `rsc.toml` exists but is malformed,
+/// Returns [`DriverError::ManifestParseFailed`] if `rustscript.json` exists but is malformed,
 /// or an I/O error if the file cannot be read.
 pub fn read_config(
     project_root: &Path,
 ) -> Result<(BTreeMap<String, DepEntry>, BTreeMap<String, DepEntry>)> {
-    let config_path = project_root.join(RSC_CONFIG);
+    let manifest = match manifest::try_read_manifest(project_root)? {
+        Some(m) => m,
+        None => return Ok((BTreeMap::new(), BTreeMap::new())),
+    };
 
-    if !config_path.is_file() {
-        return Ok((BTreeMap::new(), BTreeMap::new()));
-    }
+    let deps = manifest
+        .dependencies
+        .iter()
+        .map(|(name, spec)| {
+            (
+                name.clone(),
+                DepEntry {
+                    version: spec.version().to_owned(),
+                    features: spec.features().to_vec(),
+                    dev: false,
+                },
+            )
+        })
+        .collect();
 
-    let content = std::fs::read_to_string(&config_path)?;
-    parse_config(&content)
-}
-
-/// Parse `rsc.toml` content into dependency maps.
-fn parse_config(content: &str) -> Result<(BTreeMap<String, DepEntry>, BTreeMap<String, DepEntry>)> {
-    let table: toml::Table = content
-        .parse()
-        .map_err(|e: toml::de::Error| DriverError::ConfigParseFailed(e.to_string()))?;
-
-    let deps = parse_dep_section(table.get("dependencies"), false)?;
-    let dev_deps = parse_dep_section(table.get("dev-dependencies"), true)?;
+    let dev_deps = manifest
+        .dev_dependencies
+        .iter()
+        .map(|(name, spec)| {
+            (
+                name.clone(),
+                DepEntry {
+                    version: spec.version().to_owned(),
+                    features: spec.features().to_vec(),
+                    dev: true,
+                },
+            )
+        })
+        .collect();
 
     Ok((deps, dev_deps))
 }
 
-/// Parse a single `[dependencies]` or `[dev-dependencies]` section.
-fn parse_dep_section(
-    section: Option<&toml::Value>,
-    dev: bool,
-) -> Result<BTreeMap<String, DepEntry>> {
-    let mut result = BTreeMap::new();
-
-    let Some(toml::Value::Table(table)) = section else {
-        return Ok(result);
-    };
-
-    for (name, value) in table {
-        let entry = match value {
-            toml::Value::String(version) => DepEntry {
-                version: version.clone(),
-                features: Vec::new(),
-                dev,
-            },
-            toml::Value::Table(t) => {
-                let version = t
-                    .get("version")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("*")
-                    .to_owned();
-                let features = t
-                    .get("features")
-                    .and_then(toml::Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(toml::Value::as_str)
-                            .map(String::from)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                DepEntry {
-                    version,
-                    features,
-                    dev,
-                }
-            }
-            _ => {
-                return Err(DriverError::ConfigParseFailed(format!(
-                    "invalid dependency format for '{name}'"
-                )));
-            }
-        };
-        result.insert(name.clone(), entry);
-    }
-
-    Ok(result)
-}
-
-/// Add a dependency to `rsc.toml` at the given project root.
+/// Add a dependency to `rustscript.json` at the given project root.
 ///
-/// Creates `rsc.toml` if it does not exist. Updates an existing entry
+/// Creates `rustscript.json` if it does not exist. Updates an existing entry
 /// if the crate is already present.
 ///
 /// # Errors
 ///
-/// Returns [`DriverError::ConfigParseFailed`] if the existing `rsc.toml` is malformed,
+/// Returns [`DriverError::ManifestParseFailed`] if the existing `rustscript.json` is malformed,
 /// or an I/O error if the file cannot be read or written.
 pub fn add_dependency(
     project_root: &Path,
@@ -139,23 +101,41 @@ pub fn add_dependency(
     features: &[String],
     dev: bool,
 ) -> Result<AddResult> {
-    let (mut deps, mut dev_deps) = read_config(project_root)?;
+    let mut manifest_data = match manifest::try_read_manifest(project_root)? {
+        Some(m) => m,
+        None => {
+            // Create a new manifest using the directory name as the project name
+            let name = project_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unnamed")
+                .to_owned();
+            manifest::new_manifest(&name)
+        }
+    };
 
     let resolved_version = version.unwrap_or("*").to_owned();
 
-    let entry = DepEntry {
-        version: resolved_version.clone(),
-        features: features.to_vec(),
-        dev,
+    let spec = if features.is_empty() {
+        DepSpec::Simple(resolved_version.clone())
+    } else {
+        DepSpec::Detailed(DetailedDep {
+            version: resolved_version.clone(),
+            features: features.to_vec(),
+        })
     };
 
     if dev {
-        dev_deps.insert(crate_name.to_owned(), entry);
+        manifest_data
+            .dev_dependencies
+            .insert(crate_name.to_owned(), spec);
     } else {
-        deps.insert(crate_name.to_owned(), entry);
+        manifest_data
+            .dependencies
+            .insert(crate_name.to_owned(), spec);
     }
 
-    write_config(project_root, &deps, &dev_deps)?;
+    manifest::write_manifest(project_root, &manifest_data)?;
 
     Ok(AddResult {
         crate_name: crate_name.to_owned(),
@@ -166,86 +146,41 @@ pub fn add_dependency(
     })
 }
 
-/// Remove a dependency from `rsc.toml` at the given project root.
+/// Remove a dependency from `rustscript.json` at the given project root.
 ///
-/// Removes from both `[dependencies]` and `[dev-dependencies]`.
+/// Removes from both `dependencies` and `devDependencies`.
 ///
 /// # Errors
 ///
-/// Returns [`DriverError::DependencyNotFound`] if the crate is not in `rsc.toml`.
+/// Returns [`DriverError::DependencyNotFound`] if the crate is not in `rustscript.json`.
 pub fn remove_dependency(project_root: &Path, crate_name: &str) -> Result<()> {
-    let (mut deps, mut dev_deps) = read_config(project_root)?;
+    let mut manifest_data = match manifest::try_read_manifest(project_root)? {
+        Some(m) => m,
+        None => return Err(DriverError::DependencyNotFound(crate_name.to_owned())),
+    };
 
-    let found_in_deps = deps.remove(crate_name).is_some();
-    let found_in_dev_deps = dev_deps.remove(crate_name).is_some();
+    let found_in_deps = manifest_data.dependencies.remove(crate_name).is_some();
+    let found_in_dev_deps = manifest_data.dev_dependencies.remove(crate_name).is_some();
 
     if !found_in_deps && !found_in_dev_deps {
         return Err(DriverError::DependencyNotFound(crate_name.to_owned()));
     }
 
-    write_config(project_root, &deps, &dev_deps)?;
+    manifest::write_manifest(project_root, &manifest_data)?;
     Ok(())
 }
 
-/// Write dependency maps back to `rsc.toml`.
-fn write_config(
-    project_root: &Path,
-    deps: &BTreeMap<String, DepEntry>,
-    dev_deps: &BTreeMap<String, DepEntry>,
-) -> Result<()> {
-    let mut table = toml::Table::new();
-
-    if !deps.is_empty() {
-        table.insert(
-            "dependencies".to_owned(),
-            toml::Value::Table(deps_to_toml(deps)),
-        );
+/// Convert a `DepEntry` to a manifest `DepSpec`.
+#[must_use]
+pub fn entry_to_spec(entry: &DepEntry) -> DepSpec {
+    if entry.features.is_empty() {
+        DepSpec::Simple(entry.version.clone())
+    } else {
+        DepSpec::Detailed(DetailedDep {
+            version: entry.version.clone(),
+            features: entry.features.clone(),
+        })
     }
-
-    if !dev_deps.is_empty() {
-        table.insert(
-            "dev-dependencies".to_owned(),
-            toml::Value::Table(deps_to_toml(dev_deps)),
-        );
-    }
-
-    let content = toml::to_string_pretty(&table)
-        .map_err(|e| DriverError::ConfigParseFailed(e.to_string()))?;
-
-    let config_path = project_root.join(RSC_CONFIG);
-    std::fs::write(config_path, content)?;
-
-    Ok(())
-}
-
-/// Convert a dependency map to a TOML table.
-fn deps_to_toml(deps: &BTreeMap<String, DepEntry>) -> toml::Table {
-    let mut table = toml::Table::new();
-
-    for (name, entry) in deps {
-        if entry.features.is_empty() {
-            table.insert(name.clone(), toml::Value::String(entry.version.clone()));
-        } else {
-            let mut dep_table = toml::Table::new();
-            dep_table.insert(
-                "version".to_owned(),
-                toml::Value::String(entry.version.clone()),
-            );
-            dep_table.insert(
-                "features".to_owned(),
-                toml::Value::Array(
-                    entry
-                        .features
-                        .iter()
-                        .map(|f| toml::Value::String(f.clone()))
-                        .collect(),
-                ),
-            );
-            table.insert(name.clone(), toml::Value::Table(dep_table));
-        }
-    }
-
-    table
 }
 
 /// Return an import suggestion for well-known crates.
@@ -276,7 +211,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_add_dependency_creates_rsc_toml() {
+    fn test_add_dependency_creates_rustscript_json() {
         let tmp = TempDir::new().unwrap();
         let result = add_dependency(tmp.path(), "serde", Some("1"), &[], false).unwrap();
 
@@ -284,11 +219,14 @@ mod tests {
         assert_eq!(result.version, "1");
         assert!(!result.dev);
 
-        let config_path = tmp.path().join("rsc.toml");
+        let config_path = tmp.path().join("rustscript.json");
         assert!(config_path.is_file());
 
         let content = std::fs::read_to_string(config_path).unwrap();
-        assert!(content.contains("serde"), "rsc.toml should contain serde");
+        assert!(
+            content.contains("serde"),
+            "rustscript.json should contain serde"
+        );
     }
 
     #[test]
@@ -328,7 +266,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         add_dependency(tmp.path(), "serde", Some("1"), &[], false).unwrap();
 
-        // Add again with features — should update
+        // Add again with features - should update
         let features = vec!["derive".to_owned()];
         add_dependency(tmp.path(), "serde", Some("1"), &features, false).unwrap();
 
@@ -380,30 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_config_simple_version() {
-        let content = "[dependencies]\nserde = \"1\"\n";
-        let (deps, _) = parse_config(content).unwrap();
-        assert_eq!(deps["serde"].version, "1");
-        assert!(deps["serde"].features.is_empty());
-    }
-
-    #[test]
-    fn test_parse_config_detailed_version() {
-        let content = "[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n";
-        let (deps, _) = parse_config(content).unwrap();
-        assert_eq!(deps["serde"].version, "1");
-        assert_eq!(deps["serde"].features, vec!["derive"]);
-    }
-
-    #[test]
-    fn test_parse_config_mixed_sections() {
-        let content = "[dependencies]\nserde = \"1\"\n\n[dev-dependencies]\ntempfile = \"3\"\n";
-        let (deps, dev_deps) = parse_config(content).unwrap();
-        assert!(deps.contains_key("serde"));
-        assert!(dev_deps.contains_key("tempfile"));
-    }
-
-    #[test]
     fn test_import_suggestion_known_crate() {
         let suggestion = import_suggestion("serde");
         assert!(suggestion.is_some());
@@ -437,5 +351,50 @@ mod tests {
         let keys: Vec<&String> = deps.keys().collect();
         // BTreeMap gives alphabetical order
         assert_eq!(keys, vec!["anyhow", "serde", "tokio"]);
+    }
+
+    #[test]
+    fn test_read_config_with_rustscript_json() {
+        let tmp = TempDir::new().unwrap();
+        let json = r#"{
+            "name": "test",
+            "dependencies": {
+                "serde": { "version": "1", "features": ["derive"] },
+                "tokio": "1"
+            },
+            "devDependencies": {
+                "tempfile": "3"
+            }
+        }"#;
+        std::fs::write(tmp.path().join("rustscript.json"), json).unwrap();
+
+        let (deps, dev_deps) = read_config(tmp.path()).unwrap();
+        assert_eq!(deps["serde"].version, "1");
+        assert_eq!(deps["serde"].features, vec!["derive"]);
+        assert_eq!(deps["tokio"].version, "1");
+        assert!(deps["tokio"].features.is_empty());
+        assert_eq!(dev_deps["tempfile"].version, "3");
+    }
+
+    #[test]
+    fn test_entry_to_spec_simple() {
+        let entry = DepEntry {
+            version: "1".to_owned(),
+            features: vec![],
+            dev: false,
+        };
+        let spec = entry_to_spec(&entry);
+        assert!(matches!(spec, DepSpec::Simple(ref v) if v == "1"));
+    }
+
+    #[test]
+    fn test_entry_to_spec_detailed() {
+        let entry = DepEntry {
+            version: "1".to_owned(),
+            features: vec!["derive".to_owned()],
+            dev: false,
+        };
+        let spec = entry_to_spec(&entry);
+        assert!(matches!(spec, DepSpec::Detailed(_)));
     }
 }

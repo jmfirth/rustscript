@@ -826,6 +826,8 @@ pub struct Block {
 
 /// A statement within a block.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+// ForClassicStmt is large but boxing would add indirection in the hot path; revisit if profiling shows cost
 pub enum Stmt {
     /// A variable declaration (`const` or `let` binding).
     VarDecl(VarDecl),
@@ -924,7 +926,7 @@ pub enum VarBinding {
     Const,
     /// A mutable binding (`let`). Lowers to Rust `let mut`.
     Let,
-    /// A `var` binding. Treated as block-scoped `let mut` in RustScript.
+    /// A `var` binding. Treated as block-scoped `let mut` in `RustScript`.
     Var,
 }
 

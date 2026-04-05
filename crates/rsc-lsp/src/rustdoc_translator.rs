@@ -670,7 +670,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("greet", &func),
@@ -687,7 +688,8 @@ mod tests {
             is_async: true,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("serve", &func),
@@ -716,7 +718,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("get", &func),
@@ -915,7 +918,8 @@ mod tests {
                 is_async: false,
                 is_unsafe: false,
                 has_self: false,
-                parent_type: None, is_trait_impl: false,
+                parent_type: None,
+                is_trait_impl: false,
             }),
         };
         let hover = translate_item_to_hover(&item);
@@ -1069,7 +1073,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("handler", &func),
@@ -1098,7 +1103,8 @@ mod tests {
             is_async: false,
             is_unsafe: false,
             has_self: false,
-            parent_type: None, is_trait_impl: false,
+            parent_type: None,
+            is_trait_impl: false,
         };
         assert_eq!(
             translate_function("process", &func),

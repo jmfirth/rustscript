@@ -95,11 +95,11 @@ fn test_error_references_rts_line_numbers() {
         rustc_stderr,
         Some(&source_map),
         Some(rts_source),
-        Some("src/index.rts"),
+        Some("src/main.rts"),
     );
 
     assert!(
-        translated.contains("src/index.rts"),
+        translated.contains("src/main.rts"),
         "should reference .rts file, got: {translated}"
     );
     assert!(

@@ -156,7 +156,7 @@ pub fn compile_diagnostics(rts_source: &str) -> Vec<String> {
 /// Compile a multi-file RustScript project, build with cargo, run, and return stdout.
 ///
 /// Takes a list of `(filename, source)` pairs. The first file is treated as the
-/// entry point (index.rts). All other files are modules.
+/// entry point (main.rts). All other files are modules.
 ///
 /// This is necessarily slow (invokes cargo) — tests using it should be `#[ignore]`.
 ///
@@ -167,10 +167,10 @@ pub fn compile_multi_file_and_run(files: &[(&str, &str)]) -> String {
     let src_dir = project_dir.join("src");
     fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
-    // Write cargo.toml for the RustScript project
-    let cargo_toml =
-        "[package]\nname = \"rsc-multi-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-    fs::write(project_dir.join("cargo.toml"), cargo_toml).expect("failed to write cargo.toml");
+    // Write rustscript.json for the RustScript project
+    let manifest = r#"{"name": "rsc-multi-test"}"#;
+    fs::write(project_dir.join("rustscript.json"), manifest)
+        .expect("failed to write rustscript.json");
 
     // Write all .rts source files
     for (filename, source) in files {
@@ -179,7 +179,7 @@ pub fn compile_multi_file_and_run(files: &[(&str, &str)]) -> String {
 
     // Open and compile the project using the driver
     let project = rsc_driver::Project::open(&project_dir).expect("failed to open project");
-    let (result, build_dir, _, _) = project.compile().expect("failed to compile project");
+    let (result, project_root, _, _) = project.compile().expect("failed to compile project");
 
     assert!(
         !result.has_errors,
@@ -191,20 +191,20 @@ pub fn compile_multi_file_and_run(files: &[(&str, &str)]) -> String {
             .collect::<Vec<_>>()
     );
 
-    // Build and run with cargo
+    // Build and run with cargo in the project directory (in-place compilation)
     let output = Command::new("cargo")
         .arg("run")
         .arg("--quiet")
-        .current_dir(&build_dir)
+        .current_dir(&project_root)
         .output()
         .expect("failed to run cargo");
 
     assert!(
         output.status.success(),
-        "cargo run failed.\nstdout: {}\nstderr: {}\nbuild dir: {}",
+        "cargo run failed.\nstdout: {}\nstderr: {}\nproject dir: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
-        build_dir.display(),
+        project_root.display(),
     );
 
     String::from_utf8(output.stdout).expect("stdout is not valid utf-8")

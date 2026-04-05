@@ -102,8 +102,8 @@ fn test_cli_init_template_cli_creates_project() {
     );
 
     let project_dir = tmp.path().join("my-cli");
-    assert!(project_dir.join("src/index.rts").is_file());
-    assert!(project_dir.join("cargo.toml").is_file());
+    assert!(project_dir.join("src/main.rts").is_file());
+    assert!(project_dir.join("Cargo.toml").is_file());
 }
 
 // Test P3-5: rsc init with invalid template shows error
@@ -138,7 +138,7 @@ fn test_cli_fmt_check_unformatted_exits_one() {
     // Create a minimal project structure with an unformatted file
     let src_dir = tmp.path().join("src");
     std::fs::create_dir_all(&src_dir).unwrap();
-    std::fs::write(src_dir.join("index.rts"), "function foo() { const x = 1; }").unwrap();
+    std::fs::write(src_dir.join("main.rts"), "function foo() { const x = 1; }").unwrap();
 
     let output = rsc_bin()
         .args(["fmt", "--check"])
@@ -163,7 +163,7 @@ fn test_cli_fmt_formats_file_in_place() {
     // Create a minimal project structure with an unformatted file
     let src_dir = tmp.path().join("src");
     std::fs::create_dir_all(&src_dir).unwrap();
-    let source_path = src_dir.join("index.rts");
+    let source_path = src_dir.join("main.rts");
     std::fs::write(&source_path, "function foo() { const x = 1; }").unwrap();
 
     let output = rsc_bin()
@@ -203,7 +203,7 @@ fn test_cli_version_output() {
     );
 }
 
-// Test 3: rsc init test-project creates directory with src/index.rts and cargo.toml
+// Test 3: rsc init test-project creates directory with src/main.rts and Cargo.toml
 #[test]
 #[ignore] // Slow: invokes binary, creates filesystem artifacts
 fn test_cli_init_creates_project() {
@@ -223,8 +223,9 @@ fn test_cli_init_creates_project() {
     );
 
     let project_dir = tmp.path().join("test-project");
-    assert!(project_dir.join("src/index.rts").is_file());
-    assert!(project_dir.join("cargo.toml").is_file());
+    assert!(project_dir.join("src/main.rts").is_file());
+    assert!(project_dir.join("rustscript.json").is_file());
+    assert!(project_dir.join("Cargo.toml").is_file());
 }
 
 // Test 4: rsc init without name shows error about missing argument
@@ -283,7 +284,7 @@ fn test_cli_check_syntax_error_exits_one() {
         .unwrap();
 
     // Overwrite source with invalid code
-    std::fs::write(tmp.path().join("check-err/src/index.rts"), "function {").unwrap();
+    std::fs::write(tmp.path().join("check-err/src/main.rts"), "function {").unwrap();
 
     let output = rsc_bin()
         .arg("check")
@@ -363,7 +364,7 @@ fn test_cli_test_compilation_error_exits_one() {
         .unwrap();
 
     // Overwrite source with invalid code
-    std::fs::write(tmp.path().join("test-err/src/index.rts"), "function {").unwrap();
+    std::fs::write(tmp.path().join("test-err/src/main.rts"), "function {").unwrap();
 
     let output = rsc_bin()
         .arg("test")
@@ -411,8 +412,8 @@ fn test_cli_correctness_full_workflow() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Verify binary exists
-    let binary_path = project_dir.join(".rsc-build/target/debug/hello");
+    // Verify binary exists (in-place compilation: binary is in target/debug/)
+    let binary_path = project_dir.join("target/debug/hello");
     assert!(binary_path.is_file(), "compiled binary should exist");
 
     // rsc run

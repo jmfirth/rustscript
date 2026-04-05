@@ -228,12 +228,14 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 RustdocItemKind::Trait(_) => "trait",
                 RustdocItemKind::Enum(_) => "enum",
             };
-            let is_trait_impl = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl);
+            let is_trait_impl =
+                matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl);
             let parent_type = match &item.kind {
                 RustdocItemKind::Function(f) => f.parent_type.clone(),
                 _ => None,
             };
-            let is_public_api = crate_data.public_api_ids.is_empty() || crate_data.public_api_ids.contains(&item.id);
+            let is_public_api = crate_data.public_api_ids.is_empty()
+                || crate_data.public_api_ids.contains(&item.id);
             TranslatedItem {
                 name: item.name.clone(),
                 kind: kind.to_owned(),
