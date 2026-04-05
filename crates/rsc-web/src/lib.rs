@@ -887,7 +887,11 @@ fn extract_var_hover_ctx(
                             }
                         }
                     }
-                    // Try to infer from the init expression (e.g., Promise.all returns tuple)
+                    // Try to infer from the init expression
+                    // Handle: await Promise.all([f(), g()]) → tuple of return types
+                    if let Some(elem_type) = infer_array_destructure_element(i, &ad.init, ctx) {
+                        return Some(format!("```rustscript\n{binding} {name}: {elem_type}\n```"));
+                    }
                     return Some(format!("```rustscript\n{binding} {name}\n```"));
                 }
             }
@@ -912,6 +916,56 @@ fn extract_var_hover_ctx(
                     return Some(format!("```rustscript\nconst {name}\n```"));
                 }
             }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Infer the type of the i-th element in an array destructuring.
+/// Handles: `const [a, b] = await Promise.all([f(), g()])` and plain array literals.
+fn infer_array_destructure_element(
+    index: usize,
+    init: &rsc_syntax::ast::Expr,
+    ctx: &InferCtx<'_>,
+) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+
+    // Unwrap `await`
+    let inner = match &init.kind {
+        ExprKind::Await(e) => e.as_ref(),
+        _ => init,
+    };
+
+    match &inner.kind {
+        // Promise.all([f(), g()]) → infer each element
+        ExprKind::MethodCall(mc)
+            if mc.method.name == "all"
+                && matches!(mc.object.kind, ExprKind::Ident(ref id) if id.name == "Promise") =>
+        {
+            // The argument should be an array literal
+            if let Some(arr_arg) = mc.args.first() {
+                if let ExprKind::ArrayLit(elements) = &arr_arg.kind {
+                    if let Some(rsc_syntax::ast::ArrayElement::Expr(elem)) = elements.get(index) {
+                        return infer_type_from_expr_ctx(elem, ctx);
+                    }
+                }
+            }
+            None
+        }
+        // Plain array literal: const [a, b] = [expr1, expr2]
+        ExprKind::ArrayLit(elements) => {
+            if let Some(rsc_syntax::ast::ArrayElement::Expr(elem)) = elements.get(index) {
+                infer_type_from_expr_ctx(elem, ctx)
+            } else {
+                None
+            }
+        }
+        // Function call returning a tuple: const [a, b] = pair(...)
+        ExprKind::Call(call) => {
+            // If function returns a known type, we can't decompose it further without
+            // full type system support. Return None for now.
+            let _ = call;
             None
         }
         _ => None,
