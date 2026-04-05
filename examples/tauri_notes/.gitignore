@@ -1,2 +1,5 @@
 /target
 /src/*.rs
+/gen
+/frontend/node_modules
+/frontend/dist

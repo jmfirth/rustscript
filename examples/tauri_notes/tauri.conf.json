@@ -3,8 +3,7 @@
   "version": "0.1.0",
   "identifier": "dev.rustscript.tauri-notes",
   "build": {
-    "frontendDist": "../frontend/dist",
-    "devUrl": "http://localhost:3000"
+    "frontendDist": "./frontend/dist"
   },
   "app": {
     "windows": [
