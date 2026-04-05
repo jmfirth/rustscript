@@ -17,7 +17,7 @@ export async function CodeBlock({ code, language = 'typescript', filename }: Cod
   });
 
   return (
-    <div className="rounded-lg overflow-hidden border border-[var(--color-border)] h-full flex flex-col">
+    <div className="code-block-landing rounded-lg overflow-hidden border border-[var(--color-border)] h-full flex flex-col">
       {filename && (
         <div className="bg-[var(--color-bg-secondary)] px-4 py-2 text-xs font-mono text-[var(--color-text-secondary)] border-b border-[var(--color-border)]">
           {filename}
