@@ -1,0 +1,80 @@
+import { Serialize, Deserialize } from "serde";
+
+/**
+ * Tauri Notes — Desktop App Backend
+ *
+ * RustScript backend for a Tauri desktop app. Types with `derives Serialize,
+ * Deserialize` are shared with the React frontend via `rsc types`. This is
+ * the killer pattern: one language (TypeScript syntax) on both sides, with
+ * Rust performance on the backend and type-safe IPC across the boundary.
+ */
+
+/** A note in the app */
+type Note = {
+  id: u32,
+  title: string,
+  content: string,
+  created_at: string,
+  pinned: bool,
+} derives Serialize, Deserialize
+
+/** Request to create a new note */
+type CreateNoteRequest = {
+  title: string,
+  content: string,
+} derives Deserialize
+
+/** Response with operation status */
+type ApiResponse = {
+  success: bool,
+  message: string,
+} derives Serialize
+
+/** Stats about the notes collection */
+type NoteStats = {
+  total: i64,
+  pinned: i64,
+} derives Serialize
+
+// In-memory store (in a real app, this would be a database)
+function getNotes(): Array<Note> {
+  const n1: Note = { id: 1, title: "Welcome to RustScript", content: "Build desktop apps with TypeScript syntax and Rust performance.", created_at: "2026-01-01", pinned: true };
+  const n2: Note = { id: 2, title: "Tauri Integration", content: "RustScript powers your Tauri backend. Same language as your frontend.", created_at: "2026-01-02", pinned: false };
+  const n3: Note = { id: 3, title: "Type Safety", content: "Shared types between frontend and backend via rsc types.", created_at: "2026-01-03", pinned: true };
+  return [n1, n2, n3];
+}
+
+/** Get all notes */
+function get_all_notes(): string {
+  return JSON.stringify(getNotes());
+}
+
+/** Get pinned notes only */
+function get_pinned_notes(): string {
+  const notes = getNotes();
+  const pinned = notes.filter(n => n.pinned);
+  return JSON.stringify(pinned);
+}
+
+/** Search notes by title */
+function search_notes(query: string): string {
+  const notes = getNotes();
+  const lower = query.toLowerCase();
+  const matches = notes.filter(n => n.title.toLowerCase().includes(lower));
+  return JSON.stringify(matches);
+}
+
+/** Get note statistics */
+function get_stats(): string {
+  const notes = getNotes();
+  const stats: NoteStats = {
+    total: notes.length,
+    pinned: notes.filter(n => n.pinned).length,
+  };
+  return JSON.stringify(stats);
+}
+
+function main() {
+  console.log("Notes backend ready");
+  console.log(get_all_notes());
+}
