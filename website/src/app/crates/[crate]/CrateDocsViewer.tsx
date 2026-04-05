@@ -74,7 +74,7 @@ function ItemSection({
         <code>{items.map((item) => {
           const sig = formatSignature(stripCodeFences(item.signature));
           const summary = firstSentence(item.docs);
-          return summary ? `${sig}\n  // ${summary}` : sig;
+          return summary ? `// ${summary}\n${sig}` : sig;
         }).join('\n\n')}</code>
       </pre>
     </section>
