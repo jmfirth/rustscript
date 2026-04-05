@@ -185,6 +185,7 @@ mod tests {
                 is_unsafe: false,
                 has_self: false,
                 parent_type: None,
+                is_trait_impl: false,
             }),
         };
 

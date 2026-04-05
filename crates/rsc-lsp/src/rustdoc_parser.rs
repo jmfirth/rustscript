@@ -312,7 +312,7 @@ fn parse_function(value: &serde_json::Value) -> Option<RustdocFunction> {
         is_async,
         is_unsafe,
         has_self,
-        parent_type: None,
+        parent_type: None, is_trait_impl: false,
     })
 }
 

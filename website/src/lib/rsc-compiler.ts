@@ -52,6 +52,7 @@ export interface TranslatedItem {
   signature: string;
   docs: string | null;
   module: string | null;
+  is_trait_impl: boolean;
 }
 
 // --- API ---

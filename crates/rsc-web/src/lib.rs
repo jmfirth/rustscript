@@ -55,6 +55,8 @@ struct TranslatedItem {
     docs: Option<String>,
     /// Module path (reserved for future use).
     module: Option<String>,
+    /// Whether this is a trait impl method (noise for most users).
+    is_trait_impl: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -222,12 +224,14 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 RustdocItemKind::Trait(_) => "trait",
                 RustdocItemKind::Enum(_) => "enum",
             };
+            let is_trait_impl = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl);
             TranslatedItem {
                 name: item.name.clone(),
                 kind: kind.to_owned(),
                 signature: translator::translate_item_to_hover(item),
                 docs: item.docs.clone(),
                 module: None,
+                is_trait_impl,
             }
         })
         .collect();

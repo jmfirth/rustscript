@@ -59,6 +59,9 @@ pub struct RustdocFunction {
     pub has_self: bool,
     /// The parent type name, if this is an impl method.
     pub parent_type: Option<String>,
+    /// Whether this method comes from a trait impl (e.g., `impl Display for Foo`).
+    /// Trait impl methods are typically internal plumbing, not the crate's public API.
+    pub is_trait_impl: bool,
 }
 
 /// A parsed struct definition.
@@ -317,6 +320,7 @@ fn parse_function(value: &serde_json::Value) -> Option<RustdocFunction> {
         is_unsafe,
         has_self,
         parent_type: None,
+        is_trait_impl: false,
     })
 }
 
@@ -677,6 +681,9 @@ fn resolve_impl_block(
         return;
     };
 
+    // Check if this is a trait impl (has a "trait" field) vs an inherent impl.
+    let is_trait_impl = impl_data.get("trait").is_some();
+
     // Get method IDs (may be strings or integers depending on rustdoc JSON version).
     let method_ids: Vec<String> = impl_data
         .get("items")
@@ -692,18 +699,13 @@ fn resolve_impl_block(
         })
         .unwrap_or_default();
 
-    // Tag each method item with its parent type.
+    // Tag each method item with its parent type and trait impl status.
     for method_id in &method_ids {
         if let Some(item) = crate_data.items.get_mut(method_id)
             && let RustdocItemKind::Function(func) = &mut item.kind
         {
-            if type_name == "TcpListener" {
-                eprintln!(
-                    "  [rustdoc] tagging {}.{} as TcpListener method",
-                    type_name, item.name
-                );
-            }
             func.parent_type = Some(type_name.clone());
+            func.is_trait_impl = is_trait_impl;
         }
     }
 

@@ -87,23 +87,17 @@ function stripCodeFences(sig: string): string {
     .trim();
 }
 
-/** Filter out impl methods (shown as "Type.method" in signatures) and internal items.
- *  Keep only top-level functions, structs, traits, and enums — the crate's actual public API. */
+/** Filter out trait impl methods and internal items.
+ *  Keep only the crate's own public API: direct types, traits, and inherent methods. */
 function filterItems(items: TranslatedItem[]): TranslatedItem[] {
   return items.filter(item => {
     // Filter out items starting with underscore (internal)
     if (item.name.startsWith('_')) {
       return false;
     }
-    // For functions: filter out impl methods (signature contains "Type.method")
-    // These are trait impls, blanket impls, etc. — noise for RustScript devs.
-    // Keep only free functions (no dot in the signature before the parens).
-    if (item.kind === 'function') {
-      const sig = stripCodeFences(item.signature);
-      // Matches "function SomeType.methodName" — an impl method
-      if (/function\s+\S+\.\S+/.test(sig)) {
-        return false;
-      }
+    // Filter out trait impl methods (From, Into, Borrow, Display, etc.)
+    if (item.is_trait_impl) {
+      return false;
     }
     return true;
   });
