@@ -1,6 +1,13 @@
 import { CrateDocsViewer } from './CrateDocsViewer';
 
-const knownCrates = ['axum', 'serde', 'tokio', 'clap', 'reqwest', 'sqlx'];
+// Pre-generated routes for static export. Any crate not in this list
+// needs to be added here for `output: 'export'` to generate its page.
+// In a future version, this could move to SSR or ISR to support arbitrary crates.
+const knownCrates = [
+  'axum', 'serde', 'tokio', 'clap', 'reqwest', 'sqlx',
+  'thiserror', 'anyhow', 'regex', 'serde_json', 'rand',
+  'tracing', 'hyper', 'tower', 'bytes', 'futures',
+];
 
 export function generateStaticParams() {
   return knownCrates.map((name) => ({ crate: name }));
