@@ -342,9 +342,12 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
         }
     }
 
+    // Build a map of function name → return type for call-site inference.
+    let fn_return_types = collect_fn_return_types(&module);
+
     // Search inside function bodies for local variables and parameters.
     for item in &module.items {
-        if let Some(sig) = extract_local_hover(item, token) {
+        if let Some(sig) = extract_local_hover(item, token, &fn_return_types) {
             return sig;
         }
     }
@@ -422,10 +425,32 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
     }
 }
 
+/// Collect a map of function name → formatted return type from top-level declarations.
+fn collect_fn_return_types(
+    module: &rsc_syntax::ast::Module,
+) -> std::collections::HashMap<String, String> {
+    use rsc_syntax::ast::ItemKind;
+    let mut map = std::collections::HashMap::new();
+    for item in &module.items {
+        if let ItemKind::Function(f) = &item.kind {
+            if let Some(rta) = &f.return_type {
+                if let Some(ann) = &rta.type_ann {
+                    map.insert(f.name.name.clone(), format_type_ann(ann));
+                }
+            }
+        }
+    }
+    map
+}
+
 /// Search inside a top-level item (function body) for local variable declarations
 /// and parameters matching the given name.
-fn extract_local_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<String> {
-    use rsc_syntax::ast::{ItemKind, Stmt, VarBinding};
+fn extract_local_hover(
+    item: &rsc_syntax::ast::Item,
+    name: &str,
+    fn_return_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    use rsc_syntax::ast::ItemKind;
 
     match &item.kind {
         ItemKind::Function(f) => {
@@ -439,22 +464,24 @@ fn extract_local_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<Strin
 
             // Check body statements for variable declarations
             for stmt in &f.body.stmts {
-                if let Some(sig) = extract_var_hover(stmt, name) {
+                if let Some(sig) = extract_var_hover(stmt, name, fn_return_types) {
                     return Some(sig);
                 }
             }
 
             None
         }
-        // Classes, interfaces, etc. — could be extended to walk class method bodies
-        _ => None,
         _ => None,
     }
 }
 
 /// Extract hover info from a variable declaration statement.
-fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String> {
-    use rsc_syntax::ast::{ElseClause, Stmt, VarBinding};
+fn extract_var_hover(
+    stmt: &rsc_syntax::ast::Stmt,
+    name: &str,
+    fn_return_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    use rsc_syntax::ast::{ElseClause, ExprKind, Stmt, VarBinding};
 
     match stmt {
         Stmt::VarDecl(decl) if decl.name.name == name => {
@@ -463,15 +490,18 @@ fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String>
                 VarBinding::Let => "let",
                 VarBinding::Var => "var",
             };
-            let ty = decl.type_ann.as_ref().map_or_else(
-                String::new,
-                |ann| format!(": {}", format_type_ann(ann)),
-            );
+            // Use explicit type annotation, or infer from initializer
+            let ty = if let Some(ann) = &decl.type_ann {
+                format!(": {}", format_type_ann(ann))
+            } else {
+                infer_type_from_expr(&decl.init, fn_return_types)
+                    .map_or_else(String::new, |t| format!(": {t}"))
+            };
             Some(format!("```rustscript\n{binding} {name}{ty}\n```"))
         }
         Stmt::If(if_stmt) => {
             for s in &if_stmt.then_block.stmts {
-                if let Some(sig) = extract_var_hover(s, name) {
+                if let Some(sig) = extract_var_hover(s, name, fn_return_types) {
                     return Some(sig);
                 }
             }
@@ -479,14 +509,14 @@ fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String>
                 match else_clause {
                     ElseClause::Block(block) => {
                         for s in &block.stmts {
-                            if let Some(sig) = extract_var_hover(s, name) {
+                            if let Some(sig) = extract_var_hover(s, name, fn_return_types) {
                                 return Some(sig);
                             }
                         }
                     }
                     ElseClause::ElseIf(nested_if) => {
                         let nested_stmt = Stmt::If(nested_if.as_ref().clone());
-                        if let Some(sig) = extract_var_hover(&nested_stmt, name) {
+                        if let Some(sig) = extract_var_hover(&nested_stmt, name, fn_return_types) {
                             return Some(sig);
                         }
                     }
@@ -496,7 +526,7 @@ fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String>
         }
         Stmt::While(w) => {
             for s in &w.body.stmts {
-                if let Some(sig) = extract_var_hover(s, name) {
+                if let Some(sig) = extract_var_hover(s, name, fn_return_types) {
                     return Some(sig);
                 }
             }
@@ -512,11 +542,53 @@ fn extract_var_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String>
                 return Some(format!("```rustscript\n{binding} {name} (for-of loop variable)\n```"));
             }
             for s in &f.body.stmts {
-                if let Some(sig) = extract_var_hover(s, name) {
+                if let Some(sig) = extract_var_hover(s, name, fn_return_types) {
                     return Some(sig);
                 }
             }
             None
+        }
+        _ => None,
+    }
+}
+
+/// Try to infer the type of an expression for hover display.
+fn infer_type_from_expr(
+    expr: &rsc_syntax::ast::Expr,
+    fn_return_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+
+    match &expr.kind {
+        // Function call → look up return type
+        ExprKind::Call(call) => fn_return_types.get(&call.callee.name).cloned(),
+        // String literal → string
+        ExprKind::StringLit(_) => Some("string".to_owned()),
+        // Template literal → string
+        ExprKind::TemplateLit(_) => Some("string".to_owned()),
+        // Number literal → i64 or f64
+        ExprKind::IntLit(_) => Some("i64".to_owned()),
+        ExprKind::FloatLit(_) => Some("f64".to_owned()),
+        // Boolean literal → boolean
+        ExprKind::BoolLit(_) => Some("boolean".to_owned()),
+        // Array literal → Array<...>
+        ExprKind::ArrayLit(_) => Some("Array<...>".to_owned()),
+        // Await → unwrap the inner expression
+        ExprKind::Await(inner) => infer_type_from_expr(inner, fn_return_types),
+        // Method call on known collection method → try to infer
+        ExprKind::MethodCall(mc) => {
+            match mc.method.name.as_str() {
+                "filter" => {
+                    // filter preserves the array type
+                    infer_type_from_expr(&mc.object, fn_return_types)
+                }
+                "map" => Some("Array<...>".to_owned()),
+                "find" => Some("... | null".to_owned()),
+                "join" => Some("string".to_owned()),
+                "toString" => Some("string".to_owned()),
+                "length" => Some("i64".to_owned()),
+                _ => None,
+            }
         }
         _ => None,
     }
