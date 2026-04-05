@@ -2,6 +2,9 @@
 target/
 .rsc-build/
 
+# Private (local-only, not published)
+private/
+
 # Claude worktrees
 .claude/worktrees/
 

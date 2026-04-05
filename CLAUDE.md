@@ -16,10 +16,7 @@ Pre-release complete. Full TypeScript syntax coverage, complete builtin library,
 |----------|---------|-----------|
 | `llms.txt` | **Compact language reference** — syntax, builtins, type mapping, crate integration | **Before writing any RustScript code** |
 | `SPECIFICATION.md` | Language design, syntax, semantics, compilation model | Before any design decision |
-| `PLAN.md` | Task plan, dependencies, status tracking | Before starting any work |
-| `PROCESS.md` | Agent workflow, quality gates, task lifecycle | Before any work |
 | `CONVENTIONS.md` | Coding standards, style, architecture rules | Before writing code |
-| `BOOTSTRAP.md` | TL/Orchestrator role activation | TL role only |
 
 ## Compilation Pipeline
 
