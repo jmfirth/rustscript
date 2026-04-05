@@ -395,6 +395,42 @@ impl Project {
         self.root.join("src")
     }
 
+    /// Eject the project: convert from a `RustScript` project to a pure Rust project.
+    ///
+    /// This removes `rustscript.json` and updates `.gitignore` to un-ignore
+    /// generated `.rs` files. After ejecting, the generated `.rs` files become
+    /// the source of truth and the `rsc` compiler will no longer recognize
+    /// this directory as a `RustScript` project.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DriverError::EjectNotBuilt`] if `src/main.rs` does not exist
+    /// (the project must be built at least once before ejecting).
+    /// Returns [`DriverError::Io`] if file operations fail.
+    pub fn eject(&self) -> Result<()> {
+        // Ensure the project has been built
+        let main_rs = self.root.join("src/main.rs");
+        if !main_rs.is_file() {
+            return Err(DriverError::EjectNotBuilt);
+        }
+
+        // Remove rustscript.json
+        let manifest_path = self.root.join(MANIFEST_FILE);
+        if manifest_path.is_file() {
+            fs::remove_file(&manifest_path)?;
+        }
+
+        // Update .gitignore: remove the /src/*.rs line
+        let gitignore_path = self.root.join(".gitignore");
+        if gitignore_path.is_file() {
+            let content = fs::read_to_string(&gitignore_path)?;
+            let updated = remove_gitignore_rs_line(&content);
+            fs::write(&gitignore_path, updated)?;
+        }
+
+        Ok(())
+    }
+
     /// Discover all `.rts` source files in the `src/` directory (non-recursive for Phase 1).
     ///
     /// Returns a list of paths to `.rts` files, excluding the main entry point.
@@ -1309,6 +1345,19 @@ enum StatusStyle {
     /// Cyan — note/help labels.
     #[allow(dead_code)]
     Note,
+}
+
+/// Remove the `/src/*.rs` line from `.gitignore` content.
+///
+/// Preserves all other lines and avoids introducing trailing whitespace or
+/// duplicate blank lines. Returns the updated content.
+fn remove_gitignore_rs_line(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| line.trim() != "/src/*.rs")
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if content.ends_with('\n') { "\n" } else { "" }
 }
 
 #[cfg(test)]
@@ -2478,6 +2527,158 @@ async function fetchData(): string {
         assert!(
             content.contains("0.8"),
             "explicit dep should override, got:\n{content}"
+        );
+    }
+
+    // --- Eject tests ---
+
+    /// Helper: create a minimal RustScript project directory for eject tests.
+    fn create_eject_project(tmp: &TempDir, built: bool) -> Project {
+        let root = tmp.path().to_path_buf();
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        // Write rustscript.json
+        fs::write(
+            root.join("rustscript.json"),
+            r#"{"name":"test-eject","version":"0.1.0","edition":"2024"}"#,
+        )
+        .unwrap();
+
+        // Write .gitignore with /src/*.rs and /target
+        fs::write(root.join(".gitignore"), "/target\n/src/*.rs\n").unwrap();
+
+        // Write Cargo.toml
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"test-eject\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+
+        // Write Cargo.lock
+        fs::write(root.join("Cargo.lock"), "# placeholder lock").unwrap();
+
+        // Write .rts source
+        fs::write(
+            src_dir.join("main.rts"),
+            "function main() {\n  console.log(\"hello\");\n}\n",
+        )
+        .unwrap();
+
+        // If built, write the generated .rs file
+        if built {
+            fs::write(
+                src_dir.join("main.rs"),
+                "fn main() {\n    println!(\"hello\");\n}\n",
+            )
+            .unwrap();
+        }
+
+        Project {
+            root,
+            name: "test-eject".to_owned(),
+            compile_options: crate::pipeline::CompileOptions::default(),
+            color_mode: ColorMode::Never,
+        }
+    }
+
+    #[test]
+    fn test_remove_gitignore_rs_line_basic() {
+        let input = "/target\n/src/*.rs\n";
+        let result = remove_gitignore_rs_line(input);
+        assert_eq!(result, "/target\n");
+    }
+
+    #[test]
+    fn test_remove_gitignore_rs_line_preserves_other_lines() {
+        let input = "/target\n/src/*.rs\n.env\nbuild/\n";
+        let result = remove_gitignore_rs_line(input);
+        assert_eq!(result, "/target\n.env\nbuild/\n");
+    }
+
+    #[test]
+    fn test_remove_gitignore_rs_line_no_match() {
+        let input = "/target\n.env\n";
+        let result = remove_gitignore_rs_line(input);
+        assert_eq!(result, "/target\n.env\n");
+    }
+
+    #[test]
+    fn test_remove_gitignore_rs_line_only_rs_line() {
+        let input = "/src/*.rs\n";
+        let result = remove_gitignore_rs_line(input);
+        assert_eq!(result, "\n");
+    }
+
+    #[test]
+    fn test_eject_removes_rustscript_json() {
+        let tmp = TempDir::new().unwrap();
+        let project = create_eject_project(&tmp, true);
+
+        assert!(project.root.join("rustscript.json").is_file());
+        project.eject().unwrap();
+        assert!(!project.root.join("rustscript.json").exists());
+    }
+
+    #[test]
+    fn test_eject_updates_gitignore() {
+        let tmp = TempDir::new().unwrap();
+        let project = create_eject_project(&tmp, true);
+
+        project.eject().unwrap();
+
+        let gitignore = fs::read_to_string(project.root.join(".gitignore")).unwrap();
+        assert!(
+            !gitignore.contains("/src/*.rs"),
+            ".gitignore should not contain /src/*.rs after eject, got:\n{gitignore}"
+        );
+        assert!(
+            gitignore.contains("/target"),
+            ".gitignore should still contain /target, got:\n{gitignore}"
+        );
+    }
+
+    #[test]
+    fn test_eject_fails_if_not_built() {
+        let tmp = TempDir::new().unwrap();
+        let project = create_eject_project(&tmp, false);
+
+        let result = project.eject();
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), DriverError::EjectNotBuilt),
+            "expected EjectNotBuilt error"
+        );
+    }
+
+    #[test]
+    fn test_eject_preserves_cargo_toml_and_rts_files() {
+        let tmp = TempDir::new().unwrap();
+        let project = create_eject_project(&tmp, true);
+
+        let cargo_before = fs::read_to_string(project.root.join("Cargo.toml")).unwrap();
+        let lock_before = fs::read_to_string(project.root.join("Cargo.lock")).unwrap();
+
+        project.eject().unwrap();
+
+        // Cargo.toml preserved
+        let cargo_after = fs::read_to_string(project.root.join("Cargo.toml")).unwrap();
+        assert_eq!(cargo_before, cargo_after, "Cargo.toml should be unchanged");
+
+        // Cargo.lock preserved
+        let lock_after = fs::read_to_string(project.root.join("Cargo.lock")).unwrap();
+        assert_eq!(lock_before, lock_after, "Cargo.lock should be unchanged");
+
+        // .rts file preserved
+        assert!(
+            project.root.join("src/main.rts").is_file(),
+            ".rts files should be preserved"
+        );
+
+        // .rs file preserved
+        assert!(
+            project.root.join("src/main.rs").is_file(),
+            ".rs files should be preserved"
         );
     }
 }
