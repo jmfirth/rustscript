@@ -1,29 +1,157 @@
-/** A file search utility — the kind of CLI tool a TS dev builds when they need performance */
+/** A task manager CLI -- the kind of productivity tool a TS dev ships as an npm package */
 
-type SearchResult = {
-  path: string,
-  line: u32,
-  content: string,
+// Future: when clap builder API is fully supported through the pipeline:
+//   import { Command, Arg } from "clap";
+//   const matches = Command.new("tasks").arg(Arg.new("command")).get_matches();
+
+type Task = {
+  id: u32,
+  title: string,
+  status: string,
+  priority: string,
 }
 
-function formatResult(result: SearchResult): string {
-  return `${result.path}:${result.line}: ${result.content.trim()}`;
+type CommandResult = {
+  success: bool,
+  message: string,
+}
+
+/** Format a single task as a table row */
+function formatTask(task: Task): string {
+  const status = task.status === "done" ? "[x]" : "[ ]";
+  const prio = task.priority === "high" ? "!!!"
+    : task.priority === "medium" ? " ! "
+    : "   ";
+  return `  ${status} ${prio} #${task.id} ${task.title}`;
+}
+
+/** List all tasks */
+function listAllTasks(tasks: Array<Task>): CommandResult {
+  console.log(`\nTasks (all):`);
+  console.log("  --------------------------------");
+
+  for (const task of tasks) {
+    console.log(formatTask(task));
+  }
+
+  const done = tasks.filter(t => t.status === "done").length;
+  console.log("  --------------------------------");
+  console.log(`  ${tasks.length} tasks, ${done} completed`);
+
+  const result: CommandResult = { success: true, message: `Listed ${tasks.length} tasks` };
+  return result;
+}
+
+/** List tasks filtered by status */
+function listByStatus(tasks: Array<Task>, filter: string): CommandResult {
+  const filtered = tasks.filter(t => t.status === filter);
+
+  if (filtered.length === 0) {
+    const r: CommandResult = { success: true, message: `No tasks matching filter: ${filter}` };
+    return r;
+  }
+
+  console.log(`\nTasks (${filter}):`);
+  console.log("  --------------------------------");
+
+  for (const task of filtered) {
+    console.log(formatTask(task));
+  }
+
+  console.log("  --------------------------------");
+  console.log(`  ${filtered.length} tasks`);
+
+  const result: CommandResult = { success: true, message: `Listed ${filtered.length} tasks` };
+  return result;
+}
+
+/** Search tasks by title substring */
+function searchTasks(tasks: Array<Task>, query: string): CommandResult {
+  const lower = query.toLowerCase();
+  const matches = tasks.filter(t => t.title.toLowerCase().includes(lower));
+
+  if (matches.length === 0) {
+    const r: CommandResult = { success: true, message: `No tasks matching "${query}"` };
+    return r;
+  }
+
+  console.log(`\nSearch results for "${query}":`);
+  for (const task of matches) {
+    console.log(formatTask(task));
+  }
+
+  const result: CommandResult = { success: true, message: `Found ${matches.length} matches` };
+  return result;
+}
+
+/** Show summary statistics */
+function showStats(tasks: Array<Task>): CommandResult {
+  const total = tasks.length;
+  const done = tasks.filter(t => t.status === "done").length;
+  const pending = tasks.filter(t => t.status === "pending").length;
+  const high = tasks.filter(t => t.priority === "high").length;
+
+  console.log("\nTask Statistics:");
+  console.log(`  Total:     ${total}`);
+  console.log(`  Completed: ${done}`);
+  console.log(`  Pending:   ${pending}`);
+  console.log(`  High prio: ${high}`);
+
+  const result: CommandResult = { success: true, message: "Stats displayed" };
+  return result;
+}
+
+/** Dispatch a command string to the appropriate handler */
+function dispatch(tasks: Array<Task>, command: string, arg: string): CommandResult {
+  if (command === "list") {
+    if (arg === "" || arg === "all") {
+      return listAllTasks(tasks);
+    }
+    return listByStatus(tasks, arg);
+  }
+  if (command === "search") {
+    if (arg === "") {
+      const r: CommandResult = { success: false, message: "search requires a query argument" };
+      return r;
+    }
+    return searchTasks(tasks, arg);
+  }
+  if (command === "stats") {
+    return showStats(tasks);
+  }
+  const r: CommandResult = { success: false, message: `Unknown command: ${command}` };
+  return r;
 }
 
 function main() {
-  const results: Array<SearchResult> = [
-    { path: "src/main.rs", line: 10, content: "  fn main() {" },
-    { path: "src/lib.rs", line: 25, content: "  pub fn search(query: &str) {" },
-    { path: "README.md", line: 3, content: "A fast file search tool" },
+  // Sample task database -- in a real app, loaded from disk or SQLite
+  const tasks: Array<Task> = [
+    { id: 1, title: "Set up RustScript project", status: "done", priority: "high" },
+    { id: 2, title: "Implement CLI argument parsing", status: "done", priority: "high" },
+    { id: 3, title: "Add search functionality", status: "done", priority: "medium" },
+    { id: 4, title: "Write unit tests", status: "pending", priority: "high" },
+    { id: 5, title: "Add colored output", status: "pending", priority: "low" },
+    { id: 6, title: "Publish to crates.io", status: "pending", priority: "medium" },
   ];
 
-  console.log(`Found ${results.length} matches:`);
-  console.log("");
+  console.log("tasks v0.1.0 -- a task manager built with RustScript");
 
-  for (const result of results) {
-    console.log(formatResult(result));
+  // Simulate CLI invocations
+  const result1 = dispatch(tasks, "list", "all");
+  console.log(`\n> ${result1.message}`);
+
+  const result2 = dispatch(tasks, "list", "pending");
+  console.log(`\n> ${result2.message}`);
+
+  const result3 = dispatch(tasks, "search", "test");
+  console.log(`\n> ${result3.message}`);
+
+  const result4 = dispatch(tasks, "stats", "");
+  console.log(`\n> ${result4.message}`);
+
+  // Show error handling for unknown commands
+  const result5 = dispatch(tasks, "delete", "1");
+  if (!result5.success) {
+    console.log(`\nError: ${result5.message}`);
   }
-
-  const rustFiles = results.filter(r => r.path.endsWith(".rs"));
-  console.log(`\n${rustFiles.length} matches in Rust files`);
 }
