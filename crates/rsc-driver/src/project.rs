@@ -497,6 +497,11 @@ impl Project {
         // Write src/main.rs (always overwrite)
         fs::write(src_dir.join("main.rs"), &result.rust_source)?;
 
+        // Pass through non-RustScript project files into the build directory.
+        // This copies build.rs, config files, assets, icons, etc. — anything
+        // the developer put in the project root that Rust/frameworks need.
+        Self::copy_passthrough_files(&self.root, &build_dir)?;
+
         // Generate rustdoc JSON for dependencies and re-compile with external
         // signatures. This enables proper param types, throws detection, and
         // async handling for external crate functions.
@@ -585,6 +590,66 @@ impl Project {
         }
 
         options
+    }
+
+    /// Copy non-RustScript project files into the build directory.
+    ///
+    /// Passes through `build.rs`, config files, assets, icons — anything the
+    /// developer put in the project root that Rust or frameworks need. Skips
+    /// `.rts` source files, the RustScript `cargo.toml`, `src/` (handled by
+    /// the compiler), and the build directory itself.
+    fn copy_passthrough_files(project_root: &Path, build_dir: &Path) -> Result<()> {
+        let build_dir_name = build_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(".rsc-build");
+
+        // Walk the project root (non-recursive first level)
+        let entries = match fs::read_dir(project_root) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Skip: build dir, src/ (compiler handles it), cargo.toml (compiler generates it),
+            // .git, node_modules, target, frontend (not a Rust concern)
+            if name_str == build_dir_name
+                || name_str == "src"
+                || name_str == "cargo.toml"
+                || name_str == ".git"
+                || name_str == "node_modules"
+                || name_str == "target"
+                || name_str == "frontend"
+                || name_str.starts_with('.')
+            {
+                continue;
+            }
+
+            let src_path = entry.path();
+            let dst_path = build_dir.join(&name);
+
+            if src_path.is_file() {
+                // Copy file if it doesn't exist or is newer
+                let should_copy = match (fs::metadata(&src_path), fs::metadata(&dst_path)) {
+                    (Ok(src_meta), Ok(dst_meta)) => {
+                        src_meta.modified().ok() > dst_meta.modified().ok()
+                    }
+                    (Ok(_), Err(_)) => true, // dst doesn't exist
+                    _ => false,
+                };
+                if should_copy {
+                    let _ = fs::copy(&src_path, &dst_path);
+                }
+            } else if src_path.is_dir() {
+                // Recursively copy directories (icons/, assets/, etc.)
+                copy_dir_recursive(&src_path, &dst_path);
+            }
+        }
+
+        Ok(())
     }
 
     /// Generate rustdoc JSON for dependencies if not already cached.
@@ -1130,6 +1195,24 @@ enum StatusStyle {
     /// Cyan — note/help labels.
     #[allow(dead_code)]
     Note,
+}
+
+/// Recursively copy a directory, creating it if needed.
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    let _ = fs::create_dir_all(dst);
+    let entries = match fs::read_dir(src) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path);
+        } else {
+            let _ = fs::copy(&src_path, &dst_path);
+        }
+    }
 }
 
 #[cfg(test)]

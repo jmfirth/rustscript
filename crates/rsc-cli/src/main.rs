@@ -515,13 +515,18 @@ fn cmd_dev(release: bool) -> Result<i32> {
     watcher
         .watch(&src_dir, RecursiveMode::Recursive)
         .with_context(|| format!("failed to watch {}", src_dir.display()))?;
+    // Also watch the project root (non-recursive) for passthrough files
+    // like build.rs, tauri.conf.json, icons/, etc.
+    watcher
+        .watch(&project.root, RecursiveMode::NonRecursive)
+        .with_context(|| format!("failed to watch {}", project.root.display()))?;
 
     // Event loop with debounce
     while running.load(Ordering::SeqCst) {
         // Block until an event arrives (with a timeout so we can check the running flag)
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(event) => {
-                if !is_rts_change(&event) {
+                if !is_relevant_change(&event) {
                     continue;
                 }
                 // Debounce: drain events for 200ms after the first relevant change
@@ -555,7 +560,7 @@ fn cmd_dev(release: bool) -> Result<i32> {
 }
 
 /// Check whether a notify event concerns a `.rts` file change.
-fn is_rts_change(event: &std::result::Result<notify::Event, notify::Error>) -> bool {
+fn is_relevant_change(event: &std::result::Result<notify::Event, notify::Error>) -> bool {
     match event {
         Ok(ev) => {
             use notify::EventKind;
@@ -563,7 +568,12 @@ fn is_rts_change(event: &std::result::Result<notify::Event, notify::Error>) -> b
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => ev
                     .paths
                     .iter()
-                    .any(|p| p.extension().is_some_and(|ext| ext == "rts")),
+                    .any(|p| {
+                        // .rts source files
+                        p.extension().is_some_and(|ext| ext == "rts")
+                        // Passthrough files (build.rs, configs, etc.)
+                        || p.extension().is_some_and(|ext| ext == "rs" || ext == "json" || ext == "toml")
+                    }),
                 _ => false,
             }
         }
@@ -689,70 +699,70 @@ mod tests {
     }
 
     #[test]
-    fn test_is_rts_change_modify_rts_returns_true() {
+    fn test_is_relevant_change_modify_rts_returns_true() {
         let event = make_event(
             notify::EventKind::Modify(notify::event::ModifyKind::Data(
                 notify::event::DataChange::Any,
             )),
             vec![PathBuf::from("src/main.rts")],
         );
-        assert!(is_rts_change(&event));
+        assert!(is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_create_rts_returns_true() {
+    fn test_is_relevant_change_create_rts_returns_true() {
         let event = make_event(
             notify::EventKind::Create(notify::event::CreateKind::File),
             vec![PathBuf::from("src/new_module.rts")],
         );
-        assert!(is_rts_change(&event));
+        assert!(is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_remove_rts_returns_true() {
+    fn test_is_relevant_change_remove_rts_returns_true() {
         let event = make_event(
             notify::EventKind::Remove(notify::event::RemoveKind::File),
             vec![PathBuf::from("src/old.rts")],
         );
-        assert!(is_rts_change(&event));
+        assert!(is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_modify_non_rts_returns_false() {
+    fn test_is_relevant_change_modify_non_rts_returns_false() {
         let event = make_event(
             notify::EventKind::Modify(notify::event::ModifyKind::Data(
                 notify::event::DataChange::Any,
             )),
             vec![PathBuf::from("src/readme.md")],
         );
-        assert!(!is_rts_change(&event));
+        assert!(!is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_access_event_returns_false() {
+    fn test_is_relevant_change_access_event_returns_false() {
         let event = make_event(
             notify::EventKind::Access(notify::event::AccessKind::Read),
             vec![PathBuf::from("src/main.rts")],
         );
-        assert!(!is_rts_change(&event));
+        assert!(!is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_error_returns_false() {
+    fn test_is_relevant_change_error_returns_false() {
         let event: std::result::Result<notify::Event, notify::Error> =
             Err(notify::Error::generic("test error"));
-        assert!(!is_rts_change(&event));
+        assert!(!is_relevant_change(&event));
     }
 
     #[test]
-    fn test_is_rts_change_empty_paths_returns_false() {
+    fn test_is_relevant_change_empty_paths_returns_false() {
         let event = make_event(
             notify::EventKind::Modify(notify::event::ModifyKind::Data(
                 notify::event::DataChange::Any,
             )),
             vec![],
         );
-        assert!(!is_rts_change(&event));
+        assert!(!is_relevant_change(&event));
     }
 
     #[test]
