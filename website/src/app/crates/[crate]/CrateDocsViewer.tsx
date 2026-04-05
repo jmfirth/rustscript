@@ -191,53 +191,84 @@ function ItemCodeBlock({ items }: { items: TranslatedItem[] }) {
 // Section components
 // ---------------------------------------------------------------------------
 
+/** Consistent card for any item type */
+function ItemCard({ name, kind, summary, children, id }: {
+  name: string;
+  kind: string;
+  summary: string | null;
+  children: React.ReactNode;
+  id?: string;
+}) {
+  return (
+    <div id={id} className="mb-4 scroll-mt-24 border border-[var(--color-border)] rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] flex items-center gap-3">
+        <span className="inline-block px-2 py-0.5 rounded text-xs font-mono font-medium bg-[var(--color-accent)] text-white">
+          {kind}
+        </span>
+        <a href={id ? `#${id}` : undefined} className="font-mono font-semibold text-sm hover:text-[var(--color-accent)] transition-colors">
+          {name}
+        </a>
+      </div>
+      {summary && (
+        <div className="px-4 py-2 text-sm text-[var(--color-text-secondary)] border-b border-[var(--color-border)]">
+          {summary}
+        </div>
+      )}
+      <div className="bg-[var(--color-code-bg)]">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function TypeSectionView({ section }: { section: TypeSection }) {
   const sig = formatSignature(stripCodeFences(section.signature));
   const summary = firstSentence(section.docs);
-  const kindLabel = section.kind === 'struct' ? 'class' : section.kind;
+  const kindLabel = section.kind === 'struct' ? 'class' : section.kind === 'trait' ? 'interface' : section.kind;
 
   return (
-    <section id={section.name} className="mb-10 scroll-mt-24">
-      <h3 className="text-lg font-semibold font-mono mb-1 flex items-center gap-2">
-        <a href={`#${section.name}`} className="hover:text-[var(--color-accent)] transition-colors">
-          <span dangerouslySetInnerHTML={{ __html: highlightSignature(`${kindLabel} ${sig.replace(/^(class|interface|enum|type)\s+/, '')}`) }} />
-        </a>
-      </h3>
-      {summary && (
-        <p className="text-sm text-[var(--color-text-secondary)] mb-3 ml-0.5">
-          {summary}
-        </p>
-      )}
+    <ItemCard name={section.name} kind={kindLabel} summary={summary} id={section.name}>
+      {/* Type signature */}
+      <pre className="px-4 py-3 overflow-x-auto text-sm font-mono leading-relaxed border-b border-[var(--color-border)]">
+        <code dangerouslySetInnerHTML={{ __html: highlightSignature(sig) }} />
+      </pre>
 
+      {/* Methods */}
       {section.methods.length > 0 && (
-        <details open className="mt-2">
-          <summary className="cursor-pointer text-sm font-medium text-[var(--color-text-secondary)] mb-2 select-none hover:text-[var(--color-text)] transition-colors">
+        <details open>
+          <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--color-text-secondary)] select-none hover:text-[var(--color-text)] transition-colors border-b border-[var(--color-border)]">
             Methods ({section.methods.length})
           </summary>
-          <ItemCodeBlock items={section.methods} />
+          <pre className="px-4 py-3 overflow-x-auto text-sm font-mono leading-relaxed">
+            <code dangerouslySetInnerHTML={{ __html: section.methods.map(renderItemHtml).join('\n\n') }} />
+          </pre>
         </details>
       )}
-
-      {section.methods.length === 0 && (
-        <p className="text-xs text-[var(--color-text-secondary)] ml-0.5 italic">
-          No public methods
-        </p>
-      )}
-    </section>
+    </ItemCard>
   );
 }
 
 function FreeFunctionsSection({ items }: { items: TranslatedItem[] }) {
   if (items.length === 0) return null;
   return (
-    <section id="functions" className="mb-10 scroll-mt-24">
+    <section id="functions" className="mb-8 scroll-mt-24">
       <h3 className="text-lg font-semibold mb-3 pb-2 border-b border-[var(--color-border)]">
         Free Functions{' '}
         <span className="text-sm font-normal text-[var(--color-text-secondary)]">
           ({items.length})
         </span>
       </h3>
-      <ItemCodeBlock items={items} />
+      {items.map((item) => {
+        const sig = formatSignature(stripCodeFences(item.signature));
+        const summary = firstSentence(item.docs);
+        return (
+          <ItemCard key={item.name} name={item.name} kind="function" summary={summary} id={`fn-${item.name}`}>
+            <pre className="px-4 py-3 overflow-x-auto text-sm font-mono leading-relaxed">
+              <code dangerouslySetInnerHTML={{ __html: highlightSignature(sig) }} />
+            </pre>
+          </ItemCard>
+        );
+      })}
     </section>
   );
 }
