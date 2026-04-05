@@ -39,7 +39,7 @@ fn main() {
     println!("{}", serde_json::to_string(&top).unwrap());
 }`;
 
-const installCode = `cargo install rustscript
+const installCode = `cargo install rustscript  # also installs rsc alias
 rustscript init my-app --template web-server
 cd my-app
 rustscript run`;
