@@ -16,80 +16,70 @@ type LoadingPhase =
   | 'done'
   | 'error';
 
-interface GroupedItems {
-  functions: TranslatedItem[];
-  structs: TranslatedItem[];
-  traits: TranslatedItem[];
-  enums: TranslatedItem[];
+// ---------------------------------------------------------------------------
+// Data model for type-centric view
+// ---------------------------------------------------------------------------
+
+interface TypeSection {
+  name: string;
+  kind: 'struct' | 'trait' | 'enum';
+  signature: string;
+  docs: string | null;
+  methods: TranslatedItem[];
 }
 
-function groupItems(items: TranslatedItem[]): GroupedItems {
-  const groups: GroupedItems = {
-    functions: [],
-    structs: [],
-    traits: [],
-    enums: [],
-  };
+interface GroupedView {
+  freeFunctions: TranslatedItem[];
+  types: TypeSection[];
+}
+
+/** Build a type-centric view: types with nested methods + free functions. */
+function buildGroupedView(items: TranslatedItem[]): GroupedView {
+  // 1. Collect type entities (structs, traits, enums)
+  const typeMap = new Map<string, TypeSection>();
   for (const item of items) {
-    switch (item.kind) {
-      case 'function':
-        groups.functions.push(item);
-        break;
-      case 'struct':
-        groups.structs.push(item);
-        break;
-      case 'trait':
-        groups.traits.push(item);
-        break;
-      case 'enum':
-        groups.enums.push(item);
-        break;
+    if (item.kind === 'struct' || item.kind === 'trait' || item.kind === 'enum') {
+      typeMap.set(item.name, {
+        name: item.name,
+        kind: item.kind,
+        signature: item.signature,
+        docs: item.docs,
+        methods: [],
+      });
     }
   }
-  // Sort each group alphabetically
-  for (const list of Object.values(groups)) {
-    list.sort((a: TranslatedItem, b: TranslatedItem) => a.name.localeCompare(b.name));
+
+  // 2. Assign functions to their parent type or free functions
+  const freeFunctions: TranslatedItem[] = [];
+  for (const item of items) {
+    if (item.kind !== 'function') continue;
+    if (item.parent_type && typeMap.has(item.parent_type)) {
+      typeMap.get(item.parent_type)!.methods.push(item);
+    } else if (!item.parent_type) {
+      freeFunctions.push(item);
+    }
+    // Functions with parent_type not matching any known type are dropped
+    // (they belong to internal/private types)
   }
-  return groups;
+
+  // 3. Sort
+  freeFunctions.sort((a, b) => a.name.localeCompare(b.name));
+  const types = Array.from(typeMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  for (const t of types) {
+    t.methods.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return { freeFunctions, types };
 }
 
-function ItemSection({
-  title,
-  items,
-}: {
-  title: string;
-  items: TranslatedItem[];
-}) {
-  if (items.length === 0) return null;
-
-  return (
-    <section className="mb-10">
-      <h2 className="text-xl font-semibold mb-4 pb-2 border-b border-[var(--color-border)]">
-        {title}{' '}
-        <span className="text-sm font-normal text-[var(--color-text-secondary)]">
-          ({items.length})
-        </span>
-      </h2>
-      <pre className="bg-[var(--color-code-bg)] rounded-lg p-4 overflow-x-auto text-sm font-mono leading-relaxed">
-        <code dangerouslySetInnerHTML={{ __html: items.map((item) => {
-          const sig = formatSignature(stripCodeFences(item.signature));
-          const summary = firstSentence(item.docs);
-          const highlighted = highlightSignature(sig);
-          const commentHtml = summary
-            ? `<span class="crate-comment">// ${escapeHtml(summary)}</span>\n`
-            : '';
-          return `${commentHtml}${highlighted}`;
-        }).join('\n\n') }} />
-      </pre>
-    </section>
-  );
-}
+// ---------------------------------------------------------------------------
+// Utility functions (preserved from original)
+// ---------------------------------------------------------------------------
 
 /** Strip markdown code fences and doc prefix from translator output.
  *  The translator emits "docs\n---\n```rustscript\nsignature\n```".
  *  We want only the signature. Find the LAST ```rustscript fence. */
 function stripCodeFences(sig: string): string {
-  // Find the last ```rustscript fence — that's the actual signature
   const lastFence = sig.lastIndexOf('```rustscript');
   const cleaned = lastFence >= 0 ? sig.substring(lastFence) : sig;
   return cleaned
@@ -100,15 +90,7 @@ function stripCodeFences(sig: string): string {
 
 /** Pretty-print a long function signature across multiple lines */
 function formatSignature(sig: string): string {
-  // If it's short enough, leave it
   if (sig.length < 80) return sig;
-
-  // Break function params across lines:
-  // function name(param1: T, param2: U): R  →
-  // function name(
-  //   param1: T,
-  //   param2: U
-  // ): R
   return sig.replace(
     /^((?:async\s+)?function\s+\S+)\(([^)]{40,})\)(:\s*.+)?$/,
     (_match, prefix, params, ret) => {
@@ -119,16 +101,20 @@ function formatSignature(sig: string): string {
 }
 
 /** Filter out trait impl methods and internal items.
- *  Keep only the crate's own public API: direct types, traits, and inherent methods. */
+ *  Keep public API items. Methods with parent_type are kept (nested under their type). */
 function filterItems(items: TranslatedItem[]): TranslatedItem[] {
   return items.filter(item => {
     // Filter out items starting with underscore (internal)
     if (item.name.startsWith('_')) {
       return false;
     }
-    // Only show items that are part of the crate's public API
-    // (reachable from the root module or re-exported by it)
-    if (!item.is_public_api) {
+    // Filter out trait impl methods (Clone, Debug, From, Into, etc.)
+    if (item.is_trait_impl) {
+      return false;
+    }
+    // Only show items that are part of the crate's public API,
+    // OR methods whose parent_type matches a public API item
+    if (!item.is_public_api && !item.parent_type) {
       return false;
     }
     return true;
@@ -143,38 +129,31 @@ function escapeHtml(s: string): string {
 /** Simple syntax highlighting for RustScript signatures */
 function highlightSignature(sig: string): string {
   return escapeHtml(sig)
-    // Keywords
     .replace(/\b(function|async|class|interface|enum|type|const|let|extends|implements|throws)\b/g,
       '<span class="crate-keyword">$1</span>')
-    // Types after colon or in generics
     .replace(/\b(string|boolean|void|never|number)\b/g,
       '<span class="crate-type">$1</span>')
-    // Numeric types
     .replace(/\b(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|usize|isize)\b/g,
       '<span class="crate-type">$1</span>')
-    // String literals
     .replace(/&quot;([^&]*)&quot;/g, '<span class="crate-string">"$1"</span>');
 }
 
 /** Extract the first sentence from docs, stripping markdown/HTML noise */
 function firstSentence(docs: string | null): string | null {
   if (!docs) return null;
-  // Strip HTML tags
   const plain = docs.replace(/<[^>]+>/g, '');
-  // Take first sentence (up to first period followed by space/newline, or first newline)
   const match = plain.match(/^(.+?[.!])\s/);
   const sentence = match ? match[1] : plain.split('\n')[0];
-  // Trim and limit length
   const trimmed = sentence?.trim();
   if (!trimmed || trimmed.length < 3) return null;
   return trimmed.length > 120 ? trimmed.substring(0, 117) + '...' : trimmed;
 }
 
-/** Deduplicate items by kind + name, keeping the entry with the most docs */
+/** Deduplicate items by kind + name + parent_type, keeping the entry with the most docs */
 function deduplicateItems(items: TranslatedItem[]): TranslatedItem[] {
   const best = new Map<string, TranslatedItem>();
   for (const item of items) {
-    const key = `${item.kind}:${item.name}`;
+    const key = `${item.kind}:${item.name}:${item.parent_type ?? ''}`;
     const existing = best.get(key);
     if (!existing || (item.docs?.length ?? 0) > (existing.docs?.length ?? 0)) {
       best.set(key, item);
@@ -183,28 +162,134 @@ function deduplicateItems(items: TranslatedItem[]): TranslatedItem[] {
   return Array.from(best.values());
 }
 
-function DocItem({ item }: { item: TranslatedItem }) {
-  const signature = formatSignature(stripCodeFences(item.signature));
+// ---------------------------------------------------------------------------
+// Render helpers
+// ---------------------------------------------------------------------------
+
+/** Render a single item (function/type) as highlighted HTML with optional doc comment */
+function renderItemHtml(item: TranslatedItem): string {
+  const sig = formatSignature(stripCodeFences(item.signature));
+  const summary = firstSentence(item.docs);
+  const highlighted = highlightSignature(sig);
+  const commentHtml = summary
+    ? `<span class="crate-comment">// ${escapeHtml(summary)}</span>\n`
+    : '';
+  return `${commentHtml}${highlighted}`;
+}
+
+/** Render a list of items as a code block */
+function ItemCodeBlock({ items }: { items: TranslatedItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <pre className="bg-[var(--color-code-bg)] rounded-lg p-4 overflow-x-auto text-sm font-mono leading-relaxed">
+      <code dangerouslySetInnerHTML={{ __html: items.map(renderItemHtml).join('\n\n') }} />
+    </pre>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Section components
+// ---------------------------------------------------------------------------
+
+function TypeSectionView({ section }: { section: TypeSection }) {
+  const sig = formatSignature(stripCodeFences(section.signature));
+  const summary = firstSentence(section.docs);
+  const kindLabel = section.kind === 'struct' ? 'class' : section.kind;
 
   return (
-    <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-      <div className="px-4 py-3 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] flex items-center gap-3">
-        <span className="inline-block px-2 py-0.5 rounded text-xs font-mono font-medium bg-[var(--color-accent)] text-white">
-          {item.kind}
+    <section id={section.name} className="mb-10 scroll-mt-24">
+      <h3 className="text-lg font-semibold font-mono mb-1 flex items-center gap-2">
+        <a href={`#${section.name}`} className="hover:text-[var(--color-accent)] transition-colors">
+          <span dangerouslySetInnerHTML={{ __html: highlightSignature(`${kindLabel} ${sig.replace(/^(class|interface|enum|type)\s+/, '')}`) }} />
+        </a>
+      </h3>
+      {summary && (
+        <p className="text-sm text-[var(--color-text-secondary)] mb-3 ml-0.5">
+          {summary}
+        </p>
+      )}
+
+      {section.methods.length > 0 && (
+        <details open className="mt-2">
+          <summary className="cursor-pointer text-sm font-medium text-[var(--color-text-secondary)] mb-2 select-none hover:text-[var(--color-text)] transition-colors">
+            Methods ({section.methods.length})
+          </summary>
+          <ItemCodeBlock items={section.methods} />
+        </details>
+      )}
+
+      {section.methods.length === 0 && (
+        <p className="text-xs text-[var(--color-text-secondary)] ml-0.5 italic">
+          No public methods
+        </p>
+      )}
+    </section>
+  );
+}
+
+function FreeFunctionsSection({ items }: { items: TranslatedItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section id="functions" className="mb-10 scroll-mt-24">
+      <h3 className="text-lg font-semibold mb-3 pb-2 border-b border-[var(--color-border)]">
+        Free Functions{' '}
+        <span className="text-sm font-normal text-[var(--color-text-secondary)]">
+          ({items.length})
         </span>
-        <span className="font-mono font-semibold text-sm">{item.name}</span>
-        {item.module && (
-          <span className="text-xs text-[var(--color-text-secondary)] font-mono">
-            {item.module}
-          </span>
+      </h3>
+      <ItemCodeBlock items={items} />
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Table of contents
+// ---------------------------------------------------------------------------
+
+function TableOfContents({ grouped }: { grouped: GroupedView }) {
+  const structs = grouped.types.filter(t => t.kind === 'struct');
+  const traits = grouped.types.filter(t => t.kind === 'trait');
+  const enums = grouped.types.filter(t => t.kind === 'enum');
+
+  return (
+    <div className="mb-8 space-y-3">
+      {/* Category jump links */}
+      <div className="flex flex-wrap gap-4">
+        {grouped.freeFunctions.length > 0 && (
+          <SummaryBadge label="Free Functions" count={grouped.freeFunctions.length} href="#functions" />
+        )}
+        {structs.length > 0 && (
+          <SummaryBadge label="Structs" count={structs.length} href="#structs-section" />
+        )}
+        {traits.length > 0 && (
+          <SummaryBadge label="Traits" count={traits.length} href="#traits-section" />
+        )}
+        {enums.length > 0 && (
+          <SummaryBadge label="Enums" count={enums.length} href="#enums-section" />
         )}
       </div>
-      <pre className="px-4 py-3 overflow-x-auto text-sm font-mono bg-[var(--color-code-bg)]">
-        <code className="rustscript">{signature}</code>
-      </pre>
+
+      {/* Per-type anchor links */}
+      {grouped.types.length > 0 && (
+        <div className="flex flex-wrap gap-x-2 gap-y-1 text-sm font-mono">
+          {grouped.types.map(t => (
+            <a
+              key={t.name}
+              href={`#${t.name}`}
+              className="text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] transition-colors"
+            >
+              {t.name}
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export function CrateDocsViewer({ crateName }: { crateName: string }) {
   const { ready, translateRustdoc } = useCompiler();
@@ -250,7 +335,6 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Unknown error occurred';
-        // Detect CORS-related failures
         if (
           message.includes('Failed to fetch') ||
           message.includes('CORS') ||
@@ -280,7 +364,11 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
     }
   };
 
-  const grouped = items ? groupItems(deduplicateItems(filterItems(items))) : null;
+  const grouped = items ? buildGroupedView(deduplicateItems(filterItems(items))) : null;
+
+  const structs = grouped ? grouped.types.filter(t => t.kind === 'struct') : [];
+  const traits = grouped ? grouped.types.filter(t => t.kind === 'trait') : [];
+  const enums = grouped ? grouped.types.filter(t => t.kind === 'enum') : [];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
@@ -378,50 +466,55 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
       {/* Results */}
       {phase === 'done' && grouped && (
         <>
-          {/* Summary */}
-          <div className="mb-8 flex flex-wrap gap-4">
-            {grouped.functions.length > 0 && (
-              <SummaryBadge
-                label="Functions"
-                count={grouped.functions.length}
-                href="#functions"
-              />
-            )}
-            {grouped.structs.length > 0 && (
-              <SummaryBadge
-                label="Structs"
-                count={grouped.structs.length}
-                href="#structs"
-              />
-            )}
-            {grouped.traits.length > 0 && (
-              <SummaryBadge
-                label="Traits"
-                count={grouped.traits.length}
-                href="#traits"
-              />
-            )}
-            {grouped.enums.length > 0 && (
-              <SummaryBadge
-                label="Enums"
-                count={grouped.enums.length}
-                href="#enums"
-              />
-            )}
-          </div>
+          <TableOfContents grouped={grouped} />
 
-          <div id="functions">
-            <ItemSection title="Functions" items={grouped.functions} />
-          </div>
-          <div id="structs">
-            <ItemSection title="Structs" items={grouped.structs} />
-          </div>
-          <div id="traits">
-            <ItemSection title="Traits" items={grouped.traits} />
-          </div>
-          <div id="enums">
-            <ItemSection title="Enums" items={grouped.enums} />
-          </div>
+          {/* Free Functions */}
+          <FreeFunctionsSection items={grouped.freeFunctions} />
+
+          {/* Structs */}
+          {structs.length > 0 && (
+            <div id="structs-section" className="scroll-mt-24">
+              <h2 className="text-xl font-semibold mb-6 pb-2 border-b border-[var(--color-border)]">
+                Structs{' '}
+                <span className="text-sm font-normal text-[var(--color-text-secondary)]">
+                  ({structs.length})
+                </span>
+              </h2>
+              {structs.map(t => (
+                <TypeSectionView key={t.name} section={t} />
+              ))}
+            </div>
+          )}
+
+          {/* Traits */}
+          {traits.length > 0 && (
+            <div id="traits-section" className="scroll-mt-24">
+              <h2 className="text-xl font-semibold mb-6 pb-2 border-b border-[var(--color-border)]">
+                Traits{' '}
+                <span className="text-sm font-normal text-[var(--color-text-secondary)]">
+                  ({traits.length})
+                </span>
+              </h2>
+              {traits.map(t => (
+                <TypeSectionView key={t.name} section={t} />
+              ))}
+            </div>
+          )}
+
+          {/* Enums */}
+          {enums.length > 0 && (
+            <div id="enums-section" className="scroll-mt-24">
+              <h2 className="text-xl font-semibold mb-6 pb-2 border-b border-[var(--color-border)]">
+                Enums{' '}
+                <span className="text-sm font-normal text-[var(--color-text-secondary)]">
+                  ({enums.length})
+                </span>
+              </h2>
+              {enums.map(t => (
+                <TypeSectionView key={t.name} section={t} />
+              ))}
+            </div>
+          )}
 
           {items && items.length === 0 && (
             <div className="text-center py-12 text-[var(--color-text-secondary)]">
@@ -437,6 +530,10 @@ export function CrateDocsViewer({ crateName }: { crateName: string }) {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Shared UI components
+// ---------------------------------------------------------------------------
 
 function StatusMessage({ children }: { children: React.ReactNode }) {
   return (

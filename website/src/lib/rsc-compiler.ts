@@ -54,6 +54,7 @@ export interface TranslatedItem {
   module: string | null;
   is_trait_impl: boolean;
   is_public_api: boolean;
+  parent_type: string | null;
 }
 
 // --- API ---

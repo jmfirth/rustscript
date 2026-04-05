@@ -59,6 +59,8 @@ struct TranslatedItem {
     is_trait_impl: bool,
     /// Whether this item is part of the crate's public API (reachable from root module).
     is_public_api: bool,
+    /// The parent type name for methods (e.g. `"Router"`, `"Json"`).
+    parent_type: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +228,11 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 RustdocItemKind::Trait(_) => "trait",
                 RustdocItemKind::Enum(_) => "enum",
             };
-            let is_method = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl || f.has_self || f.parent_type.is_some());
+            let is_trait_impl = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl);
+            let parent_type = match &item.kind {
+                RustdocItemKind::Function(f) => f.parent_type.clone(),
+                _ => None,
+            };
             let is_public_api = crate_data.public_api_ids.is_empty() || crate_data.public_api_ids.contains(&item.id);
             TranslatedItem {
                 name: item.name.clone(),
@@ -234,8 +240,9 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 signature: translator::translate_item_to_hover(item),
                 docs: item.docs.clone(),
                 module: None,
-                is_trait_impl: is_method,
+                is_trait_impl,
                 is_public_api,
+                parent_type,
             }
         })
         .collect();
