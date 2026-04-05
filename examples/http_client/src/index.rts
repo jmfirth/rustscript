@@ -1,0 +1,73 @@
+// HTTP client example — fetches data from JSONPlaceholder API
+// Requires: reqwest crate with "json" feature, tokio runtime
+
+import { get } from "reqwest";
+
+/** A post from the JSONPlaceholder API */
+type Post = {
+  userId: i64,
+  id: i64,
+  title: string,
+  body: string,
+} derives Deserialize
+
+/** Compact view for display */
+type PostSummary = {
+  id: i64,
+  title: string,
+  author: i64,
+} derives Serialize
+
+/** Fetch all posts from the API */
+async function fetchPosts(): Array<Post> throws string {
+  const url = "https://jsonplaceholder.typicode.com/posts";
+  const response = await get(url);
+  const posts: Array<Post> = await response.json();
+  return posts;
+}
+
+/** Filter posts by a given user ID */
+function postsByUser(posts: Array<Post>, userId: i64): Array<Post> {
+  return posts.filter(p => p.userId == userId);
+}
+
+/** Convert posts to compact summaries */
+function summarize(posts: Array<Post>): Array<PostSummary> {
+  return posts.map(p => {
+    const summary: PostSummary = {
+      id: p.id,
+      title: p.title,
+      author: p.userId,
+    };
+    return summary;
+  });
+}
+
+async function main() {
+  console.log("Fetching posts from JSONPlaceholder...");
+
+  try {
+    const posts = await fetchPosts();
+    console.log(`Fetched ${posts.length} posts`);
+
+    // Filter to a single user
+    const userPosts = postsByUser(posts, 1);
+    console.log(`\nUser 1 has ${userPosts.length} posts:`);
+
+    // Summarize and display
+    const summaries = summarize(userPosts);
+    for (const s of summaries) {
+      console.log(`  [${s.id}] ${s.title}`);
+    }
+
+    // Show some stats
+    const longPosts = posts.filter(p => p.body.length > 150);
+    console.log(`\nPosts with long bodies (>150 chars): ${longPosts.length}`);
+
+    // Serialize a summary back to JSON
+    const first = summaries[0];
+    console.log(`\nFirst summary as JSON: ${JSON.stringify(first)}`);
+  } catch (err: string) {
+    console.log(`Error: ${err}`);
+  }
+}
