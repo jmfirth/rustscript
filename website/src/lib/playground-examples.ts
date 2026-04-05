@@ -146,13 +146,15 @@ function main() {
   {
     id: 'error-handling',
     label: 'Error Handling',
-    rts: `/** Parse a positive integer from a string */
-function parsePositive(input: string): i32 throws string {
-  const n = input.parse::<i32>();
-  if (n <= 0) {
-    throw "must be positive";
+    rts: `/** Validate age — throws on invalid input */
+function validateAge(age: i32): i32 throws string {
+  if (age < 0) {
+    throw "age cannot be negative";
   }
-  return n;
+  if (age > 150) {
+    throw "age seems unrealistic";
+  }
+  return age;
 }
 
 /** Look up a user — might not exist */
@@ -166,10 +168,17 @@ function findUser(id: i32): string | null {
 function main() {
   // try/catch maps to Result matching
   try {
-    const age = parsePositive("25");
-    console.log(\`Age: \${age}\`);
+    const age = validateAge(25);
+    console.log(\`Valid age: \${age}\`);
   } catch (e) {
     console.log(\`Error: \${e}\`);
+  }
+
+  try {
+    const bad = validateAge(-5);
+    console.log(\`Age: \${bad}\`);
+  } catch (e) {
+    console.log(\`Caught: \${e}\`);
   }
 
   // T | null maps to Option<T>
@@ -178,8 +187,8 @@ function main() {
     console.log(\`Found: \${user}\`);
   }
 
-  // Optional chaining
-  const name = findUser(99)?.toUpperCase() ?? "anonymous";
+  // Null coalescing
+  const name = findUser(99) ?? "anonymous";
   console.log(name);
 }`,
   },
