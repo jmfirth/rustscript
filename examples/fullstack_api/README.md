@@ -5,7 +5,7 @@ A task tracker API demonstrating the fullstack type-sharing pattern: RustScript 
 ## Architecture
 
 ```
-src/index.rts          RustScript backend (axum JSON API)
+src/main.rts           RustScript backend (axum JSON API)
     |
     | rsc types -o frontend/src/types/
     v

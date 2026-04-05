@@ -7,7 +7,7 @@ async function invoke<T>(cmd: string): Promise<T> {
   const responses: Record<string, unknown> = {
     get_notes: [
       { id: 1, title: "Welcome", content: "Welcome to RustScript + Tauri!", pinned: true },
-      { id: 2, title: "Getting Started", content: "Edit src/index.rts to add backend commands.", pinned: false },
+      { id: 2, title: "Getting Started", content: "Edit src/main.rts to add backend commands.", pinned: false },
     ],
     get_stats: { total: 2, pinned: 1 },
   };
