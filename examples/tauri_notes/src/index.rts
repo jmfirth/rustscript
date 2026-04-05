@@ -1,14 +1,13 @@
 import { command } from "tauri";
-import { Builder } from "tauri";
 import { Serialize, Deserialize } from "serde";
 
 /**
  * Tauri Notes — Desktop App Backend
  *
- * RustScript backend for a Tauri desktop app. The `@command` decorator
- * compiles to `#[tauri::command]`, making functions callable from the
- * React frontend via Tauri's IPC. Types with `derives Serialize,
- * Deserialize` are shared with the frontend via `rsc types`.
+ * RustScript backend for a Tauri desktop app. The @command decorator
+ * compiles to #[tauri::command], making functions callable from the
+ * React frontend via Tauri's IPC. Types with derives Serialize,
+ * Deserialize are shared with the frontend via rsc types.
  */
 
 /** A note in the app */
@@ -28,7 +27,6 @@ type Stats = {
 /** Get all notes */
 @command
 function get_notes(): Array<Note> {
-  // In a real app, this would read from a database
   const notes: Array<Note> = [
     { id: 1, title: "Welcome", content: "Welcome to RustScript + Tauri!", pinned: true },
     { id: 2, title: "Getting Started", content: "Edit src/index.rts to add backend commands.", pinned: false },
@@ -56,15 +54,12 @@ function search_notes(query: string): Array<Note> {
 }
 
 function main() {
-  // In a real Tauri app, this would be:
-  // Builder.default()
-  //   .invoke_handler(generate_handler![get_notes, get_stats, search_notes])
-  //   .run();
-  //
-  // For now, demonstrate the commands work:
-  const notes = get_notes();
-  console.log(JSON.stringify(notes));
-
-  const stats = get_stats();
-  console.log(JSON.stringify(stats));
+  // Three lines of Rust for the Tauri bootstrap.
+  // Everything else — types, commands, business logic — is RustScript.
+  rust {
+    tauri::Builder::default()
+      .invoke_handler(tauri::generate_handler![get_notes, get_stats, search_notes])
+      .run(tauri::generate_context!())
+      .expect("error running tauri app");
+  }
 }
