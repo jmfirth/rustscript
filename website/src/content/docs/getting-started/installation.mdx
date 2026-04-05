@@ -1,0 +1,47 @@
+# Installation
+
+RustScript requires a working Rust toolchain. If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs).
+
+## Install via Cargo
+
+The recommended way to install the RustScript compiler:
+
+```bash
+cargo install rsc
+```
+
+## Verify the installation
+
+```bash
+rsc --version
+```
+
+## Create a new project
+
+```bash
+rsc init my-app
+cd my-app
+```
+
+This creates a new directory with a `main.rts` entry point and a `rsc.toml` configuration file.
+
+## Run your project
+
+```bash
+rsc run
+```
+
+RustScript will compile your `.rts` files to Rust, build the project with Cargo, and run the resulting binary.
+
+## Editor support
+
+RustScript includes a language server for editor integration:
+
+- **VS Code**: Install the RustScript extension from the marketplace.
+- **Neovim**: Configure `rsc lsp` as an LSP server for `.rts` files.
+
+## Next steps
+
+- Read the language guide to learn RustScript syntax
+- Try the [playground](/playground) to experiment in the browser
+- Browse the [crate documentation](/crates) for ecosystem integration

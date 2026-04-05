@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  --color-rust: #CE422B;
+  --color-blue: #4B7BEC;
+
+  --color-accent: #4B7BEC;
+  --color-accent-secondary: #CE422B;
+
+  --color-bg: #FAFAFA;
+  --color-bg-secondary: #F0F0F0;
+  --color-text: #1A1A1A;
+  --color-text-secondary: #555555;
+  --color-code-bg: #E8E8E8;
+  --color-border: #D0D0D0;
+
+  --color-bg-dark: #111111;
+  --color-bg-secondary-dark: #1A1A1A;
+  --color-text-dark: #E5E5E5;
+  --color-text-secondary-dark: #A0A0A0;
+  --color-code-bg-dark: #1E1E1E;
+  --color-border-dark: #333333;
+}
+
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+  --color-bg: var(--color-bg-dark);
+  --color-bg-secondary: var(--color-bg-secondary-dark);
+  --color-text: var(--color-text-dark);
+  --color-text-secondary: var(--color-text-secondary-dark);
+  --color-code-bg: var(--color-code-bg-dark);
+  --color-border: var(--color-border-dark);
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfMZg.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('https://fonts.gstatic.com/s/jetbrainsmono/v18/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjOVGNOyY.ttf') format('truetype');
+}
