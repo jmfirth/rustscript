@@ -57,6 +57,8 @@ struct TranslatedItem {
     module: Option<String>,
     /// Whether this is a trait impl method (noise for most users).
     is_trait_impl: bool,
+    /// Whether this item is part of the crate's public API (reachable from root module).
+    is_public_api: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +227,7 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 RustdocItemKind::Enum(_) => "enum",
             };
             let is_method = matches!(&item.kind, RustdocItemKind::Function(f) if f.is_trait_impl || f.has_self || f.parent_type.is_some());
+            let is_public_api = crate_data.public_api_ids.is_empty() || crate_data.public_api_ids.contains(&item.id);
             TranslatedItem {
                 name: item.name.clone(),
                 kind: kind.to_owned(),
@@ -232,6 +235,7 @@ pub fn translate_rustdoc(json: &str) -> JsValue {
                 docs: item.docs.clone(),
                 module: None,
                 is_trait_impl: is_method,
+                is_public_api,
             }
         })
         .collect();

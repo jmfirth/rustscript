@@ -118,18 +118,10 @@ function filterItems(items: TranslatedItem[]): TranslatedItem[] {
     if (item.name.startsWith('_')) {
       return false;
     }
-    // Filter out trait impl methods (From, Into, Borrow, Display, etc.)
-    if (item.is_trait_impl) {
+    // Only show items that are part of the crate's public API
+    // (reachable from the root module or re-exported by it)
+    if (!item.is_public_api) {
       return false;
-    }
-    // Filter out all method-style functions (Type.method or Trait.method)
-    // These are either trait method definitions or inherent impl methods.
-    // A RustScript dev wants to see types and free functions, not method lists.
-    if (item.kind === 'function') {
-      const sig = stripCodeFences(item.signature);
-      if (/function\s+\S+\.\S+/.test(sig)) {
-        return false;
-      }
     }
     return true;
   });

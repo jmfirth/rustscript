@@ -14,6 +14,9 @@ pub struct RustdocCrate {
     pub items: HashMap<String, RustdocItem>,
     /// Index from item name to item IDs (multiple items can share a name).
     pub name_index: HashMap<String, Vec<String>>,
+    /// IDs of items that are part of the crate's public API — direct children
+    /// of the root module or re-exported by it. Empty if root is not found.
+    pub public_api_ids: std::collections::HashSet<String>,
 }
 
 /// A single item extracted from rustdoc JSON.
@@ -249,7 +252,57 @@ pub fn parse_rustdoc_json(json: &serde_json::Value) -> Option<RustdocCrate> {
         }
     }
 
+    // Fourth pass: identify the public API by walking from the root module.
+    // Only items that are direct children of the root (or re-exported by it)
+    // are considered public API. This filters out internal trait methods,
+    // impl details, and submodule internals.
+    if let Some(root_id) = json.get("root") {
+        let root_str = root_id.as_str().map(str::to_owned)
+            .or_else(|| root_id.as_u64().map(|n| n.to_string()));
+        if let Some(root_str) = root_str {
+            collect_public_api(index, &root_str, &mut crate_data.public_api_ids);
+        }
+    }
+
     Some(crate_data)
+}
+
+/// Walk the root module and collect IDs of publicly accessible items.
+fn collect_public_api(
+    index: &serde_json::Map<String, serde_json::Value>,
+    module_id: &str,
+    public_ids: &mut std::collections::HashSet<String>,
+) {
+    let Some(module_item) = index.get(module_id) else { return };
+    let Some(inner) = module_item.get("inner") else { return };
+    let Some(mod_data) = inner.get("module") else { return };
+    let Some(items) = mod_data.get("items").and_then(|i| i.as_array()) else { return };
+
+    for item_id_val in items {
+        let item_id = item_id_val.as_str().map(str::to_owned)
+            .or_else(|| item_id_val.as_u64().map(|n| n.to_string()));
+        let Some(item_id) = item_id else { continue };
+
+        let Some(child) = index.get(&item_id) else { continue };
+        let Some(child_inner) = child.get("inner") else { continue };
+
+        if let Some(use_data) = child_inner.get("use") {
+            // Re-export: follow to the target item
+            if let Some(target_id) = use_data.get("id") {
+                let target_str = target_id.as_str().map(str::to_owned)
+                    .or_else(|| target_id.as_u64().map(|n| n.to_string()));
+                if let Some(target_str) = target_str {
+                    public_ids.insert(target_str);
+                }
+            }
+        } else if child_inner.get("module").is_some() {
+            // Submodule: recurse into it
+            collect_public_api(index, &item_id, public_ids);
+        } else {
+            // Direct item (function, struct, trait, enum, etc.)
+            public_ids.insert(item_id);
+        }
+    }
 }
 
 /// Parse a single item from the rustdoc JSON index.
