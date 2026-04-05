@@ -1,18 +1,12 @@
 {
+  "productName": "Tauri Notes",
+  "version": "0.1.0",
+  "identifier": "dev.rustscript.tauri-notes",
   "build": {
-    "devPath": "http://localhost:3000",
-    "distDir": "../frontend/dist"
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:3000"
   },
-  "package": {
-    "productName": "Tauri Notes",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "bundle": {
-      "active": true,
-      "identifier": "dev.rustscript.tauri-notes",
-      "icon": []
-    },
+  "app": {
     "windows": [
       {
         "title": "Tauri Notes",

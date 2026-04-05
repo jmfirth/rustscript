@@ -585,24 +585,22 @@ impl Transform {
                             self.type_only_imports.insert(name.name.clone());
                         }
                     } else {
-                        // Filter out names used only as decorators — they don't
-                        // need `use` imports (the attribute path is fully qualified).
-                        let non_decorator_names: Vec<ast::Ident> = import
-                            .names
-                            .iter()
-                            .filter(|n| !decorator_names.contains(&n.name))
-                            .cloned()
-                            .collect();
-                        if !non_decorator_names.is_empty() {
-                            import_lower::classify_import(
-                                &import.source.value,
-                                &non_decorator_names,
-                                false,
-                                import.span,
-                                &mut import_uses,
-                                &mut crate_deps,
-                            );
-                        }
+                        // Filter decorator-only names from use declarations,
+                        // but still process the full import for crate deps.
+                        let uses_before = import_uses.len();
+                        import_lower::classify_import(
+                            &import.source.value,
+                            &import.names,
+                            false,
+                            import.span,
+                            &mut import_uses,
+                            &mut crate_deps,
+                        );
+                        // Remove use declarations just added for decorator-only names.
+                        let new_uses = import_uses.split_off(uses_before);
+                        import_uses.extend(new_uses.into_iter().filter(|u| {
+                            !decorator_names.iter().any(|d| u.path.ends_with(&format!("::{d}")))
+                        }));
                         // Track imported names so method calls on types can be
                         // recognized as static calls (`Type.method()` → `Type::method()`).
                         for name in &import.names {
