@@ -380,13 +380,25 @@ fn translate_resolved_path(name: &str, args: &[RustdocType]) -> String {
         // Self -> this
         "Self" => "this".to_owned(),
 
+        // Infallible -> never
+        "Infallible" => "never".to_owned(),
+
         // User-defined types with generic args
         _ => {
+            // Strip module paths: "std::convert::Infallible" -> "Infallible",
+            // "crate::routing::MethodFilter" -> "MethodFilter"
+            let short_name = name.rsplit("::").next().unwrap_or(name);
+
+            // Check the short name for known translations
+            if short_name == "Infallible" {
+                return "never".to_owned();
+            }
+
             if args.is_empty() {
-                name.to_owned()
+                short_name.to_owned()
             } else {
                 let args_str: Vec<String> = args.iter().map(translate_type).collect();
-                format!("{name}<{}>", args_str.join(", "))
+                format!("{short_name}<{}>", args_str.join(", "))
             }
         }
     }
