@@ -1,10 +1,20 @@
+import { codeToHtml } from 'shiki';
+
 interface CodeBlockProps {
   code: string;
   language?: string;
   filename?: string;
 }
 
-export function CodeBlock({ code, language, filename }: CodeBlockProps) {
+export async function CodeBlock({ code, language = 'typescript', filename }: CodeBlockProps) {
+  const html = await codeToHtml(code, {
+    lang: language,
+    themes: {
+      light: 'github-light',
+      dark: 'github-dark',
+    },
+  });
+
   return (
     <div className="rounded-lg overflow-hidden border border-[var(--color-border)]">
       {filename && (
@@ -12,11 +22,10 @@ export function CodeBlock({ code, language, filename }: CodeBlockProps) {
           {filename}
         </div>
       )}
-      <pre className="bg-[var(--color-code-bg)] p-4 overflow-x-auto text-sm leading-relaxed">
-        <code className={language ? `language-${language}` : undefined}>
-          {code}
-        </code>
-      </pre>
+      <div
+        className="text-sm leading-relaxed [&_pre]:p-4 [&_pre]:overflow-x-auto [&_pre]:!bg-[var(--color-code-bg)]"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }

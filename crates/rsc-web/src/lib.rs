@@ -289,9 +289,9 @@ fn builtin_hover(token: &str) -> Option<&'static str> {
 #[wasm_bindgen]
 #[allow(clippy::must_use_candidate)]
 pub fn hover(source: &str, line: u32, column: u32) -> String {
-    // Convert 1-based line to 0-based index.
+    // Convert 1-based line/column (Monaco convention) to 0-based indices.
     let line_0 = line.saturating_sub(1) as usize;
-    let col = column as usize;
+    let col = column.saturating_sub(1) as usize;
 
     // Find the token at the given position.
     let lines: Vec<&str> = source.lines().collect();
