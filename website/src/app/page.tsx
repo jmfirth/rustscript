@@ -207,8 +207,20 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Feature grid */}
+      {/* Getting Started */}
       <section className="py-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="max-w-2xl mx-auto text-center">
+            <h2 className="text-3xl font-bold mb-8">Get Started in 30 Seconds</h2>
+            <div className="text-left">
+              <CodeBlock code={installCode} language="bash" filename="terminal" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Feature grid */}
+      <section className="py-20 bg-[var(--color-bg-secondary)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h2 className="text-3xl font-bold text-center mb-4">
             Everything you need to ship Rust
@@ -221,7 +233,7 @@ export default function HomePage() {
             {features.map((feature) => (
               <div
                 key={feature.title}
-                className="p-6 rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
+                className="p-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-accent)] transition-colors"
               >
                 <h3 className="text-lg font-semibold mb-3">{feature.title}</h3>
                 <ul className="space-y-1.5">
@@ -301,17 +313,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Getting Started */}
-      <section className="py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="max-w-2xl mx-auto text-center">
-            <h2 className="text-3xl font-bold mb-8">Get Started</h2>
-            <div className="text-left">
-              <CodeBlock code={installCode} language="bash" filename="terminal" />
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
