@@ -1,4 +1,4 @@
-import { CrateDocsViewer } from './CrateDocsViewer';
+import { CrateDocsViewer } from '@/components/CrateDocsViewer';
 
 // Pre-generated routes for static export. Any crate not in this list
 // needs to be added here for `output: 'export'` to generate its page.
