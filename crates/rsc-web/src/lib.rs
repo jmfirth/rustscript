@@ -432,22 +432,67 @@ fn extract_declaration_signature(item: &rsc_syntax::ast::Item, name: &str) -> Op
     }
 }
 
+/// Collect variable name → type annotation string from a list of statements.
+fn collect_var_types(stmts: &[rsc_syntax::ast::Stmt]) -> std::collections::HashMap<String, String> {
+    use rsc_syntax::ast::Stmt;
+    let mut map = std::collections::HashMap::new();
+    for stmt in stmts {
+        if let Stmt::VarDecl(decl) = stmt {
+            if let Some(ann) = &decl.type_ann {
+                map.insert(decl.name.name.clone(), format_type_ann(ann));
+            }
+        }
+    }
+    map
+}
+
+/// Extract the element type from a collection type string.
+/// e.g., "Array<Book>" → Some("Book"), "Map<string, i32>" → None
+fn extract_element_type(type_str: &str) -> Option<&str> {
+    let trimmed = type_str.trim();
+    if let Some(inner) = trimmed.strip_prefix("Array<").and_then(|s| s.strip_suffix('>')) {
+        Some(inner)
+    } else if let Some(inner) = trimmed.strip_prefix("Set<").and_then(|s| s.strip_suffix('>')) {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
 /// Walk expressions to find closure parameters matching the given name.
-fn extract_closure_param_hover(stmt: &rsc_syntax::ast::Stmt, name: &str) -> Option<String> {
+fn extract_closure_param_hover(
+    stmt: &rsc_syntax::ast::Stmt,
+    name: &str,
+    var_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     use rsc_syntax::ast::Stmt;
 
     match stmt {
-        Stmt::VarDecl(decl) => find_closure_param_in_expr(&decl.init, name),
-        Stmt::Expr(expr) => find_closure_param_in_expr(expr, name),
+        Stmt::VarDecl(decl) => find_closure_param_in_expr(&decl.init, name, var_types),
+        Stmt::Expr(expr) => find_closure_param_in_expr(expr, name, var_types),
         Stmt::Return(ret) => {
-            ret.value.as_ref().and_then(|e| find_closure_param_in_expr(e, name))
+            ret.value.as_ref().and_then(|e| find_closure_param_in_expr(e, name, var_types))
         }
         _ => None,
     }
 }
 
 /// Recursively search an expression tree for closure parameters.
-fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Option<String> {
+/// `inferred_element_type` carries the element type when inside a collection method call.
+fn find_closure_param_in_expr(
+    expr: &rsc_syntax::ast::Expr,
+    name: &str,
+    var_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    find_closure_param_inner(expr, name, var_types, None)
+}
+
+fn find_closure_param_inner(
+    expr: &rsc_syntax::ast::Expr,
+    name: &str,
+    var_types: &std::collections::HashMap<String, String>,
+    inferred_element_type: Option<&str>,
+) -> Option<String> {
     use rsc_syntax::ast::ExprKind;
 
     match &expr.kind {
@@ -456,6 +501,12 @@ fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Optio
                 if param.name.name == name {
                     let ty = format_type_ann(&param.type_ann);
                     if ty == "inferred" || ty.is_empty() {
+                        // Use inferred element type from collection method if available
+                        if let Some(elem_ty) = inferred_element_type {
+                            return Some(format!(
+                                "```rustscript\n(parameter) {name}: {elem_ty}\n```"
+                            ));
+                        }
                         return Some(format!("```rustscript\n(parameter) {name}\n```"));
                     }
                     return Some(format!(
@@ -463,12 +514,14 @@ fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Optio
                     ));
                 }
             }
-            // Also recurse into closure body expressions
+            // Recurse into closure body
             match &closure.body {
-                rsc_syntax::ast::ClosureBody::Expr(e) => find_closure_param_in_expr(e, name),
+                rsc_syntax::ast::ClosureBody::Expr(e) => {
+                    find_closure_param_inner(e, name, var_types, None)
+                }
                 rsc_syntax::ast::ClosureBody::Block(block) => {
                     for s in &block.stmts {
-                        if let Some(sig) = extract_closure_param_hover(s, name) {
+                        if let Some(sig) = extract_closure_param_hover(s, name, var_types) {
                             return Some(sig);
                         }
                     }
@@ -477,13 +530,32 @@ fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Optio
             }
         }
         ExprKind::MethodCall(mc) => {
-            // Check the receiver
-            if let Some(sig) = find_closure_param_in_expr(&mc.object, name) {
+            // Check the receiver first
+            if let Some(sig) = find_closure_param_inner(&mc.object, name, var_types, None) {
                 return Some(sig);
             }
-            // Check arguments
+
+            // For collection methods, infer the element type from the receiver
+            let is_collection_method = matches!(
+                mc.method.name.as_str(),
+                "filter" | "map" | "find" | "forEach" | "some" | "every"
+                    | "findIndex" | "flatMap" | "reduce" | "findLast"
+            );
+
+            let element_type = if is_collection_method {
+                resolve_receiver_element_type(&mc.object, var_types)
+            } else {
+                None
+            };
+
+            // Check arguments with element type context
             for arg in &mc.args {
-                if let Some(sig) = find_closure_param_in_expr(arg, name) {
+                if let Some(sig) = find_closure_param_inner(
+                    arg,
+                    name,
+                    var_types,
+                    element_type.as_deref(),
+                ) {
                     return Some(sig);
                 }
             }
@@ -491,17 +563,45 @@ fn find_closure_param_in_expr(expr: &rsc_syntax::ast::Expr, name: &str) -> Optio
         }
         ExprKind::Call(call) => {
             for arg in &call.args {
-                if let Some(sig) = find_closure_param_in_expr(arg, name) {
+                if let Some(sig) = find_closure_param_inner(arg, name, var_types, None) {
                     return Some(sig);
                 }
             }
             None
         }
         ExprKind::Binary(bin) => {
-            find_closure_param_in_expr(&bin.left, name)
-                .or_else(|| find_closure_param_in_expr(&bin.right, name))
+            find_closure_param_inner(&bin.left, name, var_types, None)
+                .or_else(|| find_closure_param_inner(&bin.right, name, var_types, None))
         }
-        ExprKind::Paren(inner) => find_closure_param_in_expr(inner, name),
+        ExprKind::Paren(inner) => find_closure_param_inner(inner, name, var_types, None),
+        _ => None,
+    }
+}
+
+/// Resolve the element type of a collection receiver expression.
+/// e.g., `books` where `books: Array<Book>` → Some("Book")
+fn resolve_receiver_element_type(
+    expr: &rsc_syntax::ast::Expr,
+    var_types: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    use rsc_syntax::ast::ExprKind;
+
+    match &expr.kind {
+        // Direct variable reference: look up in var_types
+        ExprKind::Ident(ident) => {
+            let type_str = var_types.get(&ident.name)?;
+            extract_element_type(type_str).map(|s| s.to_owned())
+        }
+        // Chained method that preserves element type (e.g., books.filter(...).map(...))
+        ExprKind::MethodCall(mc) => {
+            match mc.method.name.as_str() {
+                "filter" | "reverse" | "slice" | "concat" | "sort" => {
+                    // These preserve the element type
+                    resolve_receiver_element_type(&mc.object, var_types)
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -595,9 +695,12 @@ fn extract_local_hover(
                 }
             }
 
+            // Collect variable types for closure param inference
+            let var_types = collect_var_types(&f.body.stmts);
+
             // Check closure parameters in expressions
             for stmt in &f.body.stmts {
-                if let Some(sig) = extract_closure_param_hover(stmt, name) {
+                if let Some(sig) = extract_closure_param_hover(stmt, name, &var_types) {
                     return Some(sig);
                 }
             }
