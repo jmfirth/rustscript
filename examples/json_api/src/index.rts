@@ -1,0 +1,141 @@
+import { Router, serve } from "axum";
+import { get } from "axum/routing";
+import { TcpListener } from "tokio/net";
+
+/**
+ * Book Catalog JSON API
+ *
+ * A typed REST API returning JSON — the kind of thing every TS developer
+ * builds on day one. Types with `derives Serialize` become serializable
+ * Rust structs. `JSON.stringify()` calls `serde_json::to_string()`.
+ */
+
+type Book = {
+  id: i64,
+  title: string,
+  author: string,
+  genre: string,
+  rating: f64,
+  year: i64,
+} derives Serialize
+
+type GenreCount = {
+  genre: string,
+  count: i64,
+} derives Serialize
+
+type CatalogStats = {
+  totalBooks: i64,
+  averageRating: f64,
+  genreBreakdown: Array<GenreCount>,
+} derives Serialize
+
+/** Seed data — in a real app this comes from a database */
+function getCatalog(): Array<Book> {
+  const b1: Book = { id: 1, title: "The Rust Programming Language", author: "Klabnik & Nichols", genre: "technical", rating: 4.8, year: 2019 };
+  const b2: Book = { id: 2, title: "Neuromancer", author: "William Gibson", genre: "sci-fi", rating: 4.5, year: 1984 };
+  const b3: Book = { id: 3, title: "Dune", author: "Frank Herbert", genre: "sci-fi", rating: 4.7, year: 1965 };
+  const b4: Book = { id: 4, title: "Design Patterns", author: "Gang of Four", genre: "technical", rating: 4.1, year: 1994 };
+  const b5: Book = { id: 5, title: "The Left Hand of Darkness", author: "Ursula K. Le Guin", genre: "sci-fi", rating: 4.6, year: 1969 };
+  const b6: Book = { id: 6, title: "Clean Code", author: "Robert C. Martin", genre: "technical", rating: 4.0, year: 2008 };
+  const b7: Book = { id: 7, title: "Foundation", author: "Isaac Asimov", genre: "sci-fi", rating: 4.4, year: 1951 };
+  const b8: Book = { id: 8, title: "The Pragmatic Programmer", author: "Hunt & Thomas", genre: "technical", rating: 4.6, year: 1999 };
+  return [b1, b2, b3, b4, b5, b6, b7, b8];
+}
+
+/** GET /books — full catalog as JSON array */
+async function handleBooks(): string {
+  return JSON.stringify(getCatalog());
+}
+
+/** GET /books/featured — top-rated books (rating >= 4.5) */
+async function handleFeatured(): string {
+  const books = getCatalog();
+  const featured = books.filter(b => b.rating >= 4.5);
+  return JSON.stringify(featured);
+}
+
+/** GET /books/scifi — filter by sci-fi genre */
+async function handleScifi(): string {
+  const books = getCatalog();
+  const scifi = books.filter(b => b.genre == "sci-fi");
+  return JSON.stringify(scifi);
+}
+
+/** GET /books/technical — filter by technical genre */
+async function handleTechnical(): string {
+  const books = getCatalog();
+  const technical = books.filter(b => b.genre == "technical");
+  return JSON.stringify(technical);
+}
+
+/** GET /books/classics — published before 1980 */
+async function handleClassics(): string {
+  const books = getCatalog();
+  const classics = books.filter(b => b.year < 1980);
+  return JSON.stringify(classics);
+}
+
+/** GET /books/titles — just the title strings, mapped from structs */
+async function handleTitles(): string {
+  const books = getCatalog();
+  const titles = books.map(b => b.title);
+  return JSON.stringify(titles);
+}
+
+/** GET /stats — aggregate statistics across the catalog */
+async function handleStats(): string {
+  const books = getCatalog();
+  const total = books.length;
+  const sumRatings = books
+    .map(b => b.rating)
+    .reduce((acc: f64, r: f64): f64 => acc + r, 0.0);
+  const count: f64 = total as f64;
+  const avg: f64 = sumRatings / count;
+
+  const scifiCount = books.filter(b => b.genre == "sci-fi").length;
+  const techCount = books.filter(b => b.genre == "technical").length;
+  const g1: GenreCount = { genre: "sci-fi", count: scifiCount };
+  const g2: GenreCount = { genre: "technical", count: techCount };
+
+  const stats: CatalogStats = {
+    totalBooks: total,
+    averageRating: avg,
+    genreBreakdown: [g1, g2],
+  };
+  return JSON.stringify(stats);
+}
+
+/** GET /stats/genres — count of books per genre */
+async function handleGenres(): string {
+  const books = getCatalog();
+  const scifiCount = books.filter(b => b.genre == "sci-fi").length;
+  const techCount = books.filter(b => b.genre == "technical").length;
+  const g1: GenreCount = { genre: "sci-fi", count: scifiCount };
+  const g2: GenreCount = { genre: "technical", count: techCount };
+  return JSON.stringify([g1, g2]);
+}
+
+async function main() {
+  const app = new Router()
+    .route("/books", get(handleBooks))
+    .route("/books/featured", get(handleFeatured))
+    .route("/books/scifi", get(handleScifi))
+    .route("/books/technical", get(handleTechnical))
+    .route("/books/classics", get(handleClassics))
+    .route("/books/titles", get(handleTitles))
+    .route("/stats", get(handleStats))
+    .route("/stats/genres", get(handleGenres));
+
+  const listener = await TcpListener.bind("0.0.0.0:3000");
+  console.log("Book Catalog API listening on http://0.0.0.0:3000");
+  console.log("  GET /books           — full catalog");
+  console.log("  GET /books/featured  — top rated (>= 4.5)");
+  console.log("  GET /books/scifi     — sci-fi titles");
+  console.log("  GET /books/technical — technical titles");
+  console.log("  GET /books/classics  — published before 1980");
+  console.log("  GET /books/titles    — title strings only");
+  console.log("  GET /stats           — aggregate statistics");
+  console.log("  GET /stats/genres    — books per genre");
+  await serve(listener, app);
+}
