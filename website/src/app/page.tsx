@@ -219,6 +219,36 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Crate docs */}
+      <section className="py-20 bg-[var(--color-bg-secondary)]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <h2 className="text-3xl font-bold mb-4">
+            Every Rust crate, in TypeScript syntax
+          </h2>
+          <p className="text-[var(--color-text-secondary)] mb-8 max-w-2xl mx-auto">
+            The entire Rust ecosystem already speaks your language. Browse any crate,
+            any version, with its public API translated to RustScript syntax on demand.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3 mb-8">
+            {['axum', 'serde', 'tokio', 'clap', 'reqwest', 'sqlx'].map((crate_name) => (
+              <Link
+                key={crate_name}
+                href={`/crates?name=${crate_name}&version=latest`}
+                className="px-4 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-sm font-mono hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
+              >
+                {crate_name}
+              </Link>
+            ))}
+          </div>
+          <Link
+            href="/crates"
+            className="inline-flex items-center px-8 py-3 rounded-lg bg-[var(--color-accent)] text-white font-medium hover:opacity-90 transition-opacity"
+          >
+            Browse All Crates &rarr;
+          </Link>
+        </div>
+      </section>
+
       {/* Feature grid */}
       <section className="py-20 bg-[var(--color-bg-secondary)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -265,37 +295,6 @@ export default function HomePage() {
             className="inline-flex items-center px-8 py-3 rounded-lg bg-[var(--color-accent)] text-white font-medium hover:opacity-90 transition-opacity"
           >
             Open Playground &rarr;
-          </Link>
-        </div>
-      </section>
-
-      {/* Crate docs */}
-      <section className="py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-3xl font-bold mb-4">
-            Every Rust crate, in TypeScript syntax
-          </h2>
-          <p className="text-[var(--color-text-secondary)] mb-8 max-w-2xl mx-auto">
-            The entire Rust ecosystem already speaks your language. Browse any crate,
-            any version, with its public API translated to RustScript syntax on demand.
-            Powered by rustdoc JSON and WebAssembly.
-          </p>
-          <div className="flex flex-wrap justify-center gap-3 mb-8">
-            {['axum', 'serde', 'tokio', 'clap', 'reqwest', 'sqlx'].map((crate_name) => (
-              <Link
-                key={crate_name}
-                href={`/crates?name=${crate_name}&version=latest`}
-                className="px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm font-mono hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
-              >
-                {crate_name}
-              </Link>
-            ))}
-          </div>
-          <Link
-            href="/crates"
-            className="inline-flex items-center px-8 py-3 rounded-lg bg-[var(--color-accent)] text-white font-medium hover:opacity-90 transition-opacity"
-          >
-            Browse All Crates &rarr;
           </Link>
         </div>
       </section>
