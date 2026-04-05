@@ -54,35 +54,75 @@ const stats = [
 const features = [
   {
     title: 'Familiar Syntax',
-    description: 'Every TypeScript pattern you know. Classes, generics, async/await, destructuring, arrow functions, template literals, optional chaining, nullish coalescing. 330+ standard library methods — map, filter, reduce, find, forEach, and everything else.',
+    bullets: [
+      'Every TypeScript pattern: classes, generics, async/await, destructuring',
+      '330+ standard library methods: map, filter, reduce, find, forEach',
+      'Template literals, optional chaining, nullish coalescing, spread',
+      'String unions, type aliases, interfaces, discriminated unions',
+    ],
   },
   {
     title: 'Rust Performance',
-    description: '3MB native binaries. No V8. No garbage collector. No runtime overhead. Your code compiles to idiomatic, human-readable Rust that you can inspect, debug, and eject to at any time.',
+    bullets: [
+      '3MB native binaries — no V8, no garbage collector',
+      'No runtime overhead — compiles to idiomatic Rust',
+      'Generated code is human-readable and inspectable',
+      'Eject to pure Rust at any time — no lock-in',
+    ],
   },
   {
     title: 'Full Crate Ecosystem',
-    description: 'import { Router } from "axum". Any Rust crate, TypeScript import syntax. Dependencies auto-detected from your imports — no Cargo.toml editing. serde, axum, tokio, clap, reqwest, sqlx — they all just work.',
+    bullets: [
+      'import { Router } from "axum" — any Rust crate, TS import syntax',
+      'Dependencies auto-detected from imports — no Cargo.toml editing',
+      'derives keyword for proc macros: Serialize, Deserialize, Parser',
+      'axum, serde, tokio, clap, reqwest, sqlx — they all just work',
+    ],
   },
   {
     title: 'Zero Memory Management',
-    description: 'No lifetimes. No borrowing annotations. No ownership errors. The compiler infers ownership, inserts clones for correctness, and applies Tier 2 borrow inference to eliminate unnecessary allocations — automatically.',
+    bullets: [
+      'No lifetimes, no borrowing annotations, no ownership errors',
+      'Compiler infers ownership and inserts clones for correctness',
+      'Tier 2 borrow inference eliminates unnecessary allocations',
+      'Async/await with tokio — just works, no runtime configuration',
+    ],
   },
   {
     title: 'Production Tooling',
-    description: 'VS Code extension with a real language server. Type-aware hover showing signatures, doc comments, and inferred types — including closure parameters and generic substitution. Red squiggles on errors. Code formatting. Watch mode. Project templates.',
+    bullets: [
+      'VS Code extension with real language server (LSP)',
+      'Type-aware hover: signatures, doc comments, inferred types',
+      'Closure parameter inference, generic substitution, field resolution',
+      'Live diagnostics, code formatting, watch mode, project templates',
+    ],
   },
   {
     title: 'Friendly Error Messages',
-    description: 'Errors point to your .rts source lines, not generated Rust. Tier 2 error enrichment parses rustc JSON diagnostics, maps them through dense source maps, and re-renders with RustScript type names and actionable suggestions.',
+    bullets: [
+      'Errors point to your .rts source lines, not generated Rust',
+      'Dense source maps with O(1) line lookup',
+      'rustc JSON diagnostics parsed and re-rendered with RustScript types',
+      '9 enrichment patterns: type translation, borrow hints, lifetime suggestions',
+    ],
   },
   {
     title: 'Type Generator',
-    description: 'rsc types generates .d.ts files from your RustScript types — one file per module, TypeScript-native output. Share types between your RustScript backend and TypeScript frontend. Perfect for Tauri desktop apps.',
+    bullets: [
+      'rsc types emits .d.ts files from RustScript source',
+      'One file per module — TypeScript-native output',
+      'Share types between RustScript backend and TS frontend',
+      'rsc build --emit-types for CI pipelines — perfect for Tauri apps',
+    ],
   },
   {
     title: 'Eject Anytime',
-    description: 'The generated Rust is yours. It compiles with standard rustc, uses standard crates, follows Rust conventions. No runtime. No lock-in. Walk away to pure Rust whenever you want — the code is readable and idiomatic.',
+    bullets: [
+      'Generated Rust compiles with standard rustc',
+      'Uses standard crates, follows Rust conventions',
+      'No custom runtime, no code generation magic',
+      'Walk away to pure Rust whenever you want',
+    ],
   },
 ];
 
@@ -183,10 +223,15 @@ export default function HomePage() {
                 key={feature.title}
                 className="p-6 rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
               >
-                <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-                <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-                  {feature.description}
-                </p>
+                <h3 className="text-lg font-semibold mb-3">{feature.title}</h3>
+                <ul className="space-y-1.5">
+                  {feature.bullets.map((bullet) => (
+                    <li key={bullet} className="text-sm text-[var(--color-text-secondary)] leading-relaxed flex gap-2">
+                      <span className="text-[var(--color-accent-secondary)] mt-0.5 shrink-0">&bull;</span>
+                      <span>{bullet}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ))}
           </div>
