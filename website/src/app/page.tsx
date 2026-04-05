@@ -215,6 +215,18 @@ export default function HomePage() {
             <div className="text-left">
               <CodeBlock code={installCode} language="bash" filename="terminal" />
             </div>
+            <p className="mt-4 text-sm text-[var(--color-text-secondary)]">
+              Or download a pre-built binary from{' '}
+              <a
+                href="https://github.com/jmfirth/rustscript/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                GitHub Releases
+              </a>
+              .
+            </p>
           </div>
         </div>
       </section>
