@@ -446,12 +446,16 @@ pub fn hover(source: &str, line: u32, column: u32) -> String {
     }
 
     // Build lookup maps for type inference.
-    let fn_return_types = collect_fn_return_types(&module);
+    let fn_info = collect_fn_info(&module);
+    let fn_return_types: std::collections::HashMap<String, String> = fn_info
+        .iter()
+        .map(|(k, v)| (k.clone(), v.return_type.clone()))
+        .collect();
     let type_fields = collect_type_fields(&module);
 
     // Search inside function bodies for local variables and parameters.
     for item in &module.items {
-        if let Some(sig) = extract_local_hover(item, token, &fn_return_types, &type_fields) {
+        if let Some(sig) = extract_local_hover(item, token, &fn_return_types, &type_fields, &fn_info) {
             return sig;
         }
     }
@@ -748,22 +752,49 @@ fn extract_field_hover(item: &rsc_syntax::ast::Item, name: &str) -> Option<Strin
     }
 }
 
-/// Collect a map of function name → formatted return type from top-level declarations.
-fn collect_fn_return_types(
+/// Collected function info for hover inference.
+struct FnInfo {
+    return_type: String,
+    generic_params: Vec<String>,
+}
+
+/// Collect function name → return type + generic params from top-level declarations.
+fn collect_fn_info(
     module: &rsc_syntax::ast::Module,
-) -> std::collections::HashMap<String, String> {
+) -> std::collections::HashMap<String, FnInfo> {
     use rsc_syntax::ast::ItemKind;
     let mut map = std::collections::HashMap::new();
     for item in &module.items {
         if let ItemKind::Function(f) = &item.kind {
             if let Some(rta) = &f.return_type {
                 if let Some(ann) = &rta.type_ann {
-                    map.insert(f.name.name.clone(), format_type_ann(ann));
+                    let generic_params = f
+                        .type_params
+                        .as_ref()
+                        .map(|tp| tp.params.iter().map(|p| p.name.name.clone()).collect())
+                        .unwrap_or_default();
+                    map.insert(
+                        f.name.name.clone(),
+                        FnInfo {
+                            return_type: format_type_ann(ann),
+                            generic_params,
+                        },
+                    );
                 }
             }
         }
     }
     map
+}
+
+/// Legacy wrapper: collect just return types for backward compat.
+fn collect_fn_return_types(
+    module: &rsc_syntax::ast::Module,
+) -> std::collections::HashMap<String, String> {
+    collect_fn_info(module)
+        .into_iter()
+        .map(|(k, v)| (k, v.return_type))
+        .collect()
 }
 
 /// Search inside a top-level item (function body) for local variable declarations
@@ -773,6 +804,7 @@ fn extract_local_hover(
     name: &str,
     fn_return_types: &std::collections::HashMap<String, String>,
     type_fields: &std::collections::HashMap<String, Vec<(String, String)>>,
+    fn_info: &std::collections::HashMap<String, FnInfo>,
 ) -> Option<String> {
     use rsc_syntax::ast::ItemKind;
 
@@ -792,6 +824,7 @@ fn extract_local_hover(
             // Build full inference context
             let infer_ctx = InferCtx {
                 fn_return_types,
+                fn_info: &fn_info,
                 var_types: &var_types,
                 type_fields,
             };
@@ -1052,6 +1085,7 @@ fn extract_var_hover(
 /// Context for type inference during hover.
 struct InferCtx<'a> {
     fn_return_types: &'a std::collections::HashMap<String, String>,
+    fn_info: &'a std::collections::HashMap<String, FnInfo>,
     var_types: &'a std::collections::HashMap<String, String>,
     type_fields: &'a std::collections::HashMap<String, Vec<(String, String)>>,
 }
@@ -1085,8 +1119,10 @@ fn infer_type_from_expr(
     // Legacy wrapper — builds minimal context
     let empty_var = std::collections::HashMap::new();
     let empty_fields = std::collections::HashMap::new();
+    let empty_info = std::collections::HashMap::new();
     let ctx = InferCtx {
         fn_return_types,
+        fn_info: &empty_info,
         var_types: &empty_var,
         type_fields: &empty_fields,
     };
@@ -1101,8 +1137,25 @@ fn infer_type_from_expr_ctx(
     use rsc_syntax::ast::ExprKind;
 
     match &expr.kind {
-        // Function call → look up return type
-        ExprKind::Call(call) => ctx.fn_return_types.get(&call.callee.name).cloned(),
+        // Function call → look up return type, substitute generic args if present
+        ExprKind::Call(call) => {
+            let raw_return = ctx.fn_return_types.get(&call.callee.name)?;
+
+            // If the call has explicit type arguments and the function has generic params,
+            // substitute them into the return type.
+            if !call.type_args.is_empty() {
+                if let Some(info) = ctx.fn_info.get(&call.callee.name) {
+                    let mut result = raw_return.clone();
+                    for (param_name, type_arg) in info.generic_params.iter().zip(&call.type_args) {
+                        let concrete = format_type_ann(type_arg);
+                        result = result.replace(param_name.as_str(), &concrete);
+                    }
+                    return Some(result);
+                }
+            }
+
+            Some(raw_return.clone())
+        }
         // String literal → string
         ExprKind::StringLit(_) => Some("string".to_owned()),
         // Template literal → string
