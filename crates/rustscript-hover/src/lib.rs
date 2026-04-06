@@ -984,6 +984,9 @@ struct VariantInfo {
     discriminant: String,
     /// The data fields (excluding `kind`), as `(name, type)` pairs.
     fields: Vec<(String, String)>,
+    /// If this variant came from a named type reference (e.g., `| Circle`),
+    /// the original type name. `None` for inline variants.
+    source_type_name: Option<String>,
 }
 
 /// Collect enum name -> variant info from discriminated unions in the module.
@@ -1008,6 +1011,7 @@ fn collect_enum_variants(
                             .iter()
                             .map(|f| (f.name.name.clone(), format_type_ann(&f.type_ann)))
                             .collect(),
+                        source_type_name: None,
                     }),
                     EnumVariant::TypeRef { type_name, .. } => {
                         // Resolve the named type reference to extract variant info
@@ -1045,6 +1049,7 @@ fn resolve_type_ref_for_hover(
                     return Some(VariantInfo {
                         discriminant: disc_value.clone(),
                         fields,
+                        source_type_name: Some(type_name.to_owned()),
                     });
                 }
                 return None;
@@ -1126,7 +1131,14 @@ fn find_narrowed_type_in_switch(
             // Find the matching variant
             let variant = variants.iter().find(|v| v.discriminant == *discriminant)?;
 
-            // Format the narrowed type
+            // Format the narrowed type — use the source type name if it came from a TypeRef
+            if let Some(ref type_name) = variant.source_type_name {
+                return Some(format!(
+                    "```rustscript\n(parameter) {name}: {type_name}\n```"
+                ));
+            }
+
+            // Inline variant — show the full field list
             let fields_str: Vec<String> =
                 std::iter::once(format!("  kind: \"{}\"", variant.discriminant))
                     .chain(
@@ -1646,16 +1658,12 @@ function area(shape: Shape): f64 {
         // `      return 3.14 * shape.radius` — "shape" starts at col 21
         let result = hover(source, 11, 21);
         assert!(
-            result.contains("narrowed"),
-            "expected narrowed type, got: {result}"
+            result.contains("Circle"),
+            "expected Circle type name, got: {result}"
         );
         assert!(
-            result.contains("radius"),
-            "expected radius field in narrowed type, got: {result}"
-        );
-        assert!(
-            !result.contains("width"),
-            "should NOT contain rect fields, got: {result}"
+            !result.contains("Rect"),
+            "should NOT contain Rect, got: {result}"
         );
     }
 }
